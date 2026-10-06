@@ -79,10 +79,16 @@ class MainActivity : ComponentActivity() {
     private var scannedLink: Boolean = false
     private var settings by mutableStateOf(false)
     private var address by mutableStateOf("http://192.168.1.11:41080/pair")
-    /** 语音模式开关：默认长按说话（圆形），打开后免按说话（方形）。 */
+    /** 语音模式开关：默认长按语音输入（圆形），打开后单击语音输入（方形）。 */
     private var voiceToggle by mutableStateOf(false)
+    /** 全键盘：激活后下方快捷键区与语音区换成键盘区。 */
+    private var keyboardMode by mutableStateOf(false)
     /** 快捷键的轻点 / 按住手势。 */
     private val shortcutHold by lazy { ShortcutHold({ slot, token -> vm.client.shortcutHoldStart(slot, token) }, { token -> vm.client.shortcutHoldStop(token) }) }
+    /** 全键盘的按键状态。 */
+    private val keyHold by lazy { KeyHold({ chord -> vm.client.keyDown(chord) }, { chord -> vm.client.keyUp(chord) }) }
+    /** 切换全键盘 / 快捷键+语音两种下半区布局。 */
+    private var modeViews: (() -> Unit)? = null
     private val microphonePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (!granted) android.widget.Toast.makeText(this, "麦克风权限未授予，键鼠仍可使用", android.widget.Toast.LENGTH_LONG).show() }
     private val lanPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) deferredLink?.let { vm.client.enter(it, scannedLink); deferredLink = null } else android.widget.Toast.makeText(this, "需要局域网权限才能连接电脑", android.widget.Toast.LENGTH_LONG).show() }
     private val scanner = registerForActivityResult(ScanContract()) { result -> result.contents?.let { enter(it, true) } }
@@ -102,14 +108,37 @@ class MainActivity : ComponentActivity() {
             orientation = LinearLayout.VERTICAL
             isMotionEventSplittingEnabled = true
             setBackgroundColor(android.graphics.Color.WHITE)
-            fun region(view: android.view.View, weight: Float) = addView(view, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, weight))
-            // 四个区域严格按 10% / 40% / 25% / 25% 分配屏幕高度。
-            region(compose {
+            fun region(view: android.view.View, weight: Float): android.view.View {
+                addView(view, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, weight))
+                return view
+            }
+            fun fixedRegion(view: android.view.View, fraction: Float): android.view.View {
+                addView(view, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (resources.displayMetrics.heightPixels * fraction).toInt()))
+                return view
+            }
+            // 状态区固定为屏幕高度的 10%（固定高度避免内部文字把区域撑大），
+            // 其余三个区域按 40% / 25% / 25% 的比例分配剩余高度。
+            fixedRegion(compose {
                 val state by vm.client.state.collectAsStateWithLifecycle()
-                ConnectionHeader(state, voiceToggle, { voiceToggle = it; microphone?.gestureMode = if (it) MicBallView.MODE_TOGGLE else MicBallView.MODE_HOLD }, { settings = true })
+                ConnectionHeader(
+                    state,
+                    voiceToggle,
+                    keyboardMode,
+                    onVoiceToggle = { voiceToggle = it; microphone?.gestureMode = if (it) MicBallView.MODE_TOGGLE else MicBallView.MODE_HOLD },
+                    onKeyboardToggle = { on ->
+                        keyboardMode = on
+                        // 立即切换下半区布局，不必等 onResume。
+                        modeViews?.invoke()
+                        // 退出全键盘时释放所有按键与修饰键；进入时结束可能正在进行的录音。
+                        if (!on) keyHold.releaseAll() else if (vm.client.state.value.mic != "idle") vm.client.stopMic()
+                    },
+                    onSettings = { settings = true },
+                )
             }, Regions.CONNECTION)
             region(TouchpadView(context, vm.client).also { touchpad = it }, Regions.TOUCHPAD)
-            region(compose {
+            // 快捷键区 / 语音区 / 全键盘区共用下半部分：全键盘激活时前两者隐藏，
+            // 键盘权重等于两者之和，因此两种模式下各区域高度一致。
+            val shortcutsRegion = compose {
                 val state by vm.client.state.collectAsStateWithLifecycle()
                 ShortcutButtons(
                     state,
@@ -121,11 +150,33 @@ class MainActivity : ComponentActivity() {
                         active
                     },
                 )
-            }, Regions.SHORTCUTS)
-            region(MicBallView(context, ::beginMic, vm.client::stopMic, vm::saveBallPosition).also { view ->
+            }
+            val voiceRegion = MicBallView(context, ::beginMic, vm.client::stopMic, vm::saveBallPosition).also { view ->
                 microphone = view
                 view.gestureMode = if (voiceToggle) MicBallView.MODE_TOGGLE else MicBallView.MODE_HOLD
-            }, Regions.MICROPHONE)
+            }
+            val voiceComposite = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                isMotionEventSplittingEnabled = true
+                addView(voiceRegion, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+            }
+            val keyboardRegion = compose {
+                val state by vm.client.state.collectAsStateWithLifecycle()
+                if (keyboardMode) KeyboardView(state.connected, keyHold)
+            }
+            val shortcutsView = region(shortcutsRegion, Regions.SHORTCUTS)
+            val voiceView = region(voiceComposite, Regions.MICROPHONE)
+            val keyboardView = region(keyboardRegion, Regions.SHORTCUTS + Regions.MICROPHONE)
+            // 与两个隐藏区域等权重的占位：键盘隐藏时它填满下半部分，键盘显示时一起隐藏。
+            val spacerView = region(android.view.View(this@MainActivity), Regions.SHORTCUTS + Regions.MICROPHONE)
+            modeViews = {
+                val hidden = if (keyboardMode) android.view.View.GONE else android.view.View.VISIBLE
+                shortcutsView.visibility = hidden
+                voiceView.visibility = hidden
+                spacerView.visibility = hidden
+                keyboardView.visibility = if (keyboardMode) android.view.View.VISIBLE else android.view.View.GONE
+            }
+            modeViews?.invoke()
         }
         val dialogs = compose {
             val state by vm.client.state.collectAsStateWithLifecycle()
@@ -139,12 +190,20 @@ class MainActivity : ComponentActivity() {
             }, confirmButton = { TextButton(onClick = { enter(address); settings = false }) { Text("连接") } }, dismissButton = { TextButton(onClick = { settings = false }) { Text("关闭") } })
             if (state.pairing.isNotEmpty()) AlertDialog(onDismissRequest = { vm.client.forget() }, title = { Text("核对配对校验码") }, text = { Column { Text("请与 PC 设置窗口的校验码比较："); Spacer(Modifier.height(12.dp)); Text(state.pairing, fontSize = 19.sp); Spacer(Modifier.height(12.dp)); Text(if (state.pairingConfirmed) "等待电脑允许连接…" else "相同后点击确认，并在电脑允许连接。") } }, confirmButton = { TextButton(onClick = vm.client::confirmPair, enabled = !state.pairingConfirmed) { Text("与电脑一致") } }, dismissButton = { TextButton(onClick = vm.client::forget) { Text("取消") } })
         }
-        setContentView(FrameLayout(this).apply {
+        val root = FrameLayout(this).apply {
             isMotionEventSplittingEnabled = true
+            // 系统状态栏的留白放在最外层：四个区域的高度仍然严格按比例分配。
+            setOnApplyWindowInsetsListener { view, insets ->
+                val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+                val cutout = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
+                view.setPadding(maxOf(bars.left, cutout.left), maxOf(bars.top, cutout.top), maxOf(bars.right, cutout.right), maxOf(bars.bottom, cutout.bottom))
+                insets
+            }
             addView(regions, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
             // Dialogs own their windows; this composition needs no screen area.
             addView(dialogs, FrameLayout.LayoutParams(0, 0))
-        })
+        }
+        setContentView(root)
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 combine(vm.client.state, vm.ballPosition) { state, position -> state to position }.collect { (state, position) ->
@@ -183,31 +242,66 @@ class MainActivity : ComponentActivity() {
         return vm.client.startMic(mode)
     }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); intent.data?.let { enter(it.toString()) } }
-    override fun onResume() { super.onResume(); fullscreen() }
+    override fun onResume() { super.onResume(); fullscreen(); modeViews?.invoke() }
     override fun onStart() { super.onStart(); vm.client.setForeground(true) }
     override fun onStop() { touchpad?.cancel(); microphone?.cancel(); vm.client.stopMic(true); vm.client.setForeground(false); super.onStop() }
 }
 
-@Composable private fun ConnectionHeader(state: ClientState, voiceToggle: Boolean, onVoiceToggle: (Boolean) -> Unit, onSettings: () -> Unit) {
+@Composable private fun ConnectionHeader(
+    state: ClientState,
+    voiceToggle: Boolean,
+    keyboardMode: Boolean,
+    onVoiceToggle: (Boolean) -> Unit,
+    onKeyboardToggle: (Boolean) -> Unit,
+    onSettings: () -> Unit,
+) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val scale = LocalDensity.current.fontScale
         // 状态区固定 10%，按实际高度自适应字号，保证标题、状态与「连接」按钮都能容纳。
         // 状态栏由窗口 inset 让位，因此这里只保留左右间距与一点点上边距。
         val titleSize = min(19f, maxHeight.value * 0.34f / scale).sp
         val statusSize = min(11f, maxHeight.value * 0.17f / scale).sp
-        val topPad = maxHeight * 0.10f
         Row(
-            Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars.only(WindowInsetsSides.Top)).windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)).padding(start = 12.dp, end = 8.dp, top = topPad),
+            Modifier.fillMaxSize().padding(start = 12.dp, end = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
                 Text(state.peerName, fontSize = titleSize, lineHeight = titleSize * 1.2f, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(if (state.error.isNotEmpty()) state.error else "${state.status} · RTT ${state.rttMs} ms", fontSize = statusSize, lineHeight = statusSize * 1.2f, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            // 切换组件的文字与「连接」同号，两者之间留出更大间距。
-            CompactSwitch(voiceToggle, titleSize, onVoiceToggle)
+            // 全键盘开关与语音输入方式开关互斥显示在同一位置，两者文字都与「连接」同号。
+            if (keyboardMode) ModeSwitch("全键盘", true, titleSize) { onKeyboardToggle(false) }
+            else {
+                CompactSwitch(voiceToggle, titleSize, onVoiceToggle)
+                ModeSwitch("全键盘", false, titleSize) { onKeyboardToggle(true) }
+            }
             Spacer(Modifier.width(16.dp))
             TextButton(onClick = onSettings, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("连接", fontSize = titleSize, lineHeight = titleSize * 1.2f) }
+        }
+    }
+}
+
+/** 全键盘开关：文字 + 小开关，样式与语音输入方式开关一致。 */
+@Composable private fun ModeSwitch(label: String, checked: Boolean, textSize: TextUnit, onChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, fontSize = textSize, lineHeight = textSize * 1.2f, color = Color(0xFF3F4F60), maxLines = 1)
+        Spacer(Modifier.width(6.dp))
+        Box(
+            Modifier
+                .size(width = 38.dp, height = 22.dp)
+                .clip(RoundedCornerShape(11.dp))
+                .background(if (checked) Color(0xFF175CD3) else Color(0xFFCBD5E1))
+                .clickable { onChange(!checked) }
+                .semantics { contentDescription = if (checked) "全键盘已激活，点击返回快捷键与语音输入" else "切换到全键盘" },
+        ) {
+            Box(
+                Modifier
+                    .align(if (checked) Alignment.CenterEnd else Alignment.CenterStart)
+                    .padding(horizontal = 3.dp)
+                    .size(16.dp)
+                    .clip(CircleShape)
+                    .background(Color.White),
+            )
         }
     }
 }

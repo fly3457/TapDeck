@@ -322,6 +322,18 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
 
     /** 用于按住快捷键的唯一编号。 */
     fun newHoldToken(): String = "%016x".format(SecureRandom().nextLong())
+
+    /** 全键盘：按下单个键（组合键文本，例如 `LeftShift+A`）。 */
+    fun keyDown(chord: String): Boolean = key("key_down", chord)
+
+    /** 全键盘：抬起单个键。 */
+    fun keyUp(chord: String): Boolean = key("key_up", chord)
+
+    private fun key(type: String, chord: String): Boolean {
+        val current = state.value
+        if (!current.connected || chord.isEmpty()) return false
+        return send(message(type, "text" to chord.j(), "revision" to current.config.revision.j()))
+    }
     fun startMic(mode: String = "hold"): Boolean = synchronized(lock) {
         if (!connected || !foreground || recordingRequested || recording.isNotEmpty() || mutable.value.mic != "idle" || mode !in listOf("hold", "toggle")) return@synchronized false
         var id: ULong

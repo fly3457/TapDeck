@@ -227,6 +227,10 @@ func runWorker(reader io.Reader, writer io.Writer, e *Engine) error {
 				err = e.Hold(r.Chord, true)
 			case "hold_up":
 				err = e.Hold(r.Chord, false)
+			case "key_down":
+				err = e.PressKey(r.Chord)
+			case "key_up":
+				err = e.ReleaseKey(r.Chord)
 			case "voice_start":
 				err = e.startVoice(ctx, r)
 			case "voice_stop":

@@ -247,6 +247,22 @@ func (a *Agent) Hold(k string, down bool) error {
 	}
 	return err
 }
+
+// PressKey / ReleaseKey serve the phone's full keyboard: a held key stays down
+// (so Windows repeats it) and modifiers keep latching while they are active.
+func (a *Agent) PressKey(k string) error { return a.HoldAsync(k, true, func(error) {}) }
+
+func (a *Agent) ReleaseKey(k string) error { return a.HoldAsync(k, false, func(error) {}) }
+
+// KeyAsync is the async form used by a connected session: action is "key_down"
+// or "key_up" and the errors are reported through done.
+func (a *Agent) KeyAsync(action, k string, done func(error)) error {
+	down := action == "key_down"
+	if !down && action != "key_up" {
+		return fmt.Errorf("无效按键动作")
+	}
+	return a.HoldAsync(k, down, done)
+}
 func (a *Agent) StartVoice(token, mode, start, stop string, done func(error)) error {
 	if err := Validate(start, a.KeyboardStatus().Configured); err != nil {
 		return err

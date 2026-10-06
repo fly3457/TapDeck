@@ -15,6 +15,7 @@ type delayedKeyboard struct {
 	stops  int
 	chords int
 	holds  []string
+	keys   []string
 }
 
 func (k *delayedKeyboard) ChordAsync(_ string, done func(error)) error {
@@ -34,6 +35,20 @@ func (k *delayedKeyboard) HoldAsync(chord string, down bool, done func(error)) e
 	k.holds = append(k.holds, action+":"+chord)
 	k.mu.Unlock()
 	return nil
+}
+
+// KeyAsync records full-keyboard key states.
+func (k *delayedKeyboard) KeyAsync(action, chord string, done func(error)) error {
+	k.mu.Lock()
+	k.keys = append(k.keys, action+":"+chord)
+	k.mu.Unlock()
+	return nil
+}
+
+func (k *delayedKeyboard) keyCount() []string {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return append([]string(nil), k.keys...)
 }
 
 func (k *delayedKeyboard) holdCount() []string {
@@ -112,6 +127,41 @@ func TestAsyncShortcutDoesNotBlockSession(t *testing.T) {
 	k.mu.Unlock()
 	if n != 1 {
 		t.Fatal("shortcut dispatch", n)
+	}
+}
+
+// The full keyboard sends single key states; an invalid key is rejected instead
+// of being injected.
+func TestKeyboardKeyStatesAreForwarded(t *testing.T) {
+	k := &delayedKeyboard{}
+	s, client := testReceiver(t, func(s *Server) { s.Input = k })
+	conn, ctx := testSocket(t, s, client, "")
+	testPair(t, s, conn, ctx)
+	revision := s.Config().Revision
+
+	write(ctx, conn, Message{Type: "key_down", Revision: revision, Text: "LeftShift"})
+	write(ctx, conn, Message{Type: "key_down", Revision: revision, Text: "A"})
+	write(ctx, conn, Message{Type: "key_up", Revision: revision, Text: "A"})
+	write(ctx, conn, Message{Type: "key_up", Revision: revision, Text: "LeftShift"})
+	write(ctx, conn, Message{Type: "key_down", Revision: revision, Text: "未知键"})
+	write(ctx, conn, Message{Type: "heartbeat"})
+	if stringField(testRead(t, ctx, conn), "type") != "error" {
+		t.Fatal("invalid key was not rejected")
+	}
+	// Drain the error, then confirm the session still answers control traffic.
+	write(ctx, conn, Message{Type: "heartbeat"})
+	if stringField(testRead(t, ctx, conn), "type") != "heartbeat" {
+		t.Fatal("invalid key broke the session")
+	}
+	want := []string{"key_down:LeftShift", "key_down:A", "key_up:A", "key_up:LeftShift"}
+	got := k.keyCount()
+	if len(got) != len(want) {
+		t.Fatalf("key states %v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("key states %v, want %v", got, want)
+		}
 	}
 }
 

@@ -366,6 +366,13 @@ func (e *Engine) ClearKeys() {
 	e.holds = map[string][]string{}
 	e.soft.ReleaseAll()
 }
+
+// PressKey presses a chord and keeps it held until ReleaseKey is called, which
+// is what the phone's full keyboard needs for held keys, modifiers and repeats.
+func (e *Engine) PressKey(chord string) error { return e.Hold(chord, true) }
+
+// ReleaseKey releases a chord previously pressed by PressKey.
+func (e *Engine) ReleaseKey(chord string) error { return e.Hold(chord, false) }
 func (e *Engine) Close() {
 	e.ClearKeys()
 	e.mu.Lock()

@@ -55,6 +55,7 @@ type Message struct {
 	Slot        int    `json:"slot,omitempty"`
 	Revision    uint64 `json:"revision,omitempty"`
 	Hold        string `json:"hold,omitempty"`
+	Text        string `json:"text,omitempty"`
 	Recording   string `json:"recording,omitempty"`
 	Mode        string `json:"mode,omitempty"`
 	Tick        int64  `json:"tick,omitempty"`
@@ -94,6 +95,8 @@ type InputController interface {
 type asyncKeyboard interface {
 	ChordAsync(string, func(error)) error
 	HoldAsync(string, bool, func(error)) error
+	// KeyAsync carries a full-keyboard key state: "key_down" or "key_up".
+	KeyAsync(string, string, func(error)) error
 	StartVoice(string, string, string, string, func(error)) error
 	StopVoice(string, func(error)) error
 	KeyboardStatus() keyboard.Status
@@ -825,6 +828,29 @@ func (ss *session) handle(m Message) error {
 		}
 		ss.holds[m.Hold] = chord
 		return nil
+	case "key_down", "key_up":
+		// 全键盘：单个按键的按下 / 抬起，修饰键与普通键都是独立状态，
+		// 因此可以按住不放（Windows 会重复）或同时按住多个键。
+		c := ss.s.Config()
+		if m.Revision != c.Revision {
+			_ = ss.send(map[string]any{"type": "config", "config": c})
+			return fmt.Errorf("配置已更新，请重试")
+		}
+		text := strings.TrimSpace(m.Text)
+		if text == "" || len(text) > 128 {
+			return fmt.Errorf("无效按键")
+		}
+		if _, err := input.ParseChord(text); err != nil {
+			return err
+		}
+		if a, ok := ss.s.Input.(asyncKeyboard); ok {
+			return a.KeyAsync(m.Type, text, func(e error) {
+				if e != nil {
+					_ = ss.send(map[string]any{"type": "error", "reason": e.Error()})
+				}
+			})
+		}
+		return fmt.Errorf("键盘不可用")
 	case "shortcut_hold_stop":
 		if m.Hold == "" {
 			return fmt.Errorf("无效按住编号")
