@@ -8,6 +8,11 @@
 
 - 官方 MSI 安装成功，设备状态 OK，API v1，Secure Boot 与内存完整性保持开启，无需重启。
 - 实际 Raw Input 设备事件与键盘钩子标记检查通过：关联设备事件没有 `LLKHF_INJECTED`。用户现场确认虚拟键盘的右 Ctrl+M 长按及右 Ctrl+L 免按均可触发豆包。
+- 2026-10-07 复查：定位并修复“组合键录入不区分左右修饰键”的缺陷（按右 Ctrl+M 会记录成 `Ctrl+M`），同机复测虚拟键盘 `RightCtrl+M` 连续 8 次触发豆包语音、`LeftCtrl+M` 不触发、SendInput 不触发；豆包语音只接受真正获得焦点的输入框。证据与操作说明见 [豆包语音热键实测](voice-hotkey.md)。
+- 2026-10-07 特殊按键：定位并修复“后退键 / ESC / 音量键保存不了”（录入对话框用了 walk 的按键名，与解析器名称表不一致，音量键则完全缺失），改为统一按键表；音量加减与静音实测无法通过 SendInput 注入（六种编码系统均无反应），改由 Core Audio `IAudioEndpointVolume` 的 `VolumeStepUp` / `VolumeStepDown` / `SetMute` 实现。详见 [特殊按键](special-keys.md)。
+- 2026-10-07 快捷键按住：快捷键按钮改为按下即按下、松手即抬起（新增 `shortcut_hold_start` / `shortcut_hold_stop` 消息与 `session.holds`）。实测按住「上」时 `GetAsyncKeyState` 连续 3.5 秒报告 `Up` 按下，松手立即释放；轻点为一次完整按下 / 抬起。`go test ./...` 含新增的 `TestShortcutHoldPressesAndReleases`。详见 [特殊按键](special-keys.md)。
+- 2026-10-07 Android 界面：语音输入方式开关移到顶部状态区（「连接」旁，文字与「连接」同号），默认长按语音输入＝圆形控件、单击语音输入＝方形控件（形状只由开关决定，切换立即生效）；四个区域固定为 10% / 40% / 25% / 25%，录音控件在最后 25% 内自由拖动；保留系统状态栏（时间/电量可见）；单击录音期间按任意快捷键会先结束录音；触控板黑底白字，语音区偏深米黄背景（`#FDE6AF`），底部提示行与「麦克风电平」共用一个位置、电平条在其下方。真机（Tab8C / Android 11）实测区域像素、开关切换、方形/圆形控件、轻点起停、长按录音、拖动与快捷键停录均通过，详见 [Android 语音模式](android-voice-mode.md)。
+- 2026-10-07 自动连接：Android 端启动、网络变化、回到前台时都会按 1 s→30 s 退避重试保存的配对（不再要求已持有 token）；PC 端新增随 Windows 登录自启动（注册表 `HKCU\...\Run` + `--headless`，设置页可勾选，命令行 `--autostart-on/off`）。实测重开 App 约 6 s、重启接收端后约 8 s、模拟开机自启后 2 s 内自动恢复连接，详见 [自动连接](auto-connect.md)。
 - 新接收端配合 Tab8C 完成 100 次混合语音操作（83.181 秒），覆盖拖动、取消、后台与断线重连；采音正常停止。
 - 实际 Android 长按期间强制终止主进程，持有的 Ctrl+M 约 62 ms 内释放，工作进程退出，Android 断线停止采音。
 - 六个左右修饰键按下 / 释放通过；长按 Ctrl+M 期间发送 Ctrl+C、Ctrl+F24 未释放持有的 Ctrl / M，最终释放正确。

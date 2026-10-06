@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"tapdeck/internal/audio"
 	"tapdeck/internal/hidkeyboard"
 	"tapdeck/internal/input"
 )
@@ -27,6 +28,8 @@ type Engine struct {
 	fault      string
 	observe    func()
 	recoverHID func()
+	// volumeStatus describes the Core Audio endpoint used for the volume keys.
+	volumeStatus string
 }
 type keyOwner struct {
 	Count   int
@@ -49,10 +52,27 @@ type Status struct {
 	Error      string `json:"error,omitempty"`
 	WorkerPID  int    `json:"worker_pid,omitempty"`
 	Busy       bool   `json:"busy,omitempty"`
+	// Volume reports the audio endpoint used for the volume keys, which cannot
+	// be served by key injection.
+	Volume string `json:"volume,omitempty"`
 }
 
 func NewEngine(mode string) *Engine {
 	e := &Engine{mode: normalize(mode), hidKeys: map[uint16]int{}, owners: map[uint16]keyOwner{}, soft: input.New(), holds: map[string][]string{}, voices: map[string]voice{}}
+	// Volume keys never go through key injection: Windows ignores injected
+	// volume/media keys, so they are served by Core Audio instead.
+	if v, err := audio.NewVolumeControl(); err == nil {
+		if setter, ok := e.soft.(interface{ SetVolume(input.Volume) }); ok {
+			setter.SetVolume(v)
+		}
+		if _, count, err := v.StepInfo(); err == nil {
+			e.volumeStatus = fmt.Sprintf("Core Audio 默认播放设备，%d 级", count)
+		} else {
+			e.volumeStatus = "Core Audio 默认播放设备"
+		}
+	} else {
+		e.volumeStatus = "不可用：" + err.Error()
+	}
 	e.reopen()
 	e.recoverHID = func() {
 		if d, er := hidkeyboard.Open(); er == nil {
@@ -82,7 +102,7 @@ func (e *Engine) reopen() {
 func (e *Engine) Status() Status {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	s := Status{Configured: e.mode, Actual: "sendinput", Ready: true}
+	s := Status{Configured: e.mode, Actual: "sendinput", Ready: true, Volume: e.volumeStatus}
 	if e.writeHID != nil {
 		s.Driver = "FakerInput 0.1.1"
 		s.API = 1

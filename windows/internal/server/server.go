@@ -54,6 +54,7 @@ type Message struct {
 	Down        bool   `json:"down,omitempty"`
 	Slot        int    `json:"slot,omitempty"`
 	Revision    uint64 `json:"revision,omitempty"`
+	Hold        string `json:"hold,omitempty"`
 	Recording   string `json:"recording,omitempty"`
 	Mode        string `json:"mode,omitempty"`
 	Tick        int64  `json:"tick,omitempty"`
@@ -92,6 +93,7 @@ type InputController interface {
 }
 type asyncKeyboard interface {
 	ChordAsync(string, func(error)) error
+	HoldAsync(string, bool, func(error)) error
 	StartVoice(string, string, string, string, func(error)) error
 	StopVoice(string, func(error)) error
 	KeyboardStatus() keyboard.Status
@@ -179,6 +181,8 @@ type session struct {
 	preparing                bool
 	highestMouse             uint64
 	hasMouse                 bool
+	// holds 记录当前被手机按住的快捷键，会话结束或收到 hold_stop 时释放。
+	holds map[string]string
 }
 
 func LocalIPs() []net.IP {
@@ -595,7 +599,7 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	ss := &session{s: s, ctx: ctx, cancel: cancel, ws: ws, id: randomID(), deviceID: hello.DeviceID, name: hello.Name, active: true}
+	ss := &session{s: s, ctx: ctx, cancel: cancel, ws: ws, id: randomID(), deviceID: hello.DeviceID, name: hello.Name, active: true, holds: map[string]string{}}
 	mouseKey, audioKey := secure.Random(32), secure.Random(32)
 	var mp, ap [4]byte
 	copy(mp[:], secure.Random(4))
@@ -705,6 +709,7 @@ func (ss *session) close(reason string) {
 		recording, voice := ss.recording, ss.voice
 		ss.recording = 0
 		ss.ending = false
+		ss.holds = map[string]string{}
 		ss.mu.Unlock()
 		ss.cancel()
 		ss.ws.CloseNow()
@@ -787,6 +792,56 @@ func (ss *session) handle(m Message) error {
 			})
 		}
 		return ss.s.Input.Chord(c.Shortcuts[m.Slot].Chord)
+	case "shortcut_hold_start":
+		// 按住快捷键时发送：键保持按下，直到收到对应的 hold_stop 或会话结束。
+		c := ss.s.Config()
+		if m.Revision != c.Revision {
+			_ = ss.send(map[string]any{"type": "config", "config": c})
+			return fmt.Errorf("配置已更新，请重新按住")
+		}
+		if m.Hold == "" || len(m.Hold) > 64 {
+			return fmt.Errorf("无效按住编号")
+		}
+		if m.Slot < 0 || m.Slot >= len(c.Shortcuts) {
+			return fmt.Errorf("无效快捷键")
+		}
+		if !c.Shortcuts[m.Slot].Enabled {
+			return fmt.Errorf("此快捷键已禁用")
+		}
+		if _, held := ss.holds[m.Hold]; held {
+			return nil
+		}
+		chord := c.Shortcuts[m.Slot].Chord
+		if a, ok := ss.s.Input.(asyncKeyboard); ok {
+			if e := a.HoldAsync(chord, true, func(e error) {
+				if e != nil {
+					_ = ss.send(map[string]any{"type": "error", "reason": e.Error()})
+				}
+			}); e != nil {
+				return e
+			}
+		} else if e := ss.s.Input.Hold(chord, true); e != nil {
+			return e
+		}
+		ss.holds[m.Hold] = chord
+		return nil
+	case "shortcut_hold_stop":
+		if m.Hold == "" {
+			return fmt.Errorf("无效按住编号")
+		}
+		chord, held := ss.holds[m.Hold]
+		if !held {
+			return nil
+		}
+		delete(ss.holds, m.Hold)
+		if a, ok := ss.s.Input.(asyncKeyboard); ok {
+			return a.HoldAsync(chord, false, func(e error) {
+				if e != nil {
+					_ = ss.send(map[string]any{"type": "error", "reason": e.Error()})
+				}
+			})
+		}
+		return ss.s.Input.Hold(chord, false)
 	case "mic_start":
 		id, e := strconv.ParseUint(m.Recording, 16, 64)
 		if e != nil || id == 0 {

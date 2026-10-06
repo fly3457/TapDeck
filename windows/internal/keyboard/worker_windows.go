@@ -223,6 +223,10 @@ func runWorker(reader io.Reader, writer io.Writer, e *Engine) error {
 				err = pulse(ctx, e, r.Chord)
 			case "hold":
 				err = e.Hold(r.Chord, r.Down)
+			case "hold_async":
+				err = e.Hold(r.Chord, true)
+			case "hold_up":
+				err = e.Hold(r.Chord, false)
 			case "voice_start":
 				err = e.startVoice(ctx, r)
 			case "voice_stop":

@@ -12,17 +12,28 @@ import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.ComposeView
@@ -45,7 +56,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import kotlin.math.min
 
-object Regions { const val CONNECTION = 0.10f; const val TOUCHPAD = 0.50f; const val SHORTCUTS = 0.20f; const val MICROPHONE = 0.20f }
+object Regions { const val CONNECTION = 0.10f; const val TOUCHPAD = 0.40f; const val SHORTCUTS = 0.25f; const val MICROPHONE = 0.25f }
 class TapViewModel(app: Application) : AndroidViewModel(app) {
     val client = TapClient(app, viewModelScope)
     private val store = PairStore(app)
@@ -68,6 +79,10 @@ class MainActivity : ComponentActivity() {
     private var scannedLink: Boolean = false
     private var settings by mutableStateOf(false)
     private var address by mutableStateOf("http://192.168.1.11:41080/pair")
+    /** 语音模式开关：默认长按说话（圆形），打开后免按说话（方形）。 */
+    private var voiceToggle by mutableStateOf(false)
+    /** 快捷键的轻点 / 按住手势。 */
+    private val shortcutHold by lazy { ShortcutHold({ slot, token -> vm.client.shortcutHoldStart(slot, token) }, { token -> vm.client.shortcutHoldStop(token) }) }
     private val microphonePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (!granted) android.widget.Toast.makeText(this, "麦克风权限未授予，键鼠仍可使用", android.widget.Toast.LENGTH_LONG).show() }
     private val lanPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) deferredLink?.let { vm.client.enter(it, scannedLink); deferredLink = null } else android.widget.Toast.makeText(this, "需要局域网权限才能连接电脑", android.widget.Toast.LENGTH_LONG).show() }
     private val scanner = registerForActivityResult(ScanContract()) { result -> result.contents?.let { enter(it, true) } }
@@ -88,16 +103,29 @@ class MainActivity : ComponentActivity() {
             isMotionEventSplittingEnabled = true
             setBackgroundColor(android.graphics.Color.WHITE)
             fun region(view: android.view.View, weight: Float) = addView(view, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, weight))
+            // 四个区域严格按 10% / 40% / 25% / 25% 分配屏幕高度。
             region(compose {
                 val state by vm.client.state.collectAsStateWithLifecycle()
-                ConnectionHeader(state) { settings = true }
+                ConnectionHeader(state, voiceToggle, { voiceToggle = it; microphone?.gestureMode = if (it) MicBallView.MODE_TOGGLE else MicBallView.MODE_HOLD }, { settings = true })
             }, Regions.CONNECTION)
             region(TouchpadView(context, vm.client).also { touchpad = it }, Regions.TOUCHPAD)
             region(compose {
                 val state by vm.client.state.collectAsStateWithLifecycle()
-                ShortcutButtons(state, vm.client::shortcut)
+                ShortcutButtons(
+                    state,
+                    shortcutHold,
+                    stopRecording = {
+                        // 单击语音输入录音中：按下快捷键先结束录音，这一次不再发送按键。
+                        val active = microphone?.gestureMode == MicBallView.MODE_TOGGLE && state.mic in listOf("preparing", "transmitting")
+                        if (active) vm.client.stopMic()
+                        active
+                    },
+                )
             }, Regions.SHORTCUTS)
-            region(MicBallView(context, ::beginMic, vm.client::stopMic, vm::saveBallPosition).also { microphone = it }, Regions.MICROPHONE)
+            region(MicBallView(context, ::beginMic, vm.client::stopMic, vm::saveBallPosition).also { view ->
+                microphone = view
+                view.gestureMode = if (voiceToggle) MicBallView.MODE_TOGGLE else MicBallView.MODE_HOLD
+            }, Regions.MICROPHONE)
         }
         val dialogs = compose {
             val state by vm.client.state.collectAsStateWithLifecycle()
@@ -123,6 +151,8 @@ class MainActivity : ComponentActivity() {
                     touchpad?.connected = state.connected
                     microphone?.apply {
                         available = state.connected; mode = state.micMode; status = state.mic; level = state.level
+                        // 单击语音输入开始录音时，撤销可能仍在按住的快捷键。
+                        if (state.mic == "preparing" || state.mic == "transmitting") shortcutHold.cancelAll()
                         position?.let { restorePosition(it.first, it.second) }
                     }
                 }
@@ -131,10 +161,14 @@ class MainActivity : ComponentActivity() {
         intent?.data?.let { enter(it.toString()) }
     }
     private fun fullscreen() {
+        // 保留系统状态栏（电池、时间等），只把布局延伸到状态栏后面，并按安全区留白。
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (Build.VERSION.SDK_INT >= 28) window.attributes = window.attributes.apply { layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES }
-        WindowInsetsControllerCompat(window, window.decorView).apply { systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE; hide(WindowInsetsCompat.Type.systemBars()) }
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
+            show(WindowInsetsCompat.Type.systemBars())
+        }
     }
     private fun enter(link: String, scanned: Boolean = false) {
         val permission = "android.permission.ACCESS_LOCAL_NETWORK"
@@ -154,22 +188,61 @@ class MainActivity : ComponentActivity() {
     override fun onStop() { touchpad?.cancel(); microphone?.cancel(); vm.client.stopMic(true); vm.client.setForeground(false); super.onStop() }
 }
 
-@Composable private fun ConnectionHeader(state: ClientState, settings: () -> Unit) {
+@Composable private fun ConnectionHeader(state: ClientState, voiceToggle: Boolean, onVoiceToggle: (Boolean) -> Unit, onSettings: () -> Unit) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val scale = LocalDensity.current.fontScale
-        val titleSize = min(19f, maxHeight.value * 0.30f / scale).sp
-        val statusSize = min(12f, maxHeight.value * 0.23f / scale).sp
-        Row(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        // 状态区固定 10%，按实际高度自适应字号，保证标题、状态与「连接」按钮都能容纳。
+        // 状态栏由窗口 inset 让位，因此这里只保留左右间距与一点点上边距。
+        val titleSize = min(19f, maxHeight.value * 0.34f / scale).sp
+        val statusSize = min(11f, maxHeight.value * 0.17f / scale).sp
+        val topPad = maxHeight * 0.10f
+        Row(
+            Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars.only(WindowInsetsSides.Top)).windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)).padding(start = 12.dp, end = 8.dp, top = topPad),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Column(Modifier.weight(1f)) {
-                Text(state.peerName, fontSize = titleSize, lineHeight = titleSize * 1.25f, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(if (state.error.isNotEmpty()) state.error else "${state.status} · RTT ${state.rttMs} ms", fontSize = statusSize, lineHeight = statusSize * 1.25f, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(state.peerName, fontSize = titleSize, lineHeight = titleSize * 1.2f, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(if (state.error.isNotEmpty()) state.error else "${state.status} · RTT ${state.rttMs} ms", fontSize = statusSize, lineHeight = statusSize * 1.2f, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            TextButton(onClick = settings, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("连接", fontSize = titleSize, lineHeight = titleSize * 1.25f) }
+            // 切换组件的文字与「连接」同号，两者之间留出更大间距。
+            CompactSwitch(voiceToggle, titleSize, onVoiceToggle)
+            Spacer(Modifier.width(16.dp))
+            TextButton(onClick = onSettings, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("连接", fontSize = titleSize, lineHeight = titleSize * 1.2f) }
         }
     }
 }
 
-@Composable private fun ShortcutButtons(state: ClientState, press: (Int) -> Unit) {
+/**
+ * 语音输入方式的开关，放在状态区「连接」旁边：关＝长按语音输入（圆形控件），
+ * 开＝单击语音输入（方形控件）。自绘以保证在 10% 高度里也只占很小一块。
+ */
+@Composable private fun CompactSwitch(checked: Boolean, textSize: TextUnit, onChange: (Boolean) -> Unit) {
+    val track = if (checked) Color(0xFF175CD3) else Color(0xFFCBD5E1)
+    val label = if (checked) "单击语音输入" else "长按语音输入"
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, fontSize = textSize, lineHeight = textSize * 1.2f, color = Color(0xFF3F4F60), maxLines = 1)
+        Spacer(Modifier.width(6.dp))
+        Box(
+            Modifier
+                .size(width = 38.dp, height = 22.dp)
+                .clip(RoundedCornerShape(11.dp))
+                .background(track)
+                .clickable { onChange(!checked) }
+                .semantics { contentDescription = if (checked) "语音输入方式：单击语音输入，点击切换为长按语音输入" else "语音输入方式：长按语音输入，点击切换为单击语音输入" },
+        ) {
+            Box(
+                Modifier
+                    .align(if (checked) Alignment.CenterEnd else Alignment.CenterStart)
+                    .padding(horizontal = 3.dp)
+                    .size(16.dp)
+                    .clip(CircleShape)
+                    .background(Color.White),
+            )
+        }
+    }
+}
+
+@Composable private fun ShortcutButtons(state: ClientState, hold: ShortcutHold, stopRecording: () -> Boolean) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val visible = state.config.visibleShortcuts()
         val rows = if (visible.size > 4) 2 else 1
@@ -185,19 +258,80 @@ class MainActivity : ComponentActivity() {
                     repeat(columns) { column ->
                         val item = visible.getOrNull(row * columns + column)
                         if (item == null) Spacer(Modifier.weight(1f).fillMaxHeight())
-                        else OutlinedButton(
-                            onClick = { press(item.index) }, enabled = state.connected,
-                            modifier = Modifier.weight(1f).fillMaxHeight().semantics { contentDescription = "快捷键 ${item.index + 1}：${item.value.label}" },
-                            contentPadding = PaddingValues(3.dp), shape = MaterialTheme.shapes.small,
+                        else Box(
+                            Modifier.weight(1f).fillMaxHeight()
+                                .semantics { contentDescription = "快捷键 ${item.index + 1}：${item.value.label}" }
+                                .shortcutPress(state.connected, item.index, hold, stopRecording),
                         ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(item.value.label, fontSize = titleSize, lineHeight = titleSize * 1.25f, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(item.value.chord, fontSize = chordSize, lineHeight = chordSize * 1.25f, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            // 自绘按钮外观：不用 Button，避免它消费抬手事件而收不到释放。
+                            Surface(
+                                modifier = Modifier.fillMaxSize(),
+                                shape = MaterialTheme.shapes.small,
+                                color = MaterialTheme.colorScheme.surface,
+                                contentColor = MaterialTheme.colorScheme.primary,
+                                border = BorderStroke(1.dp, if (state.connected) MaterialTheme.colorScheme.primary else Color(0xFFCBD5E1)),
+                            ) {
+                                Column(
+                                    modifier = Modifier.fillMaxSize().padding(3.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center,
+                                ) {
+                                    Text(item.value.label, fontSize = titleSize, lineHeight = titleSize * 1.25f, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(item.value.chord, fontSize = chordSize, lineHeight = chordSize * 1.25f, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
                             }
                         }
                     }
                 }
             }
         }
+    }
+}
+
+/**
+ * 快捷键的按下 / 抬起手势：按下即让 PC 保持组合键按下，松手立即释放。
+ * 轻点就是一次「按下→抬起」，按住就是持续的按下状态，与实体键盘一致。
+ * 单击语音输入录音进行中按下任意快捷键时，只结束录音，这一次不发送按键。
+ */
+class ShortcutHold(
+    private val start: (Int, String) -> Unit,
+    private val stop: (String) -> Unit,
+) {
+    private val active = mutableMapOf<Int, String>()
+
+    fun press(slot: Int, recordingActive: Boolean) {
+        if (active.containsKey(slot)) return
+        if (recordingActive) return
+        val token = "slot$slot-${System.nanoTime()}"
+        active[slot] = token
+        start(slot, token)
+    }
+
+    fun release(slot: Int) {
+        val token = active.remove(slot) ?: return
+        stop(token)
+    }
+
+    /** 开始录音时撤销仍按住的键，避免残留按下状态。 */
+    fun cancelAll() {
+        val pending = active.values.toList()
+        active.clear()
+        pending.forEach { stop(it) }
+    }
+}
+
+private fun Modifier.shortcutPress(
+    connected: Boolean,
+    slot: Int,
+    hold: ShortcutHold,
+    stopRecording: () -> Boolean,
+): Modifier = pointerInput(connected, slot) {
+    awaitEachGesture {
+        awaitFirstDown(requireUnconsumed = false)
+        if (!connected) return@awaitEachGesture
+        val wasRecording = stopRecording()
+        hold.press(slot, wasRecording)
+        waitForUpOrCancellation()
+        hold.release(slot)
     }
 }

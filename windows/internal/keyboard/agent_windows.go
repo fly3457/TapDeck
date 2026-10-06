@@ -207,6 +207,33 @@ func (a *Agent) ChordAsync(k string, done func(error)) error {
 	return a.submit(request{Action: "chord", Chord: k}, done)
 }
 func (a *Agent) Chord(k string) error { return a.sync(request{Action: "chord", Chord: k}) }
+
+// HoldAsync presses (down) or releases a shortcut while the phone keeps the
+// button pressed, so holding the button repeats the key state instead of firing
+// once. The held count keeps a held shortcut from being released by unrelated
+// work such as a voice hotkey transition.
+func (a *Agent) HoldAsync(k string, down bool, done func(error)) error {
+	if err := Validate(k, a.KeyboardStatus().Configured); err != nil {
+		return err
+	}
+	action := "hold_async"
+	if !down {
+		action = "hold_up"
+	}
+	err := a.submit(request{Action: action, Chord: k}, func(err error) {
+		if err == nil {
+			a.mu.Lock()
+			if down {
+				a.held++
+			} else if a.held > 0 {
+				a.held--
+			}
+			a.mu.Unlock()
+		}
+		done(err)
+	})
+	return err
+}
 func (a *Agent) Hold(k string, down bool) error {
 	err := a.sync(request{Action: "hold", Chord: k, Down: down})
 	if err == nil {

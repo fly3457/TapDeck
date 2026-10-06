@@ -24,8 +24,10 @@ import (
 	"strings"
 	"sync/atomic"
 	"tapdeck/internal/audio"
+	"tapdeck/internal/autostart"
 	"tapdeck/internal/config"
 	"tapdeck/internal/driver"
+	"tapdeck/internal/input"
 	"tapdeck/internal/keyboard"
 	"tapdeck/internal/server"
 	"time"
@@ -41,7 +43,17 @@ func main() {
 	data := flag.String("data-dir", config.Directory(), "settings directory")
 	list := flag.Bool("list-audio", false, "list WASAPI render endpoints")
 	probe := flag.Int("audio-probe", 0, "capture only CABLE Output and print level metrics for N seconds")
+	autostartOn := flag.Bool("autostart-on", false, "register the receiver to start at Windows sign-in, then exit")
+	autostartOff := flag.Bool("autostart-off", false, "remove the sign-in startup entry, then exit")
 	flag.Parse()
+	if *autostartOn || *autostartOff {
+		on, err := autostart.Set(*autostartOn)
+		if err != nil {
+			log.Fatalf("设置开机自启失败: %v", err)
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"autostart": on, "command": mustCommand()})
+		return
+	}
 	if *worker {
 		if e := keyboard.RunWorker(os.Stdin, os.Stdout); e != nil {
 			log.Print(e)
@@ -149,6 +161,20 @@ func open(path string) {
 	verb, _ := windows.UTF16PtrFromString("open")
 	windows.NewLazySystemDLL("shell32.dll").NewProc("ShellExecuteW").Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(p)), 0, 0, 1)
 }
+func mustCommand() string {
+	command, err := autostart.Command()
+	if err != nil {
+		return ""
+	}
+	return command
+}
+
+// autostartEnabled reports the current sign-in entry state for the settings tab.
+func autostartEnabled() bool {
+	on, _, err := autostart.Enabled()
+	return err == nil && on
+}
+
 func window(s *server.Server, dir string) error {
 	// Window creation, the message loop and STA callbacks must share an OS
 	// thread, even when COM enumeration yields before the first window.
@@ -166,6 +192,8 @@ func window(s *server.Server, dir string) error {
 	var holdKey, toggleStartKey, toggleStopKey *walk.LineEdit
 	var gain, sensitivity, delay, httpPort, wssPort, udpPort *walk.NumberEdit
 	var natural *walk.CheckBox
+	var autostartBox *walk.CheckBox
+	var autostartLabel *walk.Label
 	var labels, keys [config.ShortcutCount]*walk.LineEdit
 	var enabled [config.ShortcutCount]*walk.CheckBox
 	var pendingID string
@@ -291,7 +319,14 @@ func window(s *server.Server, dir string) error {
 				_ = devices.SetModel(deviceNames)
 				_ = devices.SetCurrentIndex(0)
 			}}, d.Label{AssignTo: &audioStatus, Text: "正在检查音频设备"}, d.Label{Text: "音量倍率（0–3）"}, d.NumberEdit{AssignTo: &gain, Value: cfg.Gain, MinValue: 0, MaxValue: 3, Decimals: 2, Increment: 0.1}, d.Label{Text: "两种手势同时可用；热键留空时仅传音。"}, d.Label{Text: "长按热键（圆球按住 300 ms，松手释放）"}, d.Composite{Layout: d.HBox{}, Children: keyWidgets(func() walk.Form { return mw }, &holdKey, cfg.Voice.HoldKey)}, d.Label{Text: "免按开始热键（双击圆球开始）"}, d.Composite{Layout: d.HBox{}, Children: keyWidgets(func() walk.Form { return mw }, &toggleStartKey, cfg.Voice.ToggleStartKey)}, d.Label{Text: "免按结束热键（单击圆球停止）"}, d.Composite{Layout: d.HBox{}, Children: keyWidgets(func() walk.Form { return mw }, &toggleStopKey, cfg.Voice.ToggleStopKey)}, d.Label{Text: "尾音结束延迟 ms"}, d.NumberEdit{AssignTo: &delay, Value: float64(cfg.Voice.StopDelayMS), MinValue: 0, MaxValue: 1000}, d.VSpacer{}}},
-			{Title: "设置与状态", Layout: d.VBox{}, Children: []d.Widget{d.Label{Text: "HTTP / WSS / UDP 端口（修改后重启连接）"}, d.NumberEdit{AssignTo: &httpPort, Value: float64(cfg.HTTPPort), MinValue: 1024, MaxValue: 65535}, d.NumberEdit{AssignTo: &wssPort, Value: float64(cfg.WSSPort), MinValue: 1024, MaxValue: 65535}, d.NumberEdit{AssignTo: &udpPort, Value: float64(cfg.UDPPort), MinValue: 1024, MaxValue: 65535}, d.Label{Text: "触控灵敏度"}, d.NumberEdit{AssignTo: &sensitivity, Value: cfg.Sensitivity, MinValue: 0.1, MaxValue: 5, Decimals: 2, Increment: 0.1}, d.CheckBox{AssignTo: &natural, Text: "自然滚动", Checked: cfg.NaturalScroll}, d.Label{AssignTo: &stats, Text: "等待数据"}, d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.PushButton{Text: "启动接收", OnClicked: func() {
+			{Title: "设置与状态", Layout: d.VBox{}, Children: []d.Widget{d.Label{Text: "HTTP / WSS / UDP 端口（修改后重启连接）"}, d.NumberEdit{AssignTo: &httpPort, Value: float64(cfg.HTTPPort), MinValue: 1024, MaxValue: 65535}, d.NumberEdit{AssignTo: &wssPort, Value: float64(cfg.WSSPort), MinValue: 1024, MaxValue: 65535}, d.NumberEdit{AssignTo: &udpPort, Value: float64(cfg.UDPPort), MinValue: 1024, MaxValue: 65535}, d.Label{Text: "触控灵敏度"}, d.NumberEdit{AssignTo: &sensitivity, Value: cfg.Sensitivity, MinValue: 0.1, MaxValue: 5, Decimals: 2, Increment: 0.1}, d.CheckBox{AssignTo: &natural, Text: "自然滚动", Checked: cfg.NaturalScroll}, d.CheckBox{AssignTo: &autostartBox, Text: "随 Windows 登录自动启动接收端", Checked: autostartEnabled(), OnCheckedChanged: func() {
+				on, err := autostart.Set(autostartBox.Checked())
+				if err != nil {
+					walk.MsgBox(mw, "开机自启设置失败", err.Error(), walk.MsgBoxIconError)
+				}
+				autostartBox.SetChecked(on)
+				_ = autostartLabel.SetText(autostart.Summary())
+			}}, d.Label{AssignTo: &autostartLabel, Text: autostart.Summary()}, d.Label{AssignTo: &stats, Text: "等待数据"}, d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.PushButton{Text: "启动接收", OnClicked: func() {
 				if e := s.Start(); e != nil {
 					walk.MsgBox(mw, "启动失败", e.Error(), walk.MsgBoxIconError)
 				}
@@ -405,8 +440,8 @@ func window(s *server.Server, dir string) error {
 }
 func keyWidgets(owner func() walk.Form, target **walk.LineEdit, text string) []d.Widget {
 	var picker *walk.ComboBox
-	names := []string{"单键选择…", "左 Alt", "右 Alt", "左 Ctrl", "右 Ctrl", "左 Shift", "右 Shift"}
-	keys := []string{"LeftAlt", "RightAlt", "LeftCtrl", "RightCtrl", "LeftShift", "RightShift"}
+	names := []string{"单键选择…", "左 Alt", "右 Alt", "左 Ctrl", "右 Ctrl", "左 Shift", "右 Shift", "音量加", "音量减", "静音"}
+	keys := []string{"LeftAlt", "RightAlt", "LeftCtrl", "RightCtrl", "LeftShift", "RightShift", "VolumeUp", "VolumeDown", "VolumeMute"}
 	return []d.Widget{
 		d.LineEdit{AssignTo: target, Text: text, MinSize: d.Size{Width: 150}, StretchFactor: 1},
 		d.ComboBox{AssignTo: &picker, Model: names, CurrentIndex: 0, MinSize: d.Size{Width: 105}, MaxSize: d.Size{Width: 130}, OnCurrentIndexChanged: func() {
@@ -423,21 +458,14 @@ func captureChord(owner walk.Form, target *walk.LineEdit) {
 	var dlg *walk.Dialog
 	var field *walk.LineEdit
 	var chord string
-	_ = (d.Dialog{AssignTo: &dlg, Title: "录入组合键", MinSize: d.Size{Width: 380, Height: 160}, Layout: d.VBox{}, Children: []d.Widget{d.Label{Text: "先按住修饰键，再按主键。单独 Alt/Ctrl/Shift 请用设置中的单键选择。"}, d.LineEdit{AssignTo: &field, ReadOnly: true, OnKeyDown: func(key walk.Key) {
+	_ = (d.Dialog{AssignTo: &dlg, Title: "录入组合键", MinSize: d.Size{Width: 380, Height: 180}, Layout: d.VBox{}, Children: []d.Widget{d.Label{Text: "先按住修饰键，再按主键，左右修饰键会分别记录。单独 Alt/Ctrl/Shift 请用设置中的单键选择。"}, d.LineEdit{AssignTo: &field, ReadOnly: true, OnKeyDown: func(key walk.Key) {
 		if key == walk.KeyControl || key == walk.KeyShift || key == walk.KeyMenu {
 			return
 		}
-		parts := []string{}
-		mods := walk.ModifiersDown().String()
-		if mods != "" {
-			parts = append(parts, mods)
-		}
-		k := key.String()
-		if len(k) == 4 && strings.HasPrefix(k, "Key") {
-			k = k[3:]
-		}
-		parts = append(parts, k)
-		chord = strings.Join(parts, "+")
+		chord = chordWithModifiers(walkKeyName(key), func(vk uint16) bool {
+			down, _, _ := procGetAsyncKeyState.Call(uintptr(vk))
+			return int16(down) < 0
+		})
 		_ = field.SetText(chord)
 	}}, d.PushButton{Text: "使用此组合键", OnClicked: func() { _ = target.SetText(chord); dlg.Accept() }}, d.PushButton{Text: "取消", OnClicked: func() { dlg.Cancel() }}}}).Create(owner)
 	if dlg != nil {
@@ -445,4 +473,45 @@ func captureChord(owner walk.Form, target *walk.LineEdit) {
 		field.SetFocus()
 		dlg.Run()
 	}
+}
+
+// walkKeyName maps a recorded key to the name the chord parser and the
+// injection backends share. walk's own key names use a different vocabulary
+// ("Back", "Escape", "Prior", "VolumeUp"), which previously produced hotkeys
+// that the parser rejected, so special keys could not be saved at all.
+func walkKeyName(k walk.Key) string {
+	if name, ok := input.KeyName(uint16(k)); ok {
+		return name
+	}
+	return ""
+}
+
+var procGetAsyncKeyState = windows.NewLazySystemDLL("user32.dll").NewProc("GetAsyncKeyState")
+
+// modifiers lists the six side-specific modifiers in the order they are written
+// into a chord. walk.ModifiersDown reports only the left Alt/Ctrl/Shift keys and
+// cannot tell the two sides apart, so the sides are read directly.
+var modifiers = []struct {
+	Name string
+	VK   uint16
+}{
+	{"LeftCtrl", 0xA2}, {"RightCtrl", 0xA3},
+	{"LeftShift", 0xA0}, {"RightShift", 0xA1},
+	{"LeftAlt", 0xA4}, {"RightAlt", 0xA5},
+}
+
+// chordWithModifiers builds the chord text for a main key while the given
+// modifiers are held, so the recorded hotkey keeps the left/right side the user
+// actually pressed.
+func chordWithModifiers(main string, down func(uint16) bool) string {
+	parts := []string{}
+	for _, m := range modifiers {
+		if down(m.VK) {
+			parts = append(parts, m.Name)
+		}
+	}
+	if main == "" {
+		return ""
+	}
+	return strings.Join(append(parts, main), "+")
 }

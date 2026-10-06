@@ -5,7 +5,6 @@ package input
 import (
 	"fmt"
 	"golang.org/x/sys/windows"
-	"strconv"
 	"strings"
 	"sync"
 	"unsafe"
@@ -26,15 +25,55 @@ type nativeInput struct {
 	Pad2  uint32
 	Extra uintptr
 }
+// Volume 由 Core Audio 实现（见 internal/audio）。音量 / 媒体键无法通过注入
+// 按键实现：本机实测 SendInput 的六种编码都不会让 Windows 改变音量。
+type Volume interface {
+	Step(up bool) error
+	ToggleMute() error
+}
+
 type Controller struct {
 	mu      sync.Mutex
 	keys    map[uint16]int
 	buttons map[string]bool
 	inject  func(...nativeInput) error
+	volume  Volume
+	// volumeDone 记录已经执行过音量动作的按键，避免长按期间每一步都重复调整。
+	volumeDone map[uint16]bool
 }
 
 func New() *Controller {
-	return &Controller{keys: map[uint16]int{}, buttons: map[string]bool{}, inject: send}
+	return &Controller{keys: map[uint16]int{}, buttons: map[string]bool{}, inject: send, volumeDone: map[uint16]bool{}}
+}
+
+// SetVolume attaches the Core Audio volume controller used for the volume keys.
+func (c *Controller) SetVolume(v Volume) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.volume = v
+}
+
+// volumeKey reports whether the key is served by Core Audio instead of injection.
+func volumeKey(k uint16) bool { return k == 0xAD || k == 0xAE || k == 0xAF }
+
+// applyVolume runs the volume action for a freshly pressed volume key.
+func (c *Controller) applyVolume(k uint16) error {
+	if c.volume == nil {
+		return fmt.Errorf("音量控制不可用")
+	}
+	if c.volumeDone[k] {
+		return nil
+	}
+	c.volumeDone[k] = true
+	switch k {
+	case 0xAD:
+		return c.volume.ToggleMute()
+	case 0xAE:
+		return c.volume.Step(false)
+	case 0xAF:
+		return c.volume.Step(true)
+	}
+	return nil
 }
 func send(items ...nativeInput) error {
 	if len(items) == 0 {
@@ -51,19 +90,22 @@ func keyInput(k uint16, up bool) nativeInput {
 	if up {
 		flags = 2
 	}
-	// wVk occupies the low 16 bits of DX, wScan the high 16 bits.
-	// Side-specific modifiers use physical scan codes, independent of layout.
-	scans := map[uint16]uint16{0xA0: 0x2A, 0xA1: 0x36, 0xA2: 0x1D, 0xA3: 0x1D, 0xA4: 0x38, 0xA5: 0x38}
-	if scan, ok := scans[k]; ok {
-		flags |= 8
-		if k == 0xA3 || k == 0xA5 {
-			flags |= 1
+	// The table carries the physical scan code for every key that has one; scan
+	// codes keep side-specific modifiers and keyboard keys independent of layout.
+	// Volume and media keys are vkOnly because the shell's media-key handling
+	// ignores scan-code-only injection (measured on this machine).
+	def, known := keyByVK[k]
+	if known && def.scan != 0 && !def.vkOnly {
+		flags |= 8 // KEYEVENTF_SCANCODE
+		if def.ext {
+			flags |= 1 // KEYEVENTF_EXTENDEDKEY
 		}
-		return nativeInput{Kind: 1, DX: int32(scan) << 16, DY: int32(flags)}
+		return nativeInput{Kind: 1, DX: int32(def.scan) << 16, DY: int32(flags)}
 	}
-	if k == 0x25 || k == 0x26 || k == 0x27 || k == 0x28 || k == 0x21 || k == 0x22 || k == 0x23 || k == 0x24 || k == 0x2D || k == 0x2E || k == 0x5B || k == 0x6F {
+	if known && def.ext {
 		flags |= 1
 	}
+	// wVk occupies the low 16 bits of DX, wScan the high 16 bits.
 	return nativeInput{Kind: 1, DX: int32(k), DY: int32(flags)}
 }
 func ParseChord(chord string) ([]uint16, error) {
@@ -73,29 +115,13 @@ func ParseChord(chord string) ([]uint16, error) {
 	result := []uint16{}
 	seen := map[uint16]bool{}
 	parts := strings.Split(strings.ToUpper(strings.ReplaceAll(chord, " ", "")), "+")
-	names := map[string]uint16{"CTRL": 0xA2, "CONTROL": 0xA2, "SHIFT": 0xA0, "ALT": 0xA4,
-		"LEFTCTRL": 0xA2, "LCTRL": 0xA2, "RIGHTCTRL": 0xA3, "RCTRL": 0xA3,
-		"LEFTSHIFT": 0xA0, "LSHIFT": 0xA0, "RIGHTSHIFT": 0xA1, "RSHIFT": 0xA1,
-		"LEFTALT": 0xA4, "LALT": 0xA4, "RIGHTALT": 0xA5, "RALT": 0xA5,
-		"WIN": 0x5B, "ENTER": 0x0D, "RETURN": 0x0D, "ESC": 0x1B, "ESCAPE": 0x1B, "SPACE": 0x20, "TAB": 0x09, "BACKSPACE": 0x08, "DELETE": 0x2E, "INSERT": 0x2D, "HOME": 0x24, "END": 0x23, "PAGEUP": 0x21, "PAGEDOWN": 0x22, "LEFT": 0x25, "UP": 0x26, "RIGHT": 0x27, "DOWN": 0x28, "PLUS": 0xBB, "MINUS": 0xBD, "COMMA": 0xBC, "PERIOD": 0xBE}
 	for _, p := range parts {
-		k, ok := names[p]
-		if !ok && len(p) == 1 && ((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= '0' && p[0] <= '9')) {
-			k = uint16(p[0])
-			ok = true
-		}
-		if !ok && strings.HasPrefix(p, "F") {
-			n, e := strconv.Atoi(p[1:])
-			if e == nil && n >= 1 && n <= 24 {
-				k = uint16(0x70 + n - 1)
-				ok = true
-			}
-		}
-		if !ok || seen[k] {
+		k, ok := lookupKey(p)
+		if !ok || seen[k.vk] {
 			return nil, fmt.Errorf("无效按键 %q", p)
 		}
-		seen[k] = true
-		result = append(result, k)
+		seen[k.vk] = true
+		result = append(result, k.vk)
 	}
 	if len(result) > 5 {
 		return nil, fmt.Errorf("组合键最多五个按键")
@@ -110,12 +136,24 @@ func (c *Controller) Chord(chord string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	items := []nativeInput{}
+	var volumeErr error
 	for _, k := range keys {
+		if volumeKey(k) {
+			// 音量键交给 Core Audio，不注入按键。
+			if e := c.applyVolume(k); e != nil && volumeErr == nil {
+				volumeErr = e
+			}
+			continue
+		}
 		if c.keys[k] == 0 {
 			items = append(items, keyInput(k, false))
 		}
 	}
 	for i := len(keys) - 1; i >= 0; i-- {
+		if k := keys[i]; volumeKey(k) {
+			delete(c.volumeDone, k)
+			continue
+		}
 		if c.keys[keys[i]] == 0 {
 			items = append(items, keyInput(keys[i], true))
 		}
@@ -131,7 +169,7 @@ func (c *Controller) Chord(chord string) error {
 		_ = c.inject(cleanup...)
 		return e
 	}
-	return nil
+	return volumeErr
 }
 func (c *Controller) Hold(chord string, down bool) error {
 	keys, e := ParseChord(chord)
@@ -148,8 +186,17 @@ func (c *Controller) HoldKeys(keys []uint16, down bool) error {
 		previous[k] = n
 	}
 	items := []nativeInput{}
+	var volumeErr error
 	if down {
 		for _, k := range keys {
+			if volumeKey(k) {
+				// 音量键不注入按键：按住期间只执行一次音量动作。
+				c.keys[k]++
+				if e := c.applyVolume(k); e != nil && volumeErr == nil {
+					volumeErr = e
+				}
+				continue
+			}
 			if c.keys[k] == 0 {
 				items = append(items, keyInput(k, false))
 			}
@@ -161,6 +208,10 @@ func (c *Controller) HoldKeys(keys []uint16, down bool) error {
 			if c.keys[k] > 0 {
 				c.keys[k]--
 				if c.keys[k] == 0 {
+					delete(c.volumeDone, k)
+					if volumeKey(k) {
+						continue
+					}
 					items = append(items, keyInput(k, true))
 				}
 			}
@@ -180,7 +231,7 @@ func (c *Controller) HoldKeys(keys []uint16, down bool) error {
 		}
 		return e
 	}
-	return nil
+	return volumeErr
 }
 func (c *Controller) Move(dx, dy, sx, sy int32) error {
 	c.mu.Lock()
@@ -247,6 +298,7 @@ func (c *Controller) ReleaseAll() {
 	_ = c.inject(items...)
 	c.keys = map[uint16]int{}
 	c.buttons = map[string]bool{}
+	c.volumeDone = map[uint16]bool{}
 }
 
 // ReleaseOwnedKeys is reserved for recovery after the keyboard child crashes.

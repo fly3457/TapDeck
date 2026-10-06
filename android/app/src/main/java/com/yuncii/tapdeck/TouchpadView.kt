@@ -35,11 +35,12 @@ class TouchpadView(context: Context, private val client: TouchSink) : View(conte
         set(value) { if (field != value) { if (!value) cancel(); field = value; invalidate() } }
     init { isClickable = true; contentDescription = "触控板" }
     override fun onDraw(c: Canvas) {
-        paint.color = Color.rgb(237, 240, 244); c.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
-        paint.color = Color.rgb(92, 105, 120); paint.textAlign = Paint.Align.CENTER
+        paint.color = Color.BLACK; c.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
+        paint.color = Color.WHITE; paint.textAlign = Paint.Align.CENTER
         c.centeredLabel(if (connected) "触控板" else "连接电脑后使用触控板", paint, 21f, width, height / 2f, density)
+        paint.color = Color.rgb(203, 213, 225)
         c.centeredLabel("轻点左击 · 双指右击 / 滚动 · 双击按住拖拽", paint, 13f, width, height / 2f + 32 * density, density)
-        paint.color = Color.rgb(173, 182, 193); paint.strokeWidth = density; c.drawLine(0f, height - density, width.toFloat(), height - density, paint)
+        paint.color = Color.rgb(60, 66, 74); paint.strokeWidth = density; c.drawLine(0f, height - density, width.toFloat(), height - density, paint)
     }
     override fun onTouchEvent(e: MotionEvent): Boolean {
         if (!connected) return true

@@ -25,6 +25,12 @@ import okhttp3.*
 
 data class ClientState(val status: String = "未连接", val peerName: String = "TapDeck", val connected: Boolean = false, val pairing: String = "", val pairingConfirmed: Boolean = false, val config: PcConfig = PcConfig(), val mic: String = "idle", val micMode: String = "", val level: Float = 0f, val error: String = "", val rttMs: Long = 0)
 class TapClient(private val app: Application, private val scope: CoroutineScope) : TouchSink {
+    private companion object {
+        /** 自动重连的退避间隔（毫秒），最后一次会一直沿用。 */
+        val RETRY_DELAYS = longArrayOf(1000, 2000, 4000, 8000, 15000, 30000)
+        /** App 不在前台时的重试间隔，避免后台无谓地反复连接。 */
+        const val IDLE_RETRY_MS = 30000L
+    }
     private val store = PairStore(app)
     private val mutable = MutableStateFlow(ClientState())
     val state = mutable.asStateFlow()
@@ -49,11 +55,22 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
         runCatching { if (connected && foreground) { if (wifiLock?.isHeld == false) wifiLock.acquire() } else if (wifiLock?.isHeld == true) wifiLock.release() }
             .onFailure { Log.w("TapDeck", "Wi-Fi latency lock unavailable", it) }
     }
-    fun setForeground(value: Boolean) = synchronized(lock) { foreground = value; updateWifiLock() }
+    fun setForeground(value: Boolean) = synchronized(lock) {
+        val becameForeground = value && !foreground
+        foreground = value
+        updateWifiLock()
+        // 回到前台仍未连接时立即重试，不必等退避计时。
+        if (becameForeground && reconnect && peer != null && !connected) { retryAt = 0; scheduleReconnect() }
+    }
     @Volatile private var lastResponse = 0L
     @Volatile private var reconnect = true
     private var heartbeat: Job? = null
     private var reconnectJob: Job? = null
+    // 自动重连的退避状态：开机顺序、Wi-Fi 尚未就绪或电脑接收端未启动时都要继续尝试。
+    private var retryCount = 0
+    private var retryAt = 0L
+    private var retryNotice = ""
+    private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
     private val movement = Channel<Pair<Long, Movement>>(Channel.CONFLATED)
     private val audio = Channel<ByteArray>(6)
     private var recording = ""
@@ -69,6 +86,55 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
     init {
         scope.launch(Dispatchers.IO) { for ((gen, m) in movement) synchronized(lock) { if (connected && gen == generation) runCatching { val bytes = mouseCodec!!.seal(m.bytes()); udp!!.send(DatagramPacket(bytes, bytes.size, target, udpPort)) }.onFailure { Log.w("TapDeck", "mouse UDP failed", it) } } }
         scope.launch(Dispatchers.IO) { for (body in audio) synchronized(lock) { if (connected && recording.isNotEmpty() && ByteBuffer.wrap(body).order(ByteOrder.LITTLE_ENDIAN).long == recording.toULong(16).toLong()) runCatching { val bytes = audioCodec!!.seal(body); udp!!.send(DatagramPacket(bytes, bytes.size, target, udpPort)) }.onFailure { Log.w("TapDeck", "audio UDP failed", it) } } }
+        registerNetworkCallback()
+    }
+    private fun registerNetworkCallback() {
+        val manager = app.getSystemService(android.net.ConnectivityManager::class.java) ?: return
+        val callback = object : android.net.ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: android.net.Network) = wakeForReconnect("网络已连接")
+            override fun onLost(network: android.net.Network) { }
+        }
+        runCatching { manager.registerDefaultNetworkCallback(callback); networkCallback = callback }
+            .onFailure { Log.w("TapDeck", "network callback unavailable", it) }
+    }
+    /** Wi-Fi 状态变化时立即重试，不必等下一次退避。 */
+    private fun wakeForReconnect(reason: String) {
+        synchronized(lock) {
+            if (!reconnect || peer == null || connected) return
+            retryAt = 0
+            retryCount = 0
+            retryNotice = reason
+            scheduleReconnect()
+        }
+    }
+    /**
+     * Keeps trying to reach the saved peer until it connects or the user acts.
+     * The delay grows from 1 s to 30 s, and a foreground or network change cuts
+     * it short. Must be called with [lock] held.
+     */
+    private fun scheduleReconnect() {
+        val saved = peer ?: return
+        if (!reconnect) return
+        val timer = reconnectJob?.isActive == true
+        if (timer && retryAt != 0L) return
+        if (retryAt == 0L) retryAt = SystemClock.elapsedRealtime() + backoffDelay()
+        val attempt = desiredConnection
+        reconnectJob = scope.launch(Dispatchers.IO) {
+            while (isActive) {
+                val wait = synchronized(lock) { (retryAt - SystemClock.elapsedRealtime()).coerceAtLeast(0) }
+                if (wait > 0) { delay(wait); continue }
+                val current = synchronized(lock) { if (!reconnect || attempt != desiredConnection || connected) null else peer }
+                if (current == null) return@launch
+                connect(current, "", attempt)
+                return@launch
+            }
+        }
+    }
+    private fun backoffDelay(): Long {
+        if (!foreground) return IDLE_RETRY_MS
+        val delay = RETRY_DELAYS[retryCount.coerceAtMost(RETRY_DELAYS.size - 1)]
+        retryCount++
+        return delay
     }
     suspend fun restore() {
         val attempt = synchronized(lock) { desiredConnection }
@@ -76,8 +142,10 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
             if (Build.VERSION.SDK_INT >= 37 && app.applicationInfo.targetSdkVersion >= 37 && app.checkSelfPermission("android.permission.ACCESS_LOCAL_NETWORK") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 mutable.update { it.copy(status = "请打开连接页授予局域网权限") }; return
             }
-            synchronized(lock) { if (attempt != desiredConnection) return; peer = it }
+            synchronized(lock) { if (attempt != desiredConnection) return; peer = it; reconnect = true }
             connect(it, "", attempt)
+            // 首次恢复失败（电脑还没开机、Wi-Fi 尚未就绪等）时继续按退避重试。
+            synchronized(lock) { if (reconnect && !connected && peer != null) scheduleReconnect() }
         }
     }
     fun enter(raw: String, scanned: Boolean = false) {
@@ -106,7 +174,7 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
                     p = Peer(host, m.long("wss_port").toInt(), port, m.str("pin"), m.str("name", "电脑"))
                 }
                 validateHost(p.host); require(p.pin.matches(Regex("[0-9a-fA-F]{64}"))) { "服务器指纹无效" }; require(p.wssPort in 1024..65535 && p.httpPort in 1024..65535) { "端口无效" }
-                synchronized(lock) { if (attempt != desiredConnection) return@launch; reconnect = true; peer = p }
+                synchronized(lock) { if (attempt != desiredConnection) return@launch; reconnect = true; retryCount = 0; retryAt = 0L; peer = p }
                 connect(p, secret, attempt)
             } catch (e: Exception) { mutable.update { it.copy(status = "连接失败", error = e.message ?: "连接失败") } }
         }
@@ -169,6 +237,7 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
                                 mouseCodec = UdpCodec(decode64(m.str("mouse_key")), decode64(m.str("mouse_prefix")), session, 1)
                                 audioCodec = UdpCodec(decode64(m.str("audio_key")), decode64(m.str("audio_prefix")), session, 2)
                                 epoch = 0; x = 0; y = 0; sx = 0; sy = 0; connected = true; peer = saved
+                                retryCount = 0; retryAt = 0L; retryNotice = ""
                                 updateWifiLock()
                             }
                             scope.launch(Dispatchers.IO) { store.save(saved) }
@@ -212,16 +281,18 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
     fun confirmPair() { val code = mutable.value.pairing; if (code.isNotEmpty()) { send(message("pair_confirm", "code" to code.j())); mutable.update { it.copy(pairingConfirmed = true, status = "等待电脑允许连接") } } }
     private fun lost(gen: Long, reason: String) {
         synchronized(lock) { if (gen != generation) return; generation++; connected = false; updateWifiLock(); recordingRequested = false; recording = ""; socket?.cancel(); socket = null; udp?.close(); udp = null }
-        recorder.stop(); heartbeat?.cancel(); mutable.update { it.copy(connected = false, mic = "idle", micMode = "", level = 0f, status = "连接已断开", error = reason, pairing = "") }
-        val saved = peer
-        val attempt = synchronized(lock) { desiredConnection }
-        if (reconnect && saved != null && saved.token.isNotEmpty()) { reconnectJob?.cancel(); reconnectJob = scope.launch(Dispatchers.IO) { delay(1500); connect(saved, "", attempt) } }
+        recorder.stop(); heartbeat?.cancel()
+        mutable.update { it.copy(connected = false, mic = "idle", micMode = "", level = 0f, status = "连接已断开", error = reason, pairing = "") }
+        synchronized(lock) {
+            // 只要还有保存的配对就继续自动重连，不要求已经拿到 token。
+            if (reconnect && peer != null) { retryAt = 0; scheduleReconnect() }
+        }
     }
     fun disconnect(reason: String = "未连接") {
         stopMic(true); synchronized(lock) { generation++; connected = false; recordingRequested = false; recording = ""; updateWifiLock(); socket?.cancel(); socket = null; udp?.close(); udp = null }
         heartbeat?.cancel(); mutable.update { it.copy(connected = false, mic = "idle", micMode = "", level = 0f, pairing = "", status = reason) }
     }
-    fun forget() { synchronized(lock) { desiredConnection++ }; reconnect = false; reconnectJob?.cancel(); disconnect(); peer = null; scope.launch { store.clear() } }
+    fun forget() { synchronized(lock) { desiredConnection++; reconnect = false; retryAt = 0L; retryCount = 0; reconnectJob?.cancel(); peer = null }; disconnect(); scope.launch { store.clear() } }
     private fun sendOn(ws: WebSocket, m: JsonObject) = ws.send(m.toString())
     private fun send(m: JsonObject): Boolean = socket?.let { sendOn(it, m) } ?: false
     override fun move(dx: Double, dy: Double): Unit = synchronized(lock) { if (!connected) return@synchronized; val gain = mutable.value.config.sensitivity; x += (dx * gain * 1024).toLong(); y += (dy * gain * 1024).toLong(); movement.trySend(generation to Movement(epoch, x, y, sx, sy)); Unit }
@@ -236,6 +307,21 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
         if (current.connected && current.config.shortcuts.getOrNull(slot)?.enabled == true)
             send(message("shortcut", "slot" to slot.j(), "revision" to current.config.revision.j()))
     }
+
+    /** 按住开始时调用：PC 保持组合键按下。 */
+    fun shortcutHoldStart(slot: Int, hold: String) {
+        val current = state.value
+        if (current.connected && current.config.shortcuts.getOrNull(slot)?.enabled == true)
+            send(message("shortcut_hold_start", "slot" to slot.j(), "revision" to current.config.revision.j(), "hold" to hold.j()))
+    }
+
+    /** 按住结束（或取消）时调用：PC 释放对应组合键。 */
+    fun shortcutHoldStop(hold: String) {
+        send(message("shortcut_hold_stop", "hold" to hold.j()))
+    }
+
+    /** 用于按住快捷键的唯一编号。 */
+    fun newHoldToken(): String = "%016x".format(SecureRandom().nextLong())
     fun startMic(mode: String = "hold"): Boolean = synchronized(lock) {
         if (!connected || !foreground || recordingRequested || recording.isNotEmpty() || mutable.value.mic != "idle" || mode !in listOf("hold", "toggle")) return@synchronized false
         var id: ULong
@@ -264,5 +350,5 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
                 send(message(if (abort) "mic_abort" else "mic_stop", "recording" to id.j()))
         }
     }
-    fun close() { reconnect = false; reconnectJob?.cancel(); disconnect(); movement.close(); audio.close(); http.dispatcher.executorService.shutdown() }
+    fun close() { reconnect = false; retryAt = 0L; reconnectJob?.cancel(); networkCallback?.let { runCatching { app.getSystemService(android.net.ConnectivityManager::class.java)?.unregisterNetworkCallback(it) } }; disconnect(); movement.close(); audio.close(); http.dispatcher.executorService.shutdown() }
 }
