@@ -1,0 +1,12 @@
+{
+  "name": "FakerInput",
+  "version": "0.1.1",
+  "architecture": "x64",
+  "api_version": 1,
+  "filename": "FakerInput_Setup_0.1.1_x64.msi",
+  "bytes": 1089536,
+  "sha256": "4c0aefb7340051a91d606776243298b5cd1143ef5508bbae6800c474f9ed0840",
+  "source": "https://github.com/Ryochan7/FakerInput/releases/tag/v0.1.1",
+  "license": "MIT",
+  "publisher": "Ryodigi Solutions LLC"
+}
