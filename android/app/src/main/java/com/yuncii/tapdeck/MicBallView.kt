@@ -224,10 +224,12 @@ class MicBallView(
         val buttonWidth = padH * 2 + iconSize + gap + labelWidth
         val total = buttonWidth + gap * 2 + hintWidth
         val left = ((width - total) / 2f).coerceAtLeast(4 * density)
-        val centerY = titleBaseline() - textSize * 0.35f
-        val top = centerY - (textSize + padV * 2) / 2f
+        // 顶部留白取区域顶部留白的一半：按钮行紧贴顶部，不再和区域上沿拉开一大截。
+        val top = topInset() / 2f
+        val pillHeight = textSize + padV * 2
+        val centerY = top + pillHeight / 2f
 
-        modeButton.set(left, top, left + buttonWidth, top + textSize + padV * 2)
+        modeButton.set(left, top, left + buttonWidth, top + pillHeight)
         paint.style = Paint.Style.FILL
         paint.color = if (modePressed) Color.rgb(255, 246, 214) else Color.rgb(255, 252, 240)
         c.drawRoundRect(modeButton, modeButton.height() / 2f, modeButton.height() / 2f, paint)
