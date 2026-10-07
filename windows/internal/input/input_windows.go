@@ -95,6 +95,12 @@ func keyInput(k uint16, up bool) nativeInput {
 	// Volume and media keys are vkOnly because the shell's media-key handling
 	// ignores scan-code-only injection (measured on this machine).
 	def, known := keyByVK[k]
+	if known && def.text != "" {
+		// 键盘上没有这个按键：按 Unicode 字符发送（KEYEVENTF_UNICODE）。
+		code := uint16([]rune(def.text)[0])
+		flags |= 4
+		return nativeInput{Kind: 1, DY: int32(code)<<16 | int32(flags)}
+	}
 	if known && def.scan != 0 && !def.vkOnly {
 		flags |= 8 // KEYEVENTF_SCANCODE
 		if def.ext {

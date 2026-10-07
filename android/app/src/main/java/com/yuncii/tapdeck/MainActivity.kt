@@ -116,8 +116,8 @@ class MainActivity : ComponentActivity() {
                 addView(view, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (resources.displayMetrics.heightPixels * fraction).toInt()))
                 return view
             }
-            // 状态区固定为屏幕高度的 10%（固定高度避免内部文字把区域撑大），
-            // 其余三个区域按 40% / 25% / 25% 的比例分配剩余高度。
+            // 状态区固定为屏幕高度的 10%；其余区域按权重吃满剩余高度，
+            // 键盘关闭时下半区由触控板(0.40) + 快捷键(0.25) + 语音(0.25) 填满。
             fixedRegion(compose {
                 val state by vm.client.state.collectAsStateWithLifecycle()
                 ConnectionHeader(
@@ -162,18 +162,24 @@ class MainActivity : ComponentActivity() {
             }
             val keyboardRegion = compose {
                 val state by vm.client.state.collectAsStateWithLifecycle()
-                if (keyboardMode) KeyboardView(state.connected, keyHold)
+                if (keyboardMode) KeyboardView(
+                    connected = state.connected,
+                    voiceActive = state.mic == "preparing" || state.mic == "transmitting",
+                    hold = keyHold,
+                    beginVoice = ::beginMic,
+                    stopVoice = { vm.client.stopMic() },
+                )
             }
             val shortcutsView = region(shortcutsRegion, Regions.SHORTCUTS)
             val voiceView = region(voiceComposite, Regions.MICROPHONE)
             val keyboardView = region(keyboardRegion, Regions.SHORTCUTS + Regions.MICROPHONE)
-            // 与两个隐藏区域等权重的占位：键盘隐藏时它填满下半部分，键盘显示时一起隐藏。
-            val spacerView = region(android.view.View(this@MainActivity), Regions.SHORTCUTS + Regions.MICROPHONE)
+            // 下半部分只有一组子视图是可见的：键盘区权重等于两个隐藏区域之和，
+            // LinearLayout 按可见子视图的权重归一化，所以两种模式下各区域都吃满高度。
+            // （此前的占位视图也带权重，导致键盘关闭时底部空出约三分之一。）
             modeViews = {
                 val hidden = if (keyboardMode) android.view.View.GONE else android.view.View.VISIBLE
                 shortcutsView.visibility = hidden
                 voiceView.visibility = hidden
-                spacerView.visibility = hidden
                 keyboardView.visibility = if (keyboardMode) android.view.View.VISIBLE else android.view.View.GONE
             }
             modeViews?.invoke()
@@ -236,10 +242,13 @@ class MainActivity : ComponentActivity() {
     private fun scan() { scanner.launch(ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE).setPrompt("扫描 TapDeck 电脑端二维码").setBeepEnabled(false).setOrientationLocked(true)) }
     private fun beginMic(mode: String): Boolean {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            android.util.Log.i("TapDeck", "beginMic $mode：未授予麦克风权限")
             microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
             return false
         }
-        return vm.client.startMic(mode)
+        val started = vm.client.startMic(mode)
+        if (!started) android.util.Log.i("TapDeck", "beginMic $mode 未开始：${vm.client.state.value.mic}/${vm.client.state.value.error}")
+        return started
     }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); intent.data?.let { enter(it.toString()) } }
     override fun onResume() { super.onResume(); fullscreen(); modeViews?.invoke() }
@@ -257,18 +266,18 @@ class MainActivity : ComponentActivity() {
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val scale = LocalDensity.current.fontScale
-        // 状态区固定 10%，按实际高度自适应字号，保证标题、状态与「连接」按钮都能容纳。
-        // 状态栏由窗口 inset 让位，因此这里只保留左右间距与一点点上边距。
-        val titleSize = min(19f, maxHeight.value * 0.34f / scale).sp
-        val statusSize = min(11f, maxHeight.value * 0.17f / scale).sp
+        // 状态区固定 10%：内容压成单行，避免两行文字把区域撑高、挤掉下面的区域。
+        val titleSize = min(18f, maxHeight.value * 0.30f / scale).sp
         Row(
             Modifier.fillMaxSize().padding(start = 12.dp, end = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(Modifier.weight(1f)) {
-                Text(state.peerName, fontSize = titleSize, lineHeight = titleSize * 1.2f, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(if (state.error.isNotEmpty()) state.error else "${state.status} · RTT ${state.rttMs} ms", fontSize = statusSize, lineHeight = statusSize * 1.2f, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
+            Text(
+                text = if (state.error.isNotEmpty()) "${state.peerName} · ${state.error}"
+                else "${state.peerName} · ${state.status} · RTT ${state.rttMs} ms",
+                modifier = Modifier.weight(1f),
+                fontSize = titleSize, lineHeight = titleSize * 1.2f, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
             // 全键盘开关与语音输入方式开关互斥显示在同一位置，两者文字都与「连接」同号。
             if (keyboardMode) ModeSwitch("全键盘", true, titleSize) { onKeyboardToggle(false) }
             else {

@@ -37,6 +37,35 @@ func fixture() (*Engine, *fakeSoft, *[]map[uint16]int) {
 	e.writeHID = func(ks map[uint16]int) error { reports = append(reports, copyKeys(ks)); return nil }
 	return e, s, &reports
 }
+
+// 键盘上没有的字符（…）只能走 SendInput：虚拟键盘不支持，HID 模式下应当报错。
+func TestUnicodeOnlyKeyFallsBackToSendInput(t *testing.T) {
+	e, s, reports := fixture()
+	if err := e.Hold("Ellipsis", true); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.down) != 1 || s.down[0] != 0xE000 {
+		t.Fatal("unicode key not routed to SendInput", s)
+	}
+	if len(*reports) != 0 {
+		t.Fatal("unicode key must not be written to the HID device", *reports)
+	}
+	if err := e.Hold("Ellipsis", false); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.up) != 1 || s.up[0] != 0xE000 {
+		t.Fatal("unicode key not released", s)
+	}
+	hidEngine, _, _ := fixture()
+	hidEngine.mode = "hid"
+	if err := Validate("LeftShift+Ellipsis", "hid"); err == nil {
+		t.Fatal("hid mode should reject the unicode-only key")
+	}
+	if err := Validate("LeftShift+Ellipsis", "auto"); err != nil {
+		t.Fatal("auto mode should accept the unicode-only key", err)
+	}
+}
+
 func TestSharedModifierAcrossHIDAndUnsupportedFallback(t *testing.T) {
 	e, s, reports := fixture()
 	if err := e.Hold("LeftCtrl+M", true); err != nil {

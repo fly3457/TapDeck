@@ -35,3 +35,17 @@ func TestDescriptorLimits(t *testing.T) {
 		t.Fatal("reference count report", r, e)
 	}
 }
+
+// 全键盘的标点键也要走虚拟键盘：豆包忽略 SendInput，只认 HID。
+func TestPunctuationKeysUseHID(t *testing.T) {
+	for vk, want := range map[uint16]byte{0xBA: 0x33, 0xDE: 0x34, 0xC0: 0x35, 0xBF: 0x38, 0xDB: 0x2F, 0xDD: 0x30, 0xDC: 0x31, 0xBD: 0x2D, 0xBB: 0x2E} {
+		usage, _, ok := Usage(vk)
+		if !ok || usage != want {
+			t.Fatalf("VK 0x%02X: usage %#x (%v), want %#x", vk, usage, ok, want)
+		}
+	}
+	// 只有 … 这类键盘上没有的字符才允许落到 SendInput。
+	if _, _, ok := Usage(0xE000); ok {
+		t.Fatal("unicode-only key must not claim HID support")
+	}
+}

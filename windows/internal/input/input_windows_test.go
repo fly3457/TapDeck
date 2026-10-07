@@ -59,3 +59,21 @@ func TestSixPhysicalModifierEncodings(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// 键盘上没有的字符（…）按 Unicode 字符发送：wVk=0、wScan=码点、KEYEVENTF_UNICODE。
+func TestUnicodeOnlyKey(t *testing.T) {
+	keys, err := ParseChord("Ellipsis")
+	if err != nil || len(keys) != 1 || keys[0] != unicodeVK {
+		t.Fatal(keys, err)
+	}
+	down, up := keyInput(keys[0], false), keyInput(keys[0], true)
+	if down.Kind != 1 || down.DX != 0 || down.DY&0xFFFF != 4 || up.DY&0xFFFF != 6 {
+		t.Fatal("incorrect unicode input", down, up)
+	}
+	if rune(uint16(down.DY>>16)) != '…' {
+		t.Fatal("incorrect code point", down)
+	}
+	if name, ok := KeyName(unicodeVK); !ok || name != "Ellipsis" {
+		t.Fatal(name, ok)
+	}
+}

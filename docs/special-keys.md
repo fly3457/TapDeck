@@ -36,6 +36,16 @@ TapDeck 里按键有两条链路：设置页“录入”对话框写入的文本
 
 表内包含：`Backspace`、`Esc`、`Tab`、`Space`、`Enter`、`Insert`、`Delete`、`Home`、`End`、`PageUp`、`PageDown`、四个方向键、`PrintScreen`、`ScrollLock`、`Pause`、`F1`–`F24`、小键盘 0–9 与运算符、标点键、六个左右修饰键、左右 Win，以及音量 / 媒体键。
 
+### 键盘上没有的字符：`Ellipsis`（同日追加）
+
+全键盘 m 键的长按键位是 `…`，Windows 键盘上没有这个按键，虚拟键盘（HID）无法表示。表中新增 `text` 字段与 `Ellipsis`（占位虚拟键码 `0xE000`，落在私有使用区，不会与真实按键冲突）：
+
+- `keyInput` 对该键发送 `KEYEVENTF_UNICODE`（`wVk=0`、`wScan=码点`），按下与抬起各一次。
+- `internal/keyboard` 的路由判定里它不属于 HID 支持的按键，因此「自动」模式会把整条组合键交给 SendInput；强制 HID 模式会明确报「虚拟键盘不支持」。
+- 同时补齐了标点键的 HID usage（`Semicolon`/`Quote`/`Backquote`/`Slash`/`[`/`]`/`\`），否则含这些键的组合键会整体退到 SendInput——而豆包忽略 SendInput。
+
+实测：`TestUnicodeOnlyKey`（Unicode 编码与反查）、`TestUnicodeOnlyKeyFallsBackToSendInput`（路由）、`TestPunctuationKeysUseHID`（标点键与 `0xE000` 的 HID 判定）。
+
 单元测试：`internal/input/keys_windows_test.go`（全表往返、历史别名、非法键拒绝）与 `cmd/tapdeck/walk_key_test.go`（录入门槛：backspace / esc / 音量键等必须记录成可解析名称）。
 
 ## 3. 音量键：不能注入，改用 Core Audio
@@ -78,3 +88,9 @@ go vet ./...
 ```
 
 音量与静音验证需要本机存在播放设备；没有设备时 `NewVolumeControl` 返回“没有可用的播放设备”，音量键会明确报错而不是静默失效。
+
+观察「手机按键到底有没有到 PC」可以用 `cmd/keywatch`（轮询 `GetAsyncKeyState`，只报真实按下 / 抬起，与焦点窗口、输入法无关）：
+
+```powershell
+go run ./cmd/keywatch -seconds 10   # 这 10 秒内所有下按的虚拟键与时间戳
+```

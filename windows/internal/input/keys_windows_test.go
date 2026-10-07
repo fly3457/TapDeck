@@ -43,6 +43,7 @@ func TestSpecialKeysParse(t *testing.T) {
 		{"F13", 0x7C},
 		{"F24", 0x87},
 		{"Ctrl+Backspace", 0xA2},
+		{"Ellipsis", unicodeVK},
 	}
 	for _, c := range cases {
 		got, err := ParseChord(c.chord)

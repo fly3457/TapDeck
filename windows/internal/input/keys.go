@@ -23,6 +23,9 @@ type key struct {
 	// vkOnly 表示该键只按虚拟键码发送。音量与媒体键由 Windows 的媒体键处理
 	// 逻辑响应，只发扫描码时系统不会执行音量 / 播放动作（已实测）。
 	vkOnly bool
+	// text 表示键盘上没有对应按键、只能作为 Unicode 字符发送的键（例如 …）。
+	// vk 使用私有区占位码，注入时走 KEYEVENTF_UNICODE，虚拟键盘（HID）无法发送。
+	text string
 }
 
 var keys = []key{
@@ -92,7 +95,14 @@ var keys = []key{
 	{name: "Backslash", vk: 0xDC, scan: 0x2B},
 	{name: "RightBracket", vk: 0xDD, scan: 0x1B},
 	{name: "Quote", vk: 0xDE, scan: 0x28},
+
+	// 键盘上没有的字符：只能按 Unicode 字符发送（手机全键盘 m 键的长按键位）。
+	{name: "Ellipsis", vk: unicodeVK, text: "…"},
 }
+
+// unicodeVK 是只能作为 Unicode 字符发送的键的占位虚拟键码，落在 Windows 的私有
+// 使用区，不会与真实按键冲突。
+const unicodeVK uint16 = 0xE000
 
 // 名称与别名都按去除空格、大写后的形式匹配。
 var keyAliases = map[string]string{

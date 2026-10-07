@@ -335,7 +335,10 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
         return send(message(type, "text" to chord.j(), "revision" to current.config.revision.j()))
     }
     fun startMic(mode: String = "hold"): Boolean = synchronized(lock) {
-        if (!connected || !foreground || recordingRequested || recording.isNotEmpty() || mutable.value.mic != "idle" || mode !in listOf("hold", "toggle")) return@synchronized false
+        if (!connected || !foreground || recordingRequested || recording.isNotEmpty() || mutable.value.mic != "idle" || mode !in listOf("hold", "toggle")) {
+            Log.i("TapDeck", "startMic refused: connected=$connected foreground=$foreground requested=$recordingRequested recording=${recording.isNotEmpty()} mic=${mutable.value.mic} mode=$mode")
+            return@synchronized false
+        }
         var id: ULong
         do { id = ByteBuffer.wrap(ByteArray(8).also { SecureRandom().nextBytes(it) }).long.toULong() } while (id == 0uL)
         recording = id.toString(16).padStart(16, '0'); recordingRequested = true
