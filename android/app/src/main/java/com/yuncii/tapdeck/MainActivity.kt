@@ -282,6 +282,8 @@ class MainActivity : ComponentActivity() {
             if (keyboardMode) ModeSwitch("全键盘", true, titleSize) { onKeyboardToggle(false) }
             else {
                 CompactSwitch(voiceToggle, titleSize, onVoiceToggle)
+                // 两个开关之间留出与「连接」前一致的间隙，避免文字和开关挤在一起。
+                Spacer(Modifier.width(16.dp))
                 ModeSwitch("全键盘", false, titleSize) { onKeyboardToggle(true) }
             }
             Spacer(Modifier.width(16.dp))
