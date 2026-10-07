@@ -31,6 +31,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
@@ -61,13 +64,31 @@ class TapViewModel(app: Application) : AndroidViewModel(app) {
     val client = TapClient(app, viewModelScope)
     private val store = PairStore(app)
     val ballPosition = MutableStateFlow<Pair<Float, Float>?>(null)
+    /** 语音输入方式（长按 / 单击）与全键盘开关：记在本地，重启 App 后沿用。 */
+    val voiceMode = MutableStateFlow(MicBallView.MODE_HOLD)
+    val keyboardOn = MutableStateFlow(false)
     init {
         viewModelScope.launch { client.restore() }
         viewModelScope.launch { ballPosition.value = store.loadBallPosition() }
+        viewModelScope.launch {
+            val (mode, keyboard) = store.loadUiMode()
+            voiceMode.value = mode
+            keyboardOn.value = keyboard
+        }
     }
     fun saveBallPosition(x: Float, y: Float) {
         ballPosition.value = x to y
         viewModelScope.launch { store.saveBallPosition(x, y) }
+    }
+    fun setVoiceMode(mode: String) {
+        if (voiceMode.value == mode) return
+        voiceMode.value = mode
+        viewModelScope.launch { store.saveVoiceMode(mode) }
+    }
+    fun setKeyboardOn(on: Boolean) {
+        if (keyboardOn.value == on) return
+        keyboardOn.value = on
+        viewModelScope.launch { store.saveKeyboardMode(on) }
     }
     override fun onCleared() { client.close() }
 }
@@ -79,10 +100,8 @@ class MainActivity : ComponentActivity() {
     private var scannedLink: Boolean = false
     private var settings by mutableStateOf(false)
     private var address by mutableStateOf("http://192.168.1.11:41080/pair")
-    /** 语音模式开关：默认长按语音输入（圆形），打开后单击语音输入（方形）。 */
-    private var voiceToggle by mutableStateOf(false)
-    /** 全键盘：激活后下方快捷键区与语音区换成键盘区。 */
-    private var keyboardMode by mutableStateOf(false)
+    /** 语音模式默认长按语音输入；切换入口在语音区的按钮上，状态记在本地。 */
+    private val voiceToggle: Boolean get() = vm.voiceMode.value == MicBallView.MODE_TOGGLE
     /** 快捷键的轻点 / 按住手势。 */
     private val shortcutHold by lazy { ShortcutHold({ slot, token -> vm.client.shortcutHoldStart(slot, token) }, { token -> vm.client.shortcutHoldStop(token) }) }
     /** 全键盘的按键状态。 */
@@ -120,13 +139,12 @@ class MainActivity : ComponentActivity() {
             // 键盘关闭时下半区由触控板(0.40) + 快捷键(0.25) + 语音(0.25) 填满。
             fixedRegion(compose {
                 val state by vm.client.state.collectAsStateWithLifecycle()
+                val keyboardOn by vm.keyboardOn.collectAsStateWithLifecycle()
                 ConnectionHeader(
                     state,
-                    voiceToggle,
-                    keyboardMode,
-                    onVoiceToggle = { voiceToggle = it; microphone?.gestureMode = if (it) MicBallView.MODE_TOGGLE else MicBallView.MODE_HOLD },
+                    keyboardOn,
                     onKeyboardToggle = { on ->
-                        keyboardMode = on
+                        vm.setKeyboardOn(on)
                         // 立即切换下半区布局，不必等 onResume。
                         modeViews?.invoke()
                         // 退出全键盘时释放所有按键与修饰键；进入时结束可能正在进行的录音。
@@ -151,7 +169,7 @@ class MainActivity : ComponentActivity() {
                     },
                 )
             }
-            val voiceRegion = MicBallView(context, ::beginMic, vm.client::stopMic, vm::saveBallPosition).also { view ->
+            val voiceRegion = MicBallView(context, ::beginMic, vm.client::stopMic, vm::saveBallPosition, vm::setVoiceMode).also { view ->
                 microphone = view
                 view.gestureMode = if (voiceToggle) MicBallView.MODE_TOGGLE else MicBallView.MODE_HOLD
             }
@@ -162,7 +180,8 @@ class MainActivity : ComponentActivity() {
             }
             val keyboardRegion = compose {
                 val state by vm.client.state.collectAsStateWithLifecycle()
-                if (keyboardMode) KeyboardView(
+                val keyboardOn by vm.keyboardOn.collectAsStateWithLifecycle()
+                if (keyboardOn) KeyboardView(
                     connected = state.connected,
                     voiceActive = state.mic == "preparing" || state.mic == "transmitting",
                     hold = keyHold,
@@ -177,10 +196,11 @@ class MainActivity : ComponentActivity() {
             // LinearLayout 按可见子视图的权重归一化，所以两种模式下各区域都吃满高度。
             // （此前的占位视图也带权重，导致键盘关闭时底部空出约三分之一。）
             modeViews = {
-                val hidden = if (keyboardMode) android.view.View.GONE else android.view.View.VISIBLE
+                val on = vm.keyboardOn.value
+                val hidden = if (on) android.view.View.GONE else android.view.View.VISIBLE
                 shortcutsView.visibility = hidden
                 voiceView.visibility = hidden
-                keyboardView.visibility = if (keyboardMode) android.view.View.VISIBLE else android.view.View.GONE
+                keyboardView.visibility = if (on) android.view.View.VISIBLE else android.view.View.GONE
             }
             modeViews?.invoke()
         }
@@ -212,6 +232,13 @@ class MainActivity : ComponentActivity() {
         setContentView(root)
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
+                // 本地记录的模式是异步读出来的：读到以后要重新应用到界面。
+                launch {
+                    vm.keyboardOn.collect { modeViews?.invoke() }
+                }
+                launch {
+                    vm.voiceMode.collect { mode -> microphone?.let { if (it.gestureMode != mode) it.gestureMode = mode } }
+                }
                 combine(vm.client.state, vm.ballPosition) { state, position -> state to position }.collect { (state, position) ->
                     touchpad?.connected = state.connected
                     microphone?.apply {
@@ -258,9 +285,7 @@ class MainActivity : ComponentActivity() {
 
 @Composable private fun ConnectionHeader(
     state: ClientState,
-    voiceToggle: Boolean,
-    keyboardMode: Boolean,
-    onVoiceToggle: (Boolean) -> Unit,
+    keyboardOn: Boolean,
     onKeyboardToggle: (Boolean) -> Unit,
     onSettings: () -> Unit,
 ) {
@@ -268,6 +293,7 @@ class MainActivity : ComponentActivity() {
         val scale = LocalDensity.current.fontScale
         // 状态区固定 10%：内容压成单行，避免两行文字把区域撑高、挤掉下面的区域。
         val titleSize = min(18f, maxHeight.value * 0.30f / scale).sp
+        val iconBox = (30f.coerceAtMost(maxHeight.value * 0.66f)).dp
         Row(
             Modifier.fillMaxSize().padding(start = 12.dp, end = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -278,71 +304,22 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier.weight(1f),
                 fontSize = titleSize, lineHeight = titleSize * 1.2f, maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
-            // 全键盘开关与语音输入方式开关互斥显示在同一位置，两者文字都与「连接」同号。
-            if (keyboardMode) ModeSwitch("全键盘", true, titleSize) { onKeyboardToggle(false) }
-            else {
-                CompactSwitch(voiceToggle, titleSize, onVoiceToggle)
-                // 两个开关之间留出与「连接」前一致的间隙，避免文字和开关挤在一起。
-                Spacer(Modifier.width(16.dp))
-                ModeSwitch("全键盘", false, titleSize) { onKeyboardToggle(true) }
+            // 全键盘开关：Lucide keyboard 图标按钮，未激活 #AAA、激活 #000。
+            IconButton(
+                onClick = { onKeyboardToggle(!keyboardOn) },
+                modifier = Modifier.size(iconBox).semantics {
+                    contentDescription = if (keyboardOn) "全键盘已激活，点击返回快捷键与语音输入" else "切换到全键盘"
+                },
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_lucide_keyboard),
+                    contentDescription = null,
+                    tint = if (keyboardOn) Color(0xFF000000) else Color(0xFFAAAAAA),
+                    modifier = Modifier.size(iconBox * 0.8f),
+                )
             }
-            Spacer(Modifier.width(16.dp))
+            Spacer(Modifier.width(6.dp))
             TextButton(onClick = onSettings, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("连接", fontSize = titleSize, lineHeight = titleSize * 1.2f) }
-        }
-    }
-}
-
-/** 全键盘开关：文字 + 小开关，样式与语音输入方式开关一致。 */
-@Composable private fun ModeSwitch(label: String, checked: Boolean, textSize: TextUnit, onChange: (Boolean) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(label, fontSize = textSize, lineHeight = textSize * 1.2f, color = Color(0xFF3F4F60), maxLines = 1)
-        Spacer(Modifier.width(6.dp))
-        Box(
-            Modifier
-                .size(width = 38.dp, height = 22.dp)
-                .clip(RoundedCornerShape(11.dp))
-                .background(if (checked) Color(0xFF175CD3) else Color(0xFFCBD5E1))
-                .clickable { onChange(!checked) }
-                .semantics { contentDescription = if (checked) "全键盘已激活，点击返回快捷键与语音输入" else "切换到全键盘" },
-        ) {
-            Box(
-                Modifier
-                    .align(if (checked) Alignment.CenterEnd else Alignment.CenterStart)
-                    .padding(horizontal = 3.dp)
-                    .size(16.dp)
-                    .clip(CircleShape)
-                    .background(Color.White),
-            )
-        }
-    }
-}
-
-/**
- * 语音输入方式的开关，放在状态区「连接」旁边：关＝长按语音输入（圆形控件），
- * 开＝单击语音输入（方形控件）。自绘以保证在 10% 高度里也只占很小一块。
- */
-@Composable private fun CompactSwitch(checked: Boolean, textSize: TextUnit, onChange: (Boolean) -> Unit) {
-    val track = if (checked) Color(0xFF175CD3) else Color(0xFFCBD5E1)
-    val label = if (checked) "单击语音输入" else "长按语音输入"
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(label, fontSize = textSize, lineHeight = textSize * 1.2f, color = Color(0xFF3F4F60), maxLines = 1)
-        Spacer(Modifier.width(6.dp))
-        Box(
-            Modifier
-                .size(width = 38.dp, height = 22.dp)
-                .clip(RoundedCornerShape(11.dp))
-                .background(track)
-                .clickable { onChange(!checked) }
-                .semantics { contentDescription = if (checked) "语音输入方式：单击语音输入，点击切换为长按语音输入" else "语音输入方式：长按语音输入，点击切换为单击语音输入" },
-        ) {
-            Box(
-                Modifier
-                    .align(if (checked) Alignment.CenterEnd else Alignment.CenterStart)
-                    .padding(horizontal = 3.dp)
-                    .size(16.dp)
-                    .clip(CircleShape)
-                    .background(Color.White),
-            )
         }
     }
 }

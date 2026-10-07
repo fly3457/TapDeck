@@ -12,9 +12,9 @@ import kotlin.math.hypot
 import kotlin.math.min
 
 /**
- * 语音触发控件。两种模式互斥，由顶部的模式开关选择：
- * - [MODE_HOLD] 长按语音输入：控件是圆形，按住触发录音，松手结束。
- * - [MODE_TOGGLE] 单击语音输入：控件是方形，轻点开始，再轻点结束。
+ * 语音触发控件。两种模式互斥，入口是本区顶部的模式按钮（Lucide 图标 + 文字）：
+ * - [MODE_HOLD] 长按语音输入：图标 mic-audio-lines，圆形控件，按住说话、松手结束。
+ * - [MODE_TOGGLE] 单击语音输入：图标 mic-signal，方形控件，轻点开始、再点结束。
  * 两种模式下都可以拖动控件调整位置。
  */
 class MicBallView(
@@ -22,6 +22,7 @@ class MicBallView(
     private val begin: (String) -> Boolean,
     private val end: (Boolean) -> Unit,
     private val savePosition: (Float, Float) -> Unit = { _, _ -> },
+    private val saveMode: (String) -> Unit = {},
 ) : View(context) {
     companion object {
         const val HOLD_MS = 300L
@@ -43,6 +44,11 @@ class MicBallView(
     private var originX = 0f; private var originY = 0f
     private var downTime = 0L; private var lastTap = 0L
     private var tapX = 0f; private var tapY = 0f
+    /** 顶部模式按钮的命中区域（每帧按实际排版更新）。 */
+    private val modeButton = RectF()
+    private var modePressed = false
+    private val iconLines by lazy { context.getDrawable(R.drawable.ic_lucide_mic_audio_lines) }
+    private val iconSignal by lazy { context.getDrawable(R.drawable.ic_lucide_mic_signal) }
     private var dragging = false
     private var holdStarted = false
     var status = "idle"
@@ -133,16 +139,7 @@ class MicBallView(
     override fun onDraw(c: Canvas) {
         c.drawColor(BACKGROUND)
         val (cx, cy) = ballCenter()
-        val title = when (status) {
-            "preparing" -> if (gestureMode == MODE_TOGGLE) "单击语音输入 · 准备中…" else "长按语音输入 · 准备中…"
-            "stopping" -> "正在结束…"
-            "transmitting" -> if (mode == MODE_TOGGLE) "单击录音中 · 轻点停止" else "长按录音中 · 松手停止"
-            else -> if (available) {
-                if (gestureMode == MODE_TOGGLE) "单击语音输入 · 轻点开始 / 再轻点结束" else "长按语音输入 · 按住说话，松手结束"
-            } else "连接电脑后使用语音输入"
-        }
-        paint.color = Color.rgb(63, 79, 96)
-        label(c, title, width / 2f, titleBaseline(), min(13 * density, 22 * density), width - 24 * density, bold = true)
+        drawModeButton(c)
         paint.style = Paint.Style.FILL
         paint.color = when {
             status == "preparing" -> Color.rgb(186, 116, 11)
@@ -195,9 +192,82 @@ class MicBallView(
 
     /** 两字说明用大字号，避免在方形控件里显得空。 */
     private fun captionSize(text: String): Float = if (text.length <= 2) radius() * 0.55f else radius() * 0.45f
+
+    /**
+     * 顶部一行：模式按钮（Lucide 图标 + 模式名）+ 当前状态的提示文字。
+     * 按钮是唯一的模式切换入口：按住说话 / 轻点开始。
+     */
+    private fun drawModeButton(c: Canvas) {
+        val toggle = gestureMode == MODE_TOGGLE
+        val text = if (toggle) "单击语音输入" else "长按语音输入"
+        val hint = when (status) {
+            "preparing" -> "准备中…"
+            "stopping" -> "正在结束…"
+            "transmitting" -> if (mode == MODE_TOGGLE) "录音中，再点结束" else "录音中，松手结束"
+            else -> when {
+                !available -> "连接电脑后使用语音输入"
+                toggle -> "轻点开始，再点结束"
+                else -> "按住说话，松手结束"
+            }
+        }
+        val textSize = min(13 * density, 22 * density)
+        val iconSize = textSize * 1.5f
+        val padH = 10 * density
+        val padV = 6 * density
+        val gap = 6 * density
+        hintPaint.textSize = textSize
+        hintPaint.textAlign = Paint.Align.LEFT
+        hintPaint.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        val labelWidth = hintPaint.measureText(text)
+        hintPaint.typeface = android.graphics.Typeface.DEFAULT
+        val hintWidth = hintPaint.measureText(hint)
+        val buttonWidth = padH * 2 + iconSize + gap + labelWidth
+        val total = buttonWidth + gap * 2 + hintWidth
+        val left = ((width - total) / 2f).coerceAtLeast(4 * density)
+        val centerY = titleBaseline() - textSize * 0.35f
+        val top = centerY - (textSize + padV * 2) / 2f
+
+        modeButton.set(left, top, left + buttonWidth, top + textSize + padV * 2)
+        paint.style = Paint.Style.FILL
+        paint.color = if (modePressed) Color.rgb(255, 246, 214) else Color.rgb(255, 252, 240)
+        c.drawRoundRect(modeButton, modeButton.height() / 2f, modeButton.height() / 2f, paint)
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 1.5f * density
+        paint.color = Color.rgb(214, 188, 122)
+        c.drawRoundRect(modeButton, modeButton.height() / 2f, modeButton.height() / 2f, paint)
+        paint.style = Paint.Style.FILL
+
+        val icon = if (toggle) iconSignal else iconLines
+        val iconLeft = (modeButton.left + padH).toInt()
+        val iconTop = (modeButton.centerY() - iconSize / 2f).toInt()
+        icon?.setBounds(iconLeft, iconTop, iconLeft + iconSize.toInt(), iconTop + iconSize.toInt())
+        icon?.setTint(Color.rgb(23, 92, 211))
+        icon?.draw(c)
+
+        hintPaint.color = Color.rgb(63, 79, 96)
+        hintPaint.textAlign = Paint.Align.LEFT
+        hintPaint.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        c.drawText(text, modeButton.left + padH + iconSize + gap, modeButton.centerY() - (hintPaint.descent() + hintPaint.ascent()) / 2f, hintPaint)
+        hintPaint.typeface = android.graphics.Typeface.DEFAULT
+        hintPaint.color = Color.rgb(122, 105, 72)
+        c.drawText(hint, modeButton.right + gap * 2, modeButton.centerY() - (hintPaint.descent() + hintPaint.ascent()) / 2f, hintPaint)
+    }
+
+    /** 点击模式按钮：在长按 / 单击之间切换，并通知外部记录到本地。 */
+    private fun toggleMode() {
+        gestureMode = if (gestureMode == MODE_TOGGLE) MODE_HOLD else MODE_TOGGLE
+        saveMode(gestureMode)
+        invalidate()
+    }
     override fun onTouchEvent(e: MotionEvent): Boolean {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                // 顶部模式按钮优先：命中就只切换模式，不进入录音 / 拖动手势。
+                if (modeButton.contains(e.x, e.y)) {
+                    pointer = -1; dragging = false; holdStarted = false
+                    modePressed = true; invalidate()
+                    return true
+                }
                 val (cx, cy) = ballCenter()
                 if (!hit(e.x, e.y, cx, cy)) return false
                 parent?.requestDisallowInterceptTouchEvent(true)
@@ -207,12 +277,19 @@ class MicBallView(
                 invalidate()
             }
             MotionEvent.ACTION_MOVE -> {
+                if (modePressed) return true
                 val i = e.findPointerIndex(pointer); if (i < 0) return pointer >= 0
                 val dx = e.getX(i) - downX; val dy = e.getY(i) - downY
                 if (!dragging && hypot(dx, dy) > slop) { dragging = true; lastTap = 0; removeCallbacks(hold) }
                 if (dragging) reposition(originX + dx, originY + dy)
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+                if (modePressed) {
+                    modePressed = false
+                    if (modeButton.contains(e.x, e.y)) toggleMode() else invalidate()
+                    performClick()
+                    return true
+                }
                 if (pointer < 0 || e.getPointerId(e.actionIndex) != pointer) return pointer >= 0
                 removeCallbacks(hold)
                 val tapped = !dragging && hypot(e.x - downX, e.y - downY) <= slop && e.eventTime - downTime < HOLD_MS
@@ -235,7 +312,7 @@ class MicBallView(
         removeCallbacks(hold)
         if (holdStarted) end(true)
         if (dragging) savePosition(nx, ny)
-        pointer = -1; holdStarted = false; dragging = false; lastTap = 0; invalidate()
+        pointer = -1; holdStarted = false; dragging = false; lastTap = 0; modePressed = false; invalidate()
     }
     override fun onDetachedFromWindow() { cancel(); super.onDetachedFromWindow() }
     override fun performClick(): Boolean { super.performClick(); return true }

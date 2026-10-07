@@ -22,6 +22,8 @@ class PairStore(private val context: Context) {
     private val idKey = stringPreferencesKey("device_id")
     private val ballX = floatPreferencesKey("voice_ball_x")
     private val ballY = floatPreferencesKey("voice_ball_y")
+    private val voiceModeKey = stringPreferencesKey("voice_mode")
+    private val keyboardKey = booleanPreferencesKey("keyboard_mode")
     private fun key(): SecretKey {
         val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         (ks.getKey("tapdeck-pair", null) as? SecretKey)?.let { return it }
@@ -40,5 +42,20 @@ class PairStore(private val context: Context) {
     }
     suspend fun saveBallPosition(x: Float, y: Float) {
         context.dataStore.edit { it[ballX] = x.coerceIn(0f, 1f); it[ballY] = y.coerceIn(0f, 1f) }
+    }
+
+    /** 语音输入方式（"hold" 长按 / "toggle" 单击）与全键盘开关，重启 App 后继续沿用。 */
+    suspend fun loadUiMode(): Pair<String, Boolean> {
+        val p = context.dataStore.data.first()
+        val mode = p[voiceModeKey]?.takeIf { it == MicBallView.MODE_TOGGLE || it == MicBallView.MODE_HOLD } ?: MicBallView.MODE_HOLD
+        return mode to (p[keyboardKey] ?: false)
+    }
+
+    suspend fun saveVoiceMode(mode: String) {
+        context.dataStore.edit { it[voiceModeKey] = if (mode == MicBallView.MODE_TOGGLE) MicBallView.MODE_TOGGLE else MicBallView.MODE_HOLD }
+    }
+
+    suspend fun saveKeyboardMode(on: Boolean) {
+        context.dataStore.edit { it[keyboardKey] = on }
     }
 }
