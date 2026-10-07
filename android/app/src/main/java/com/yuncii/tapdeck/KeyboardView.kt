@@ -31,7 +31,7 @@ import kotlinx.coroutines.launch
 
 /** 键的行为类型。 */
 private enum class Kind {
-    /** 字母 / 数字 / 符号 / `.` / 空格：短按主键位一次，长按副键位一次。 */
+    /** 字母 / 数字 / 符号 / `.`：短按主键位一次，长按副键位一次。 */
     Dual,
 
     /** Shift：短按单次大写，长按锁定大写。 */
@@ -39,6 +39,9 @@ private enum class Kind {
 
     /** Alt / 退格 / 回车 / Shift+Enter：短按一次，长按真按住、连续触发。 */
     Hold,
+
+    /** 空格：短按一次空格；长按＝长按语音输入（开始传音并保持 PC 长按热键，松手结束）。 */
+    VoiceDual,
 }
 
 /** 键盘上的一个键：主键位（短按）与副键位（长按）。 */
@@ -79,7 +82,8 @@ private val ALT_LABEL_COLOR = Color(0xFF4B5563)
  * 触发方式：
  * - 双键位键（字母 / 数字 / 符号 / `.`）：短按只发主键位一次，长按只发副键位一次。
  * - Shift：短按单次大写，长按锁定。
- * - 空格 / 退格 / Alt / 回车 / Shift+Enter：短按一次，长按真按住、由 Windows 连续触发。
+ * - 退格 / Alt / 回车 / Shift+Enter：短按一次，长按真按住、由 Windows 连续触发。
+ * - 空格：短按一次空格，长按＝长按语音输入（同时开始传音并保持 PC 长按热键，松手结束）。
  *
  * 宽度按屏幕宽度的百分比固定：常规键与 `.` 8.5%、间隙 1.5%、左右各留 0.75%。
  * 1 / 3 / 4 行的总宽正好铺满（3 行的 `[Shift]`、`[Backspace]` 各 13.5%，4 行的 `[alt]`、
@@ -88,7 +92,10 @@ private val ALT_LABEL_COLOR = Color(0xFF4B5563)
 @Composable
 fun KeyboardView(
     connected: Boolean,
+    voiceActive: Boolean,
     hold: KeyHold,
+    beginVoice: (String) -> Boolean,
+    stopVoice: () -> Unit,
 ) {
     val rows: List<List<Key>> = listOf(
         // 1 行：副键位数字 + 主键位字母
@@ -110,12 +117,13 @@ fun KeyboardView(
             dual("Ellipsis|M"),
             Key("Backspace", mainLabel = "⌫", kind = Kind.Hold, special = true, widthPercent = 13.5f),
         ),
-        // 4 行：Alt + 「.（长按 ,）」+ 空格 + Shift+Enter + 回车
-        // 空格 / 退格 / 回车 / Shift+Enter 长按都是真按住，由 Windows 连续触发。
+        // 4 行：Alt + 「.（长按 ,）」+ 空格（长按语音输入）+ Shift+Enter + 回车
+        // 空格 / 退格 / 回车 / Shift+Enter 长按都是真按住，由 Windows 连续触发；
+        // 空格的长按改为长按语音输入。
         listOf(
             Key("LeftAlt", mainLabel = "Alt", kind = Kind.Hold, special = true, widthPercent = 18.5f),
             dual("Comma|Period"),
-            Key("Space", mainLabel = "空格", kind = Kind.Hold, widthPercent = 33.5f),
+            Key("Space", mainLabel = "空格", altLabel = "🎤", kind = Kind.VoiceDual, widthPercent = 33.5f),
             Key("LeftShift+Enter", mainLabel = "⇧⏎", kind = Kind.Hold, special = true, widthPercent = 13.5f),
             Key("Enter", mainLabel = "⏎", kind = Kind.Hold, special = true, widthPercent = 18.5f),
         ),
@@ -141,7 +149,10 @@ fun KeyboardView(
                                 item = item,
                                 width = available * (item.widthPercent / 100f),
                                 connected = connected,
+                                voiceActive = voiceActive,
                                 hold = hold,
+                                beginVoice = beginVoice,
+                                stopVoice = stopVoice,
                             )
                         }
                     }
@@ -192,7 +203,10 @@ private fun RowScope.KeyboardKeyCell(
     item: Key,
     width: Dp,
     connected: Boolean,
+    voiceActive: Boolean,
     hold: KeyHold,
+    beginVoice: (String) -> Boolean,
+    stopVoice: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     // 手指按住时立刻点亮（短按的键值在抬手或长按判定后才发出）。
@@ -200,15 +214,16 @@ private fun RowScope.KeyboardKeyCell(
     val active = pressed || when (item.kind) {
         Kind.Shift -> hold.shiftOn
         Kind.Hold -> hold.isHeld(item.primary)
+        Kind.VoiceDual -> voiceActive
         Kind.Dual -> false
     }
     val description = when (item.kind) {
         Kind.Shift -> "Shift：短按单次大写，长按锁定大写"
+        Kind.VoiceDual -> "空格：短按一次空格，长按等于长按语音输入（按住说话，松手结束）"
         Kind.Hold -> when (item.primary) {
             "Backspace" -> "退格：短按一次，长按连续退格"
             "LeftAlt" -> "Alt：短按一次，长按连续按住"
             "LeftShift+Enter" -> "Shift+Enter：短按一次，长按连续换行"
-            "Space" -> "空格：短按一次，长按连续空格"
             else -> "回车：短按一次，长按连续回车"
         }
         Kind.Dual -> if (item.altLabel.isEmpty()) "${item.mainLabel} 键"
@@ -217,7 +232,7 @@ private fun RowScope.KeyboardKeyCell(
     Surface(
         modifier = Modifier.width(width).fillMaxHeight()
             .semantics { contentDescription = description }
-            .keyGesture(item, connected, hold, scope) { pressed = it },
+            .keyGesture(item, connected, hold, scope, beginVoice, stopVoice) { pressed = it },
         shape = MaterialTheme.shapes.small,
         color = when {
             active -> PRESSED_COLOR
@@ -274,6 +289,8 @@ private fun Modifier.keyGesture(
     connected: Boolean,
     hold: KeyHold,
     scope: CoroutineScope,
+    beginVoice: (String) -> Boolean,
+    stopVoice: () -> Unit,
     onPressed: (Boolean) -> Unit,
 ): Modifier = pointerInput(connected, item.primary, item.secondary, item.kind) {
     if (!connected) return@pointerInput
@@ -294,6 +311,17 @@ private fun Modifier.keyGesture(
                 val up = waitForUpOrCancellation()
                 timer.cancel()
                 if (!long && up != null) hold.dualShort(item.primary)
+            }
+            // 空格：短按一次空格；长按开始传音并保持 PC 长按热键，松手结束。
+            Kind.VoiceDual -> {
+                var talking = false
+                val timer = scope.launch {
+                    delay(KeyHold.LONG_PRESS_MS)
+                    talking = beginVoice(MicBallView.MODE_HOLD)
+                }
+                val up = waitForUpOrCancellation()
+                timer.cancel()
+                if (talking) stopVoice() else if (up != null) hold.dualShort(item.primary)
             }
             // 长按键：短按一次，长按真按住（由 Windows 连续触发）。
             Kind.Hold -> {
