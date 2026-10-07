@@ -6,7 +6,7 @@ Kotlin Android 触控板与 Go Windows 接收端原型。手机通过 Wi-Fi 控�
 
 ## 使用
 
-1. 在 Windows 11 x64 启动 `dist/TapDeck.exe`。窗口关闭后保留托盘程序；从托盘选择“退出”才停止接收。可在设置页「设置与状态」勾选“随 Windows 登录自动启动接收端”，登录后自动在后台监听（等价命令 `TapDeck.exe --autostart-on` / `--autostart-off`）。
+1. 在 Windows 11 x64 启动 `dist/TapDeck.exe`。窗口关闭后保留托盘程序；从托盘选择“退出”才停止接收。可在设置页「设置与状态」勾选“随 Windows 登录自动启动接收端”，登录后自动在后台监听（等价命令 `TapDeck.exe --autostart-on` / `--autostart-off`）。自启用 `--headless` 启动：**同样常驻托盘**，只是不弹出设置窗口，左键单击托盘图标即可打开设置。
 2. 在 Android 安装 `dist/TapDeck-debug.apk`，支持 Android 8/API 26 及以上。两端连接同一可互通的 Wi-Fi。
 3. Android“连接”页输入 PC 窗口中的网址，例如 `http://192.168.1.11:41080/pair`。核对两端显示的校验码，在 Android 确认，在 PC 允许连接。成功后保存凭据，下次启动自动重连。
 4. 也可以在 Android 浏览器访问这个网址，点击“打开 TapDeck 配对”。有摄像头的设备还可扫描二维码；二维码的自动授权凭证有效期 120 秒且只使用一次，过期后可刷新或改为两端核对校验码。

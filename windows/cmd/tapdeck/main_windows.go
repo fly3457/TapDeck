@@ -17,7 +17,6 @@ import (
 	"log"
 	"math"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -39,7 +38,7 @@ func main() {
 	extractDriver := flag.String("extract-keyboard-driver", "", "extract bundled signed MSI to this directory")
 	installDriver := flag.Bool("install-keyboard-driver", false, "install the bundled driver (Windows UAC)")
 	keyboardStatus := flag.Bool("keyboard-status", false, "print virtual keyboard device status")
-	headless := flag.Bool("headless", false, "run receiver without settings window")
+	headless := flag.Bool("headless", false, "启动接收端并与托盘常驻，但不弹出设置窗口（用于开机自启）")
 	data := flag.String("data-dir", config.Directory(), "settings directory")
 	list := flag.Bool("list-audio", false, "list WASAPI render endpoints")
 	probe := flag.Int("audio-probe", 0, "capture only CABLE Output and print level metrics for N seconds")
@@ -146,13 +145,14 @@ func main() {
 		log.Printf("接收启动失败: %v", e)
 	}
 	if *headless {
-		log.Printf("TapDeck %s", s.PairURL())
-		ch := make(chan os.Signal, 1)
-		signal.Notify(ch, os.Interrupt)
-		<-ch
+		// 与常规模式一样创建窗口与托盘图标，只是先隐藏设置窗口：
+		// 开机自启不弹窗，但用户可以随时从托盘打开设置或退出。
+		if e = window(s, *data, true); e != nil {
+			log.Fatal(e)
+		}
 		return
 	}
-	if e = window(s, *data); e != nil {
+	if e = window(s, *data, false); e != nil {
 		log.Fatal(e)
 	}
 }
@@ -175,7 +175,7 @@ func autostartEnabled() bool {
 	return err == nil && on
 }
 
-func window(s *server.Server, dir string) error {
+func window(s *server.Server, dir string, startHidden bool) error {
 	// Window creation, the message loop and STA callbacks must share an OS
 	// thread, even when COM enumeration yields before the first window.
 	runtime.LockOSThread()
@@ -385,8 +385,16 @@ func window(s *server.Server, dir string) error {
 	_ = exit.SetText("退出")
 	exit.Triggered().Attach(func() { s.Stop(); walk.App().Exit(0) })
 	_ = tray.ContextMenu().Actions().Add(exit)
-	_ = tray.SetVisible(true)
+	if e = tray.SetVisible(true); e != nil {
+		// 托盘创建失败时至少留下日志，避免“进程在跑但没有图标”无从排查。
+		log.Printf("托盘图标创建失败: %v", e)
+	}
 	mw.Closing().Attach(func(canceled *bool, reason walk.CloseReason) { *canceled = true; mw.Hide() })
+	if startHidden {
+		// --headless：开机自启不弹设置窗口，用户点击托盘图标再显示。
+		mw.Hide()
+		log.Printf("TapDeck %s（已常驻托盘，设置窗口未显示）", s.PairURL())
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
