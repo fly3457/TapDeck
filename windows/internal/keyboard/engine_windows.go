@@ -29,7 +29,9 @@ type Engine struct {
 	observe    func()
 	recoverHID func()
 	// volumeStatus describes the Core Audio endpoint used for the volume keys.
-	volumeStatus string
+	volumeStatus  string
+	readModifiers func() input.Modifiers
+	navigator     *windowGestures
 }
 type keyOwner struct {
 	Count   int
@@ -41,6 +43,7 @@ type softwareKeyboard interface {
 }
 type voice struct {
 	mode, start, stop string
+	owner             string
 	started           bool
 }
 type Status struct {
@@ -102,7 +105,7 @@ func (e *Engine) reopen() {
 func (e *Engine) Status() Status {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	s := Status{Configured: e.mode, Actual: "sendinput", Ready: true, Volume: e.volumeStatus}
+	s := Status{Configured: e.mode, Actual: "sendinput", Ready: true, Volume: e.volumeStatus, Busy: len(e.holds) > 0 || len(e.voices) > 0}
 	if e.writeHID != nil {
 		s.Driver = "FakerInput 0.1.1"
 		s.API = 1
@@ -130,6 +133,9 @@ func Validate(chord, mode string) error {
 	}
 	if mode == "hid" {
 		for _, k := range ks {
+			if input.IsVolumeKey(k) { // Core Audio works independently of the HID descriptor.
+				continue
+			}
 			if _, _, ok := hidkeyboard.Usage(k); !ok {
 				return fmt.Errorf("虚拟键盘不支持 %s；请使用自动或软件发送", chord)
 			}
@@ -160,10 +166,18 @@ func (e *Engine) route(ks []uint16) (string, error) {
 		return "sendinput", nil
 	}
 	supported := true
+	volume := false
 	for _, k := range ks {
+		if input.IsVolumeKey(k) {
+			volume = true
+			continue
+		}
 		if _, _, ok := hidkeyboard.Usage(k); !ok {
 			supported = false
 		}
+	}
+	if volume && (supported || e.mode == "auto") {
+		return "sendinput", nil // The software controller intercepts these as Core Audio actions.
 	}
 	if supported && e.writeHID != nil {
 		return "hid", nil
@@ -376,9 +390,14 @@ func (e *Engine) ReleaseKey(chord string) error { return e.Hold(chord, false) }
 func (e *Engine) Close() {
 	e.ClearKeys()
 	e.mu.Lock()
-	defer e.mu.Unlock()
+	navigator := e.navigator
+	e.navigator = nil
 	if e.hid != nil {
 		e.hid.Close()
 		e.hid = nil
+	}
+	e.mu.Unlock()
+	if navigator != nil {
+		navigator.Close()
 	}
 }

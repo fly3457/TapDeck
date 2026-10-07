@@ -121,6 +121,13 @@ func devices(flow uint32) ([]Device, error) {
 	return ds, nil
 }
 func Devices() ([]Device, error) {
+	return enumerateFlow(0)
+}
+
+// CaptureDevices lists active recording endpoints without opening a stream.
+func CaptureDevices() ([]Device, error) { return enumerateFlow(1) }
+
+func enumerateFlow(flow uint32) ([]Device, error) {
 	// Walk owns an STA UI thread. Enumerate on a separate MTA thread so the
 	// refresh button works after the settings window has initialized COM.
 	type result struct {
@@ -129,20 +136,20 @@ func Devices() ([]Device, error) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		items, err := enumerateDevices()
+		items, err := enumerateDevices(flow)
 		done <- result{items, err}
 	}()
 	v := <-done
 	return v.items, v.err
 }
-func enumerateDevices() ([]Device, error) {
+func enumerateDevices(flow uint32) ([]Device, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	if e := ole.CoInitializeEx(0, ole.COINIT_MULTITHREADED); e != nil {
 		return nil, e
 	}
 	defer ole.CoUninitialize()
-	return devices(0)
+	return devices(flow)
 }
 
 type waveFormat struct {
@@ -280,11 +287,23 @@ func (e *Engine) End(id uint64, delay time.Duration, done func()) {
 }
 func (e *Engine) Abort() {
 	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.abortLocked()
+}
+
+// AbortRecording cannot interrupt an unrelated or newly started recording.
+func (e *Engine) AbortRecording(id uint64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if id != 0 && e.recording == id {
+		e.abortLocked()
+	}
+}
+func (e *Engine) abortLocked() {
 	e.recording = 0
 	e.frames = map[uint64][]int16{}
 	e.onDrain = nil
 	e.level = 0
-	e.mu.Unlock()
 }
 func (e *Engine) render(samples []int16) {
 	e.mu.Lock()

@@ -9,7 +9,7 @@ import androidx.compose.runtime.mutableStateOf
  * - 双键位键（字母 / 数字 / 符号 / `.` / 空格）：**短按只发主键位一次、长按只发副键位一次**。
  *   判定由手势层计时完成（见 `KeyboardView.keyGesture`），因此长按时不会先冒出一个主键位，
  *   副键位也不会因为按住而在 PC 上连续触发。
- * - 长按键（Alt / 退格 / 回车 / Shift+Enter）：短按一次，长按真按住，由 Windows 连续触发。
+ * - 长按键（Ctrl / 退格 / 回车 / Shift+Enter）：短按一次，长按真按住，由 Windows 连续触发。
  * - Shift：短按单次大写（用一次就复位），长按锁定大写，再次短按解除锁定。
  *
  * 状态存在 Compose 快照状态里，键面直接读它点亮。
@@ -96,7 +96,7 @@ class KeyHold(
         useShift()
     }
 
-    // ---- 长按键（Alt / 退格 / 回车 / Shift+Enter）----
+    // ---- 长按键（Ctrl / 退格 / 回车 / Shift+Enter）----
 
     /** 短按：一次完整按键。 */
     fun tap(text: String) {

@@ -2,7 +2,10 @@
 
 package input
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 type fakeVolume struct {
 	steps  []bool
@@ -111,5 +114,29 @@ func TestVolumeKeyWithoutController(t *testing.T) {
 	c.inject = func(...nativeInput) error { return nil }
 	if err := c.Chord("VolumeUp"); err == nil {
 		t.Fatal("expected an error when no volume controller is attached")
+	}
+}
+
+func TestFailedVolumePressCanRetryWithoutLeavingKeysHeld(t *testing.T) {
+	c := New()
+	vol := &fakeVolume{failed: errors.New("default endpoint disconnected")}
+	c.SetVolume(vol)
+	var injected int
+	c.inject = func(items ...nativeInput) error { injected += len(items); return nil }
+	if err := c.Hold("Ctrl+VolumeUp", true); err == nil {
+		t.Fatal("missing endpoint failure")
+	}
+	if len(c.keys) != 0 || len(c.volumeDone) != 0 || injected != 0 {
+		t.Fatal("failed press left keys held or injected a modifier", c.keys, c.volumeDone, injected)
+	}
+	vol.failed = nil
+	if err := c.Hold("VolumeUp", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Hold("VolumeUp", false); err != nil {
+		t.Fatal(err)
+	}
+	if len(vol.steps) != 1 || !vol.steps[0] || c.keys[0xAF] != 0 || len(c.volumeDone) != 0 {
+		t.Fatal("recovered endpoint was not retried cleanly", vol.steps, c.keys, c.volumeDone)
 	}
 }

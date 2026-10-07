@@ -16,9 +16,7 @@ import (
 	"math"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -60,25 +58,32 @@ type Message struct {
 	Mode        string `json:"mode,omitempty"`
 	Tick        int64  `json:"tick,omitempty"`
 	Reason      string `json:"reason,omitempty"`
+	Steps       int    `json:"steps,omitempty"`
+	Action      string `json:"action,omitempty"`
 }
 type Pending struct {
-	ID      string
-	Name    string
-	Code    string
-	Expires time.Time
-	answer  chan bool
+	ID       string
+	DeviceID string
+	Name     string
+	Code     string
+	Expires  time.Time
+	answer   chan bool
+	cancel   context.CancelFunc
+	revoke   func()
 }
+
 // MaxSessions 是接收端同时接受的控制端数量上限。
 const MaxSessions = 5
 
 type Snapshot struct {
-	Running           bool
-	URL               string
+	Running bool
+	URL     string
 	// Device 是所有已连接控制端名字的拼接（旧字段，运行时统计与界面兼容用）。
-	Device            string
+	Device string
 	// Devices 是当前已连接控制端的名字（最多 MaxSessions 个）。
 	Devices           []string
 	Pending           []Pending
+	PairedDevices     []PairedDevice
 	AudioStatus       string
 	AudioReady        bool
 	Level             float64
@@ -108,12 +113,17 @@ type asyncKeyboard interface {
 	KeyboardStatus() keyboard.Status
 	ConfigureBackend(string) error
 }
+type asyncTouchpad interface {
+	ZoomAsync(int, func(error)) error
+	GestureAsync(string, func(error)) error
+}
 type AudioEngine interface {
 	Configure(string, float64)
 	Status() (string, bool, float64, uint64, uint64)
 	Begin(uint64) error
 	End(uint64, time.Duration, func())
 	Abort()
+	AbortRecording(uint64)
 	Run(context.Context)
 	Push(uint64, uint64, []byte)
 	BufferStats() (int, int)
@@ -145,9 +155,10 @@ type Server struct {
 	name         string
 	pin          string
 	cert         tls.Certificate
-	tokens       map[string]string
-	secret       string
-	secretUntil  time.Time
+	paired       map[string]pairedRecord
+	pairEpoch    map[string]uint64
+	buttonMu     sync.Mutex
+	buttonOwners map[string]map[uint64]bool
 	pending      map[string]*Pending
 	// sessions 是当前已连接的控制端，按会话 id 索引，最多 MaxSessions 个。
 	sessions     map[uint64]*session
@@ -168,9 +179,10 @@ type Server struct {
 	latencies    [4096]int64
 	latencyCount uint64
 	// apkData/apkName/apkSHA 是内嵌的 Android 安装包，供配对网页扫码下载。
-	apkName string
-	apkData []byte
-	apkSHA  string
+	apkName    string
+	apkData    []byte
+	apkSHA     string
+	apkVersion string
 }
 type session struct {
 	closeOnce                sync.Once
@@ -196,7 +208,10 @@ type session struct {
 	highestMouse             uint64
 	hasMouse                 bool
 	// holds 记录当前被手机按住的快捷键，会话结束或收到 hold_stop 时释放。
-	holds map[string]string
+	holds          map[string]string
+	keys           map[string]int
+	input          InputController
+	audioRecording uint64
 }
 
 func LocalIPs() []net.IP {
@@ -232,26 +247,23 @@ func New(dir string) (*Server, error) {
 		host = ips[1].String()
 	}
 	name, _ := os.Hostname()
-	s := &Server{cfg: c, dir: dir, host: host, name: name, pin: pin, cert: cert, tokens: map[string]string{}, pending: map[string]*Pending{}, sessions: map[uint64]*session{}, Input: input.New(), Audio: audio.New()}
-	if b, e := os.ReadFile(filepath.Join(dir, "paired.json")); e == nil {
-		if e = json.Unmarshal(b, &s.tokens); e != nil {
-			return nil, e
-		}
-	} else if !os.IsNotExist(e) {
-		return nil, e
+	s := &Server{cfg: c, dir: dir, host: host, name: name, pin: pin, cert: cert, pairEpoch: map[string]uint64{}, pending: map[string]*Pending{}, sessions: map[uint64]*session{}, Input: input.New(), Audio: audio.New()}
+	if s.paired, err = loadPaired(dir); err != nil {
+		return nil, err
 	}
 	s.Audio.Configure(c.AudioDevice, c.Gain)
-	s.RefreshQR()
 	return s, nil
 }
 func (s *Server) Config() config.Config {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := s.cfg
+	c.Sensitivity = config.PointerBaseSensitivity
 	c.Shortcuts = append([]config.Shortcut(nil), c.Shortcuts...)
 	return c
 }
 func (s *Server) Update(c config.Config) error {
+	c.Sensitivity = config.PointerBaseSensitivity
 	if err := c.Validate(); err != nil {
 		return err
 	}
@@ -316,22 +328,13 @@ func (s *Server) Update(c config.Config) error {
 	}
 	return nil
 }
-func (s *Server) RefreshQR() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.secret = base64.RawURLEncoding.EncodeToString(secure.Random(32))
-	s.secretUntil = time.Now().Add(120 * time.Second)
-}
 func (s *Server) PairURL() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return fmt.Sprintf("http://%s:%d/pair", s.host, s.cfg.HTTPPort)
 }
 func (s *Server) QRURI() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	q := url.Values{"v": {strconv.Itoa(ControlVersion)}, "host": {s.host}, "wss": {strconv.Itoa(s.cfg.WSSPort)}, "http": {strconv.Itoa(s.cfg.HTTPPort)}, "pin": {s.pin}, "secret": {s.secret}}
-	return "tapdeck://pair?" + q.Encode()
+	return s.PairURL()
 }
 func (s *Server) metadata() map[string]any {
 	s.mu.Lock()
@@ -440,6 +443,8 @@ func (s *Server) Snapshot() Snapshot {
 	for _, p := range s.pending {
 		v.Pending = append(v.Pending, *p)
 	}
+	sort.Slice(v.Pending, func(i, j int) bool { return v.Pending[i].Expires.Before(v.Pending[j].Expires) })
+	v.PairedDevices = s.pairedDevicesLocked()
 	s.mu.Unlock()
 	v.AudioStatus, v.AudioReady, v.Level, v.Received, v.Concealed = s.Audio.Status()
 	v.MousePackets = s.mousePackets.Load()
@@ -465,33 +470,6 @@ func (s *Server) Approve(id string, allow bool) {
 		default:
 		}
 	}
-}
-func (s *Server) Unpair() error {
-	s.lifecycleMu.Lock()
-	defer s.lifecycleMu.Unlock()
-	s.mu.Lock()
-	s.generation++
-	s.tokens = map[string]string{}
-	b, _ := json.Marshal(s.tokens)
-	e := config.AtomicWrite(filepath.Join(s.dir, "paired.json"), b)
-	sessions := make([]*session, 0, len(s.sessions))
-	for _, ss := range s.sessions {
-		sessions = append(sessions, ss)
-	}
-	s.sessions = map[uint64]*session{}
-	for _, p := range s.pending {
-		select {
-		case p.answer <- false:
-		default:
-		}
-	}
-	s.secret = ""
-	s.mu.Unlock()
-	for _, ss := range sessions {
-		ss.close("已解除配对")
-	}
-	s.RefreshQR()
-	return e
 }
 func jsonResponse(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -581,13 +559,14 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
-	hash := s.tokens[hello.DeviceID]
+	hash := s.paired[hello.DeviceID].Hash
+	authorizationEpoch := s.pairEpoch[hello.DeviceID]
 	trusted := hash != "" && subtle.ConstantTimeCompare([]byte(hash), []byte(secure.Hash(hello.Token))) == 1
-	qr := hello.Secret != "" && time.Now().Before(s.secretUntil) && subtle.ConstantTimeCompare([]byte(hello.Secret), []byte(s.secret)) == 1
-	if qr {
-		s.secret = ""
-	}
 	s.mu.Unlock()
+	if hello.Token != "" && !trusted {
+		_ = write(ctx, ws, map[string]any{"type": "error", "code": "pairing_revoked", "reason": "配对凭据已失效，请重新连接并由电脑允许"})
+		return
+	}
 	token := ""
 	if !trusted {
 		client, e := base64.RawURLEncoding.DecodeString(hello.ClientNonce)
@@ -596,49 +575,46 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 		}
 		serverNonce := secure.Random(32)
 		id := fmt.Sprintf("%016x", randomID())
-		p := &Pending{ID: id, Name: hello.Name, Code: Code(s.pin, client, serverNonce), Expires: time.Now().Add(120 * time.Second), answer: make(chan bool, 1)}
+		p := &Pending{ID: id, DeviceID: hello.DeviceID, Name: hello.Name, Code: Code(s.pin, client, serverNonce), Expires: time.Now().Add(120 * time.Second), answer: make(chan bool, 1)}
+		pairCtx, pairCancel := context.WithDeadline(ctx, p.Expires)
+		defer pairCancel()
+		p.cancel = pairCancel
+		p.revoke = func() {
+			noticeCtx, stopNotice := context.WithTimeout(ctx, time.Second)
+			defer stopNotice()
+			_ = write(noticeCtx, ws, map[string]any{"type": "error", "code": "pairing_revoked", "reason": "电脑已解除此设备配对，请重新连接并由电脑允许"})
+			pairCancel()
+		}
 		s.mu.Lock()
-		if len(s.pending) >= 4 {
+		if len(s.pending) >= 4 || s.generation != generation || s.pairEpoch[hello.DeviceID] != authorizationEpoch {
 			s.mu.Unlock()
 			return
 		}
 		s.pending[id] = p
 		s.mu.Unlock()
 		defer func() { s.mu.Lock(); delete(s.pending, id); s.mu.Unlock() }()
-		pairCtx, pairCancel := context.WithDeadline(ctx, p.Expires)
-		defer pairCancel()
-		if e = write(pairCtx, ws, map[string]any{"type": "pair_challenge", "request_id": id, "server_nonce": base64.RawURLEncoding.EncodeToString(serverNonce), "code": p.Code, "qr_verified": qr}); e != nil {
+		if e = write(pairCtx, ws, map[string]any{"type": "pair_challenge", "request_id": id, "server_nonce": base64.RawURLEncoding.EncodeToString(serverNonce), "code": p.Code, "qr_verified": false}); e != nil {
 			return
 		}
 		// 手机上只需要看到校验码，不再需要点“一致”：这里直接等 PC 端确认。
 		// （老版本 App 仍会发一条 pair_confirm，控制循环会把它当未知消息忽略。）
-		if !qr {
-			select {
-			case allow := <-p.answer:
-				if !allow {
-					return
-				}
-			case <-pairCtx.Done():
+		select {
+		case allow := <-p.answer:
+			if !allow {
 				return
 			}
-		}
-		token = base64.RawURLEncoding.EncodeToString(secure.Random(32))
-		s.mu.Lock()
-		if !s.running || s.generation != generation || ctx.Err() != nil {
-			s.mu.Unlock()
+		case <-pairCtx.Done():
 			return
 		}
-		s.tokens[hello.DeviceID] = secure.Hash(token)
-		b, _ := json.Marshal(s.tokens)
-		e = config.AtomicWrite(filepath.Join(s.dir, "paired.json"), b)
+		s.mu.Lock()
 		delete(s.pending, id)
 		s.mu.Unlock()
-		if e != nil {
-			log.Print(e)
-			return
-		}
+		token = base64.RawURLEncoding.EncodeToString(secure.Random(32))
 	}
-	ss := &session{s: s, ctx: ctx, cancel: cancel, ws: ws, id: randomID(), deviceID: hello.DeviceID, name: hello.Name, active: true, holds: map[string]string{}}
+	ss := &session{s: s, ctx: ctx, cancel: cancel, ws: ws, id: randomID(), deviceID: hello.DeviceID, name: hello.Name, active: true, holds: map[string]string{}, keys: map[string]int{}}
+	if agent, ok := s.Input.(*keyboard.Agent); ok {
+		ss.input = agent.ForOwner(fmt.Sprintf("%016x", ss.id))
+	}
 	mouseKey, audioKey := secure.Random(32), secure.Random(32)
 	var mp, ap [4]byte
 	copy(mp[:], secure.Random(4))
@@ -648,24 +624,52 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 	ss.lastSeen.Store(time.Now().UnixNano())
 	s.lifecycleMu.Lock()
 	s.mu.Lock()
-	if !s.running || s.generation != generation || ctx.Err() != nil {
+	if !s.running || ctx.Err() != nil {
 		s.mu.Unlock()
 		s.lifecycleMu.Unlock()
+		return
+	}
+	if s.generation != generation || s.pairEpoch[hello.DeviceID] != authorizationEpoch || (trusted && s.paired[hello.DeviceID].Hash != hash) {
+		s.mu.Unlock()
+		s.lifecycleMu.Unlock()
+		_ = write(ctx, ws, map[string]any{"type": "error", "code": "pairing_revoked", "reason": "配对授权已变化，请重新连接并由电脑允许"})
 		return
 	}
 	// 同一台设备重连时替换掉它的旧会话，避免占掉两个名额。
 	var replaced []*session
-	for id, old := range s.sessions {
+	for _, old := range s.sessions {
 		if old.deviceID == ss.deviceID {
 			replaced = append(replaced, old)
-			delete(s.sessions, id)
 		}
 	}
-	if len(s.sessions) >= MaxSessions {
+	if len(s.sessions)-len(replaced) >= MaxSessions {
 		s.mu.Unlock()
 		s.lifecycleMu.Unlock()
 		_ = write(ctx, ws, map[string]any{"type": "error", "code": "too_many_clients", "reason": fmt.Sprintf("接收端最多同时连接 %d 个控制端，请先断开其中一个", MaxSessions), "limit": MaxSessions})
 		return
+	}
+	next := clonePaired(s.paired)
+	record := next[hello.DeviceID]
+	if !trusted {
+		record.Hash, record.PairedAt = secure.Hash(token), time.Now().UTC()
+	}
+	if strings.TrimSpace(hello.Name) != "" {
+		record.Name = hello.Name
+	}
+	record.LastConnectedAt = time.Now().UTC()
+	next[hello.DeviceID] = record
+	if e = savePaired(s.dir, next); e != nil {
+		s.mu.Unlock()
+		s.lifecycleMu.Unlock()
+		_ = write(ctx, ws, map[string]any{"type": "error", "code": "pairing_save_failed", "reason": "配对信息保存失败：" + e.Error()})
+		return
+	}
+	s.paired = next
+	if !trusted {
+		s.pairEpoch[hello.DeviceID]++
+	}
+	for _, old := range replaced {
+		delete(s.sessions, old.id)
 	}
 	s.sessions[ss.id] = ss
 	cfg := s.cfg
@@ -685,7 +689,7 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 			ss.close("连接结束")
 		}
 	}()
-	if e = ss.send(map[string]any{"type": "ready", "session": fmt.Sprintf("%016x", ss.id), "token": token, "config": cfg, "udp_port": cfg.UDPPort, "mouse_key": base64.RawURLEncoding.EncodeToString(mouseKey), "audio_key": base64.RawURLEncoding.EncodeToString(audioKey), "mouse_prefix": base64.RawURLEncoding.EncodeToString(mp[:]), "audio_prefix": base64.RawURLEncoding.EncodeToString(ap[:])}); e != nil {
+	if e = ss.send(map[string]any{"type": "ready", "session": fmt.Sprintf("%016x", ss.id), "token": token, "config": cfg, "udp_port": cfg.UDPPort, "mouse_key": base64.RawURLEncoding.EncodeToString(mouseKey), "audio_key": base64.RawURLEncoding.EncodeToString(audioKey), "mouse_prefix": base64.RawURLEncoding.EncodeToString(mp[:]), "audio_prefix": base64.RawURLEncoding.EncodeToString(ap[:]), "features": ss.touchpadFeatures(), "double_click_ms": input.DoubleClickTime()}); e != nil {
 		return
 	}
 	go func() {
@@ -703,7 +707,7 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 				ss.mu.Lock()
 				if ss.active && ss.recording != 0 {
 					status, ready, _, _, _ := s.Audio.Status()
-					if a, ok := s.Input.(asyncKeyboard); ok && !a.KeyboardStatus().Ready {
+					if a, ok := ss.controller().(asyncKeyboard); ok && !a.KeyboardStatus().Ready {
 						ready = false
 						status = a.KeyboardStatus().Error
 					}
@@ -712,15 +716,15 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 						ss.recording = 0
 						ss.ending = false
 						if id != 0 {
-							s.Audio.Abort()
+							ss.abortAudio()
 						}
-						if a, ok := s.Input.(asyncKeyboard); ok {
+						if a, ok := ss.controller().(asyncKeyboard); ok {
 							_ = a.StopVoice(ss.voiceToken(id), func(error) {})
 						} else if voice.Mode == "hold" {
-							_ = s.Input.Hold(voice.Start, false)
+							_ = ss.controller().Hold(voice.Start, false)
 						}
-						if _, ok := s.Input.(asyncKeyboard); !ok && voice.Mode == "toggle" {
-							_ = s.Input.Chord(voice.Stop)
+						if _, ok := ss.controller().(asyncKeyboard); !ok && voice.Mode == "toggle" {
+							_ = ss.controller().Chord(voice.Stop)
 						}
 						_ = ss.send(map[string]any{"type": "mic_error", "recording": fmt.Sprintf("%016x", id), "reason": status})
 					}
@@ -738,7 +742,7 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 		if e = ss.handle(m); e != nil {
 			_ = ss.send(map[string]any{"type": "error", "reason": e.Error()})
 			// A failed barrier cannot leave the peers on different mouse epochs.
-			if m.Type == "mouse_button" {
+			if m.Type == "mouse_button" || m.Type == "zoom" || m.Type == "gesture" {
 				return
 			}
 		}
@@ -756,20 +760,17 @@ func (ss *session) close(reason string) {
 		ss.mu.Lock()
 		ss.active = false
 		recording, voice := ss.recording, ss.voice
+		holds, keys := ss.holds, ss.keys
 		ss.recording = 0
 		ss.ending = false
 		ss.holds = map[string]string{}
+		if recording != 0 {
+			ss.abortAudio()
+		}
 		ss.mu.Unlock()
 		ss.cancel()
 		ss.ws.CloseNow()
-		// 只有这台设备正在录音时才中断音频：其他控制端可能正在传音。
-		if recording != 0 {
-			ss.s.Audio.Abort()
-		}
-		if _, ok := ss.s.Input.(asyncKeyboard); !ok && recording != 0 && voice.Mode == "toggle" {
-			_ = ss.s.Input.Chord(voice.Stop)
-		}
-		ss.s.Input.ReleaseAll()
+		ss.releaseInputs(holds, keys, recording, voice)
 		log.Printf("session closed: %s", reason)
 	})
 }
@@ -791,7 +792,7 @@ func (ss *session) move(m protocol.Movement) error {
 			return fmt.Errorf("位移跨度异常")
 		}
 	}
-	if e := ss.s.Input.Move(int32(dx), int32(dy), int32(sx), int32(sy)); e != nil {
+	if e := ss.controller().Move(int32(dx), int32(dy), int32(sx), int32(sy)); e != nil {
 		return e
 	}
 	ss.last = m
@@ -807,23 +808,29 @@ func (ss *session) handle(m Message) error {
 	case "heartbeat":
 		return ss.send(map[string]any{"type": "heartbeat", "tick": m.Tick})
 	case "mouse_button":
-		if m.Epoch != ss.epoch || m.NextEpoch != m.Epoch+1 {
-			return fmt.Errorf("鼠标控制分段失配")
+		return ss.controlBarrier(m, func() error { return ss.mouseButton(m.Button, m.Down) })
+	case "zoom", "gesture":
+		if m.Type == "zoom" && (m.Steps == 0 || m.Steps < -4 || m.Steps > 4) {
+			return fmt.Errorf("无效缩放步进")
 		}
-		snap := protocol.Movement{Epoch: m.Epoch, X: m.X, Y: m.Y, ScrollX: m.ScrollX, ScrollY: m.ScrollY}
-		if e := ss.move(snap); e != nil {
-			return e
+		if m.Type == "gesture" && m.Action != "up" && m.Action != "down" {
+			return fmt.Errorf("无效三指手势")
 		}
-		if e := ss.s.Input.Button(m.Button, m.Down); e != nil {
-			return e
+		control, ok := ss.controller().(asyncTouchpad)
+		if !ok {
+			return fmt.Errorf("电脑端不支持触控板扩展手势，请升级")
 		}
-		ss.epoch = m.NextEpoch
-		ss.last.Epoch = ss.epoch
-		if ss.pending != nil {
-			p := ss.pending
-			ss.pending = nil
-			return ss.move(*p)
+		done := func(err error) {
+			if err != nil {
+				_ = ss.send(map[string]any{"type": "error", "code": "touchpad_error", "reason": err.Error()})
+			}
 		}
+		return ss.controlBarrier(m, func() error {
+			if m.Type == "zoom" {
+				return control.ZoomAsync(m.Steps, done)
+			}
+			return control.GestureAsync(m.Action, done)
+		})
 	case "shortcut":
 		c := ss.s.Config()
 		if m.Revision != c.Revision {
@@ -836,14 +843,14 @@ func (ss *session) handle(m Message) error {
 		if !c.Shortcuts[m.Slot].Enabled {
 			return fmt.Errorf("此快捷键已禁用")
 		}
-		if a, ok := ss.s.Input.(asyncKeyboard); ok {
+		if a, ok := ss.controller().(asyncKeyboard); ok {
 			return a.ChordAsync(c.Shortcuts[m.Slot].Chord, func(e error) {
 				if e != nil {
 					_ = ss.send(map[string]any{"type": "error", "reason": e.Error()})
 				}
 			})
 		}
-		return ss.s.Input.Chord(c.Shortcuts[m.Slot].Chord)
+		return ss.controller().Chord(c.Shortcuts[m.Slot].Chord)
 	case "shortcut_hold_start":
 		// 按住快捷键时发送：键保持按下，直到收到对应的 hold_stop 或会话结束。
 		c := ss.s.Config()
@@ -864,7 +871,7 @@ func (ss *session) handle(m Message) error {
 			return nil
 		}
 		chord := c.Shortcuts[m.Slot].Chord
-		if a, ok := ss.s.Input.(asyncKeyboard); ok {
+		if a, ok := ss.controller().(asyncKeyboard); ok {
 			if e := a.HoldAsync(chord, true, func(e error) {
 				if e != nil {
 					_ = ss.send(map[string]any{"type": "error", "reason": e.Error()})
@@ -872,7 +879,7 @@ func (ss *session) handle(m Message) error {
 			}); e != nil {
 				return e
 			}
-		} else if e := ss.s.Input.Hold(chord, true); e != nil {
+		} else if e := ss.controller().Hold(chord, true); e != nil {
 			return e
 		}
 		ss.holds[m.Hold] = chord
@@ -892,12 +899,26 @@ func (ss *session) handle(m Message) error {
 		if _, err := input.ParseChord(text); err != nil {
 			return err
 		}
-		if a, ok := ss.s.Input.(asyncKeyboard); ok {
-			return a.KeyAsync(m.Type, text, func(e error) {
+		if a, ok := ss.controller().(asyncKeyboard); ok {
+			if ss.keys == nil {
+				ss.keys = map[string]int{}
+			}
+			if m.Type == "key_up" && ss.keys[text] == 0 {
+				return nil
+			}
+			err := a.KeyAsync(m.Type, text, func(e error) {
 				if e != nil {
 					_ = ss.send(map[string]any{"type": "error", "reason": e.Error()})
 				}
 			})
+			if err == nil {
+				if m.Type == "key_down" {
+					ss.keys[text]++
+				} else {
+					ss.keys[text]--
+				}
+			}
+			return err
 		}
 		return fmt.Errorf("键盘不可用")
 	case "shortcut_hold_stop":
@@ -909,14 +930,14 @@ func (ss *session) handle(m Message) error {
 			return nil
 		}
 		delete(ss.holds, m.Hold)
-		if a, ok := ss.s.Input.(asyncKeyboard); ok {
+		if a, ok := ss.controller().(asyncKeyboard); ok {
 			return a.HoldAsync(chord, false, func(e error) {
 				if e != nil {
 					_ = ss.send(map[string]any{"type": "error", "reason": e.Error()})
 				}
 			})
 		}
-		return ss.s.Input.Hold(chord, false)
+		return ss.controller().Hold(chord, false)
 	case "mic_start":
 		id, e := strconv.ParseUint(m.Recording, 16, 64)
 		if e != nil || id == 0 {
@@ -929,13 +950,15 @@ func (ss *session) handle(m Message) error {
 		if e != nil {
 			return e
 		}
-		if e = ss.s.Audio.Begin(id); e != nil {
+		audioID := randomID()
+		if e = ss.s.Audio.Begin(audioID); e != nil {
 			return ss.send(map[string]any{"type": "mic_error", "reason": e.Error(), "recording": m.Recording})
 		}
 		ss.recording = id
+		ss.audioRecording = audioID
 		ss.ending = false
 		ss.voice = voice
-		if a, ok := ss.s.Input.(asyncKeyboard); ok {
+		if a, ok := ss.controller().(asyncKeyboard); ok {
 			ss.preparing = true
 			done := func(e error) {
 				ss.mu.Lock()
@@ -945,7 +968,7 @@ func (ss *session) handle(m Message) error {
 				}
 				ss.preparing = false
 				if e != nil {
-					ss.s.Audio.Abort()
+					ss.abortAudio()
 					ss.recording = 0
 					_ = ss.send(map[string]any{"type": "mic_error", "reason": e.Error(), "recording": m.Recording})
 					return
@@ -953,7 +976,7 @@ func (ss *session) handle(m Message) error {
 				_ = ss.send(map[string]any{"type": "mic_ready", "recording": m.Recording})
 			}
 			if e = a.StartVoice(ss.voiceToken(id), voice.Mode, voice.Start, voice.Stop, done); e != nil {
-				ss.s.Audio.Abort()
+				ss.abortAudio()
 				ss.recording = 0
 				ss.preparing = false
 				return ss.send(map[string]any{"type": "mic_error", "reason": e.Error(), "recording": m.Recording})
@@ -961,15 +984,15 @@ func (ss *session) handle(m Message) error {
 			return nil
 		}
 		if ss.voice.Mode == "hold" {
-			e = ss.s.Input.Hold(ss.voice.Start, true)
+			e = ss.controller().Hold(ss.voice.Start, true)
 		} else if ss.voice.Mode == "toggle" {
-			e = ss.s.Input.Chord(ss.voice.Start)
+			e = ss.controller().Chord(ss.voice.Start)
 		}
 		if e != nil {
-			ss.s.Audio.Abort()
+			ss.abortAudio()
 			ss.recording = 0
 			if ss.voice.Mode == "hold" {
-				_ = ss.s.Input.Hold(ss.voice.Start, false)
+				_ = ss.controller().Hold(ss.voice.Start, false)
 			}
 			return ss.send(map[string]any{"type": "mic_error", "reason": e.Error(), "recording": m.Recording})
 		}
@@ -983,7 +1006,7 @@ func (ss *session) handle(m Message) error {
 			return nil
 		}
 		v := ss.voice
-		if a, ok := ss.s.Input.(asyncKeyboard); ok {
+		if a, ok := ss.controller().(asyncKeyboard); ok {
 			finish := func() {
 				ss.mu.Lock()
 				if !ss.active || ss.recording != id {
@@ -998,10 +1021,10 @@ func (ss *session) handle(m Message) error {
 			}
 			ss.ending = true
 			if m.Type == "mic_abort" || ss.preparing {
-				ss.s.Audio.Abort()
+				ss.abortAudio()
 				go finish()
 			} else {
-				ss.s.Audio.End(id, time.Duration(v.StopDelayMS)*time.Millisecond, finish)
+				ss.s.Audio.End(ss.audioRecording, time.Duration(v.StopDelayMS)*time.Millisecond, finish)
 			}
 			return nil
 		}
@@ -1012,27 +1035,27 @@ func (ss *session) handle(m Message) error {
 				return
 			}
 			if v.Mode == "hold" {
-				_ = ss.s.Input.Hold(v.Start, false)
+				_ = ss.controller().Hold(v.Start, false)
 			} else if v.Mode == "toggle" {
-				_ = ss.s.Input.Chord(v.Stop)
+				_ = ss.controller().Chord(v.Stop)
 			}
 			ss.recording = 0
 			ss.ending = false
 			_ = ss.send(map[string]any{"type": "mic_stopped", "recording": m.Recording})
 		}
 		if m.Type == "mic_abort" {
-			ss.s.Audio.Abort()
+			ss.abortAudio()
 			if v.Mode == "hold" {
-				_ = ss.s.Input.Hold(v.Start, false)
+				_ = ss.controller().Hold(v.Start, false)
 			} else if v.Mode == "toggle" {
-				_ = ss.s.Input.Chord(v.Stop)
+				_ = ss.controller().Chord(v.Stop)
 			}
 			ss.recording = 0
 			ss.ending = false
 			return ss.send(map[string]any{"type": "mic_stopped", "recording": m.Recording})
 		}
 		ss.ending = true
-		ss.s.Audio.End(id, time.Duration(v.StopDelayMS)*time.Millisecond, finish)
+		ss.s.Audio.End(ss.audioRecording, time.Duration(v.StopDelayMS)*time.Millisecond, finish)
 	case "pair_confirm":
 		// 老版本 App 配对时仍会发这条消息（现在改由 PC 端确认）：收到就忽略。
 		return nil
@@ -1137,12 +1160,13 @@ func (s *Server) audioPacket(p []byte) {
 		return
 	}
 	ss.mu.Lock()
-	ok := ss.active && ss.audioReplay.Accept(seq)
-	ss.mu.Unlock()
+	ok := ss.active && ss.recording != 0 && binary.LittleEndian.Uint64(b) == ss.recording && ss.audioReplay.Accept(seq)
 	if !ok {
+		ss.mu.Unlock()
 		return
 	}
-	s.Audio.Push(binary.LittleEndian.Uint64(b), binary.LittleEndian.Uint64(b[8:]), b[16:])
+	s.Audio.Push(ss.audioRecording, binary.LittleEndian.Uint64(b[8:]), b[16:])
+	ss.mu.Unlock()
 	s.audioPackets.Add(1)
 }
 func (s *Server) pairPage(w http.ResponseWriter, r *http.Request) {
@@ -1152,4 +1176,4 @@ func (s *Server) pairPage(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, strings.Replace(pairHTML, "<!--APK-->", s.apkSection(r), 1))
 }
 
-const pairHTML = `<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TapDeck 配对</title><style>body{font:18px system-ui;margin:0;background:#f2f5f9;color:#172331}main{max-width:520px;margin:8vh auto;padding:28px}h1{font-size:36px}h2{font-size:22px;margin:36px 0 8px}a,button{display:block;padding:18px;margin:20px 0;border:0;border-radius:12px;background:#175cd3;color:white;text-align:center;text-decoration:none;font:inherit}a.plain{display:inline;padding:0;margin:0;background:none;color:#175cd3;text-decoration:underline}input{box-sizing:border-box;width:100%;padding:12px;font:inherit}p{line-height:1.7}p.hint{font-size:15px;color:#5b6675;word-break:break-all}img.qr{display:block;margin:16px auto;background:white;border:1px solid #cbd5e1;border-radius:12px;padding:8px}code{font-size:16px}</style><main><h1>TapDeck</h1><p>打开应用后，核对电脑和 Android 显示的校验码，并在电脑允许连接。</p><a id="open" href="#">打开 TapDeck 配对</a><p>如果浏览器无法打开应用，请在 TapDeck 连接页输入下面的网址：</p><input readonly id="address"><p id="status">正在获取连接信息…</p><!--APK--></main><script>document.getElementById('address').value=location.origin+'/pair';fetch('/api/pair-info',{cache:'no-store'}).then(r=>r.json()).then(m=>{const q=new URLSearchParams({v:m.version,host:location.hostname,wss:m.wss_port,http:m.http_port,pin:m.pin});let uri='tapdeck://pair?'+q;const a=document.getElementById('open');a.href=uri;if(/Chrome/.test(navigator.userAgent))a.href='intent://pair?'+q+'#Intent;scheme=tapdeck;package=com.yuncii.tapdeck;end';document.getElementById('status').textContent='电脑：'+m.name}).catch(()=>document.getElementById('status').textContent='无法连接电脑，请检查网络后刷新页面。')</script></html>`
+const pairHTML = `<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TapDeck 配对</title><style>body{font:18px system-ui;margin:0;background:#f2f5f9;color:#172331}main{max-width:520px;margin:8vh auto;padding:28px}h1{font-size:36px}h2{font-size:22px;margin:36px 0 8px}a,button{display:block;padding:18px;margin:20px 0;border:0;border-radius:12px;background:#175cd3;color:white;text-align:center;text-decoration:none;font:inherit}a.plain{display:inline;padding:0;margin:0;background:none;color:#175cd3;text-decoration:underline}input{box-sizing:border-box;width:100%;padding:12px;font:inherit}p{line-height:1.7}p.hint{font-size:15px;color:#5b6675;word-break:break-all}img.qr{display:block;margin:16px auto;background:white;border:1px solid #cbd5e1;border-radius:12px;padding:8px}code{font-size:16px}</style><main><h1>TapDeck</h1><p>手机与电脑连接同一 Wi-Fi。首次使用先安装 Android 端，再打开应用，核对校验码并在电脑允许连接。</p><!--APK--><h2>连接电脑</h2><a id="open" href="#">打开 TapDeck 连接</a><p>如果浏览器无法打开应用，请在 TapDeck 连接页输入下面的网址：</p><input readonly id="address"><p id="status">正在获取连接信息…</p></main><script>document.getElementById('address').value=location.origin+'/pair';fetch('/api/pair-info',{cache:'no-store'}).then(r=>r.json()).then(m=>{const q=new URLSearchParams({v:m.version,host:location.hostname,wss:m.wss_port,http:m.http_port,pin:m.pin});let uri='tapdeck://pair?'+q;const a=document.getElementById('open');a.href=uri;if(/Chrome/.test(navigator.userAgent))a.href='intent://pair?'+q+'#Intent;scheme=tapdeck;package=com.yuncii.tapdeck;end';document.getElementById('status').textContent='电脑：'+m.name}).catch(()=>document.getElementById('status').textContent='无法连接电脑，请检查网络后刷新页面。')</script></html>`

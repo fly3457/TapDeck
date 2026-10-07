@@ -2,12 +2,17 @@ package server
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	qrcode "github.com/skip2/go-qrcode"
+	"tapdeck/internal/apkdist"
 )
 
 func apkBytes() []byte {
@@ -17,6 +22,55 @@ func apkBytes() []byte {
 		b[i] = byte(i)
 	}
 	return b
+}
+
+func TestBundledAPKHTTPHashAndVersion(t *testing.T) {
+	if !apkdist.Available() {
+		t.Skip("official build supplies the APK before running tests")
+	}
+	if err := apkdist.Verify(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetAPK(apkdist.Name(), apkdist.Bytes(), apkdist.SHA256(), apkdist.Version())
+	rec := httptest.NewRecorder()
+	s.apkFile(rec, httptest.NewRequest("GET", "http://pc/apk", nil))
+	h := sha256.Sum256(rec.Body.Bytes())
+	if hex.EncodeToString(h[:]) != apkdist.SHA256() {
+		t.Fatal("HTTP download differs from embedded APK")
+	}
+	page := httptest.NewRecorder()
+	s.pairPage(page, httptest.NewRequest("GET", "http://pc/pair", nil))
+	if !strings.Contains(page.Body.String(), apkdist.Version()) || !strings.Contains(page.Body.String(), apkdist.SHA256()) {
+		t.Fatal("version or full SHA-256 missing from page")
+	}
+	// Exercise the actual TCP HTTP listener as well as the handler recorder.
+	network, client := testReceiver(t, func(n *Server) {
+		n.Audio = &manualAudio{}
+		n.SetAPK(apkdist.Name(), apkdist.Bytes(), apkdist.SHA256(), apkdist.Version())
+	})
+	response, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/apk", network.cfg.HTTPPort))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	downloadHash := sha256.New()
+	if _, err = io.Copy(downloadHash, response.Body); err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || hex.EncodeToString(downloadHash.Sum(nil)) != apkdist.SHA256() {
+		t.Fatal("HTTP network download differs from embedded APK")
+	}
+	rangeReq := httptest.NewRequest("GET", "http://pc/apk", nil)
+	rangeReq.Header.Set("Range", "bytes=16-31")
+	partial := httptest.NewRecorder()
+	s.apkFile(partial, rangeReq)
+	if partial.Code != http.StatusPartialContent || !bytes.Equal(partial.Body.Bytes(), apkdist.Bytes()[16:32]) {
+		t.Fatal("resumable APK download broken")
+	}
 }
 
 func TestAPKDownloadServesEmbeddedBytes(t *testing.T) {

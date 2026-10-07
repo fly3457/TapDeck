@@ -12,6 +12,14 @@ import java.util.Base64
 
 val wireJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 const val CONTROL_VERSION = 2
+const val ZOOM_FEATURE = "touchpad_zoom"
+const val GESTURE_FEATURE = "three_finger"
+data class TouchpadCapabilities(val features: Set<String> = emptySet(), val doubleClickMs: Int = 500)
+fun JsonObject.touchpadCapabilities(): TouchpadCapabilities {
+    val features = (this["features"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.toSet() ?: emptySet()
+    val doubleClick = long("double_click_ms", 500).takeIf { it in 1..5000 }?.toInt() ?: 500
+    return TouchpadCapabilities(features, doubleClick)
+}
 fun message(type: String, vararg fields: Pair<String, JsonElement>) = buildJsonObject { put("type", type); fields.forEach { put(it.first, it.second) } }
 fun String.j() = JsonPrimitive(this)
 fun Int.j() = JsonPrimitive(this)

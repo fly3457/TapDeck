@@ -5,11 +5,12 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
+import android.text.TextPaint
+import android.text.TextUtils
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import kotlin.math.hypot
-import kotlin.math.min
 
 /**
  * 语音触发控件。两种模式互斥，入口是本区顶部的模式按钮（Lucide 图标 + 文字）：
@@ -28,12 +29,11 @@ class MicBallView(
         const val HOLD_MS = 300L
         const val MODE_HOLD = "hold"
         const val MODE_TOGGLE = "toggle"
-        /** 语音输入区背景：偏深的米黄。 */
-        val BACKGROUND = Color.rgb(253, 230, 175)
+        val BACKGROUND = ControllerStyle.PANEL
     }
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
-    private val hintPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val hintPaint = TextPaint(Paint.ANTI_ALIAS_FLAG)
     private val box = RectF()
     private val density = resources.displayMetrics.density
     private val slop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
@@ -51,6 +51,9 @@ class MicBallView(
     private val iconSignal by lazy { context.getDrawable(R.drawable.ic_lucide_mic_signal) }
     private var dragging = false
     private var holdStarted = false
+    var onFeedback: (KeyFeedback) -> Unit = { keyFeedback(it) }
+    var verticalScale = 1f
+        set(v) { if (field != v) { field = v; invalidate() } }
     var status = "idle"
         set(v) { if (field != v) { field = v; if (v == "idle") holdStarted = false; invalidate() } }
     /** 服务端确认的录音模式，仅用于文案；形状由 [gestureMode] 决定。 */
@@ -70,6 +73,7 @@ class MicBallView(
             lastTap = 0
             holdStarted = begin(MODE_HOLD)
             if (holdStarted) {
+                onFeedback(KeyFeedback.LongPress)
                 mode = MODE_HOLD
                 if (status == "idle") status = "preparing"
             }
@@ -81,27 +85,14 @@ class MicBallView(
         contentDescription = "语音输入区：按开关选择长按或单击，可拖动调整位置"
     }
 
-    private fun radius(): Float = (height * 0.20f).coerceIn(24 * density, 38 * density)
-        .coerceAtMost(min(width / 2f - 8 * density, controlHeight() / 2).coerceAtLeast(1f))
-    /** 标题基线与录音控件可拖动范围的起点：顶部留出标题所需空间。 */
-    private fun titleBaseline(): Float = topInset() + 18 * density
-    private fun controlTop(): Float = titleBaseline() + 12 * density
-    /** 底部为电平条 / 拖动提示留出空间，避免控件压住提示文字。 */
-    private fun controlBottom(): Float = (height - bottomInset()).coerceAtLeast(controlTop())
-    private fun controlHeight(): Float = (controlBottom() - controlTop()).coerceAtLeast(1f)
-    // 顶部标题、底部提示行与电平条所占的高度，按区域高度取比例并设下限；
-    // 区域本身只占屏幕 25%，因此这里保持紧凑，把空间留给可拖动的录音控件。
-    private fun topInset(): Float = maxOf(height * 0.13f, 22 * density)
-    private fun bottomInset(): Float = maxOf(height * 0.14f, 26 * density)
+    private fun geometry() = VoiceGeometry(width.toFloat(), height.toFloat(), width * verticalScale)
+    private fun radius(): Float = geometry().radius
     private fun bounds(): RectF {
-        val r = radius()
-        val top = controlTop() + r
-        val bottom = (controlBottom() - r).coerceAtLeast(top)
-        return RectF(r + 8 * density, top, (width - r - 8 * density).coerceAtLeast(r + 8 * density), bottom)
+        val g = geometry()
+        return RectF(g.left, g.top, g.right, g.bottom)
     }
     fun ballCenter(): Pair<Float, Float> {
-        val b = bounds()
-        return (b.left + b.width() * nx) to (b.top + b.height() * ny)
+        return geometry().center(nx, ny)
     }
     fun normalizedPosition(): Pair<Float, Float> = nx to ny
     fun restorePosition(x: Float, y: Float) {
@@ -138,6 +129,7 @@ class MicBallView(
     }
     override fun onDraw(c: Canvas) {
         c.drawColor(BACKGROUND)
+        val g = geometry()
         val (cx, cy) = ballCenter()
         drawModeButton(c)
         paint.style = Paint.Style.FILL
@@ -154,9 +146,9 @@ class MicBallView(
             val progress = level.coerceIn(0f, 1f)
             if (progress > 0f) {
                 ring.color = Color.rgb(70, 159, 220)
-                ring.strokeWidth = 5 * density
+                ring.strokeWidth = g.unit * 0.01f
                 ring.strokeCap = Paint.Cap.ROUND
-                val r = radius() + 7 * density
+                val r = radius() + g.unit * 0.007f
                 if (square()) {
                     val inset = radius() - r
                     box.set(cx + inset, cy + inset, cx - inset, cy - inset)
@@ -175,18 +167,22 @@ class MicBallView(
             else -> if (gestureMode == MODE_TOGGLE) "轻点" else "长按"
         }
         label(c, caption, cx, cy + radius() * 0.17f, captionSize(caption), radius() * 1.7f)
-        // 底部三行：电平条在最上，其下是「麦克风电平」文字，提示文字固定在最下面。
-        val hintBaseline = height - 8 * density
-        val barTop = height - 22 * density
-        hintPaint.color = Color.rgb(138, 120, 88)
+        // One caption and a separate level bar fit inside the 0.045W footer.
+        hintPaint.color = ControllerStyle.SECONDARY
         hintPaint.textAlign = Paint.Align.CENTER
-        hintPaint.textSize = min(11 * density, 18 * density)
-        c.drawText(if (available) "可拖动到区域任意位置" else "连接电脑后使用语音输入", width / 2f, hintBaseline, hintPaint)
+        hintPaint.typeface = android.graphics.Typeface.DEFAULT
+        hintPaint.textSize = g.unit * 0.025f
+        val hint = when {
+            status == "transmitting" -> "麦克风电平 ${(level * 100).toInt()}% · 可拖动调整位置"
+            available -> "可拖动到区域任意位置"
+            else -> "连接电脑后使用语音输入"
+        }
+        val footerCaption = TextUtils.ellipsize(hint, hintPaint, (width - g.unit * 0.03f).coerceAtLeast(0f), TextUtils.TruncateAt.END).toString()
+        val baseline = g.footerTop + (g.footerHeight - g.unit * 0.008f) / 2f - (hintPaint.ascent() + hintPaint.descent()) / 2f
+        c.drawText(footerCaption, width / 2f, baseline, hintPaint)
         if (status == "transmitting") {
-            paint.color = Color.rgb(120, 96, 60)
-            label(c, "麦克风电平 ${(level * 100).toInt()}%", width / 2f, barTop + 14 * density, min(12 * density, height * 0.07f), width - 24 * density)
-            paint.color = Color.rgb(70, 159, 220)
-            c.drawRect(0f, barTop, width * level.coerceIn(0f, 1f), barTop + 5 * density, paint)
+            paint.color = ControllerStyle.PRESSED
+            c.drawRect(0f, height - g.unit * 0.004f, width * level.coerceIn(0f, 1f), height.toFloat(), paint)
         }
     }
 
@@ -210,49 +206,58 @@ class MicBallView(
                 else -> "按住说话，松手结束"
             }
         }
-        val textSize = min(13 * density, 22 * density)
-        val iconSize = textSize * 1.5f
-        val padH = 10 * density
-        val padV = 6 * density
-        val gap = 6 * density
+        val g = geometry()
+        val textSize = g.unit * 0.03f
+        val iconSize = g.unit * 0.04f
+        val padH = g.unit * 0.0125f
+        val gap = g.unit * 0.01f
         hintPaint.textSize = textSize
         hintPaint.textAlign = Paint.Align.LEFT
         hintPaint.typeface = android.graphics.Typeface.DEFAULT_BOLD
         val labelWidth = hintPaint.measureText(text)
         hintPaint.typeface = android.graphics.Typeface.DEFAULT
+        hintPaint.textSize = g.unit * 0.025f
         val hintWidth = hintPaint.measureText(hint)
         val buttonWidth = padH * 2 + iconSize + gap + labelWidth
         val total = buttonWidth + gap * 2 + hintWidth
-        val left = ((width - total) / 2f).coerceAtLeast(4 * density)
-        // 顶部留白取区域顶部留白的一半：按钮行紧贴顶部，不再和区域上沿拉开一大截。
-        val top = topInset() / 2f
-        val pillHeight = textSize + padV * 2
-        val centerY = top + pillHeight / 2f
+        val left = ((width - total) / 2f).coerceAtLeast(width * ControllerStyle.SIDE)
+        val pillHeight = g.unit * 0.058f
+        val top = (g.modeHeight - pillHeight) / 2f
+        val corner = width * ControllerStyle.CORNER
 
         modeButton.set(left, top, left + buttonWidth, top + pillHeight)
         paint.style = Paint.Style.FILL
-        paint.color = if (modePressed) Color.rgb(255, 246, 214) else Color.rgb(255, 252, 240)
-        c.drawRoundRect(modeButton, modeButton.height() / 2f, modeButton.height() / 2f, paint)
+        paint.color = Color.rgb(165, 168, 174)
+        c.save()
+        c.translate(0f, density)
+        c.drawRoundRect(modeButton, corner, corner, paint)
+        c.restore()
+        paint.color = if (modePressed) ControllerStyle.PRESSED else ControllerStyle.NORMAL
+        c.drawRoundRect(modeButton, corner, corner, paint)
         paint.style = Paint.Style.STROKE
-        paint.strokeWidth = 1.5f * density
-        paint.color = Color.rgb(214, 188, 122)
-        c.drawRoundRect(modeButton, modeButton.height() / 2f, modeButton.height() / 2f, paint)
+        paint.strokeWidth = 0.5f * density
+        paint.color = if (modePressed) ControllerStyle.PRESSED else ControllerStyle.BORDER
+        c.drawRoundRect(modeButton, corner, corner, paint)
         paint.style = Paint.Style.FILL
 
         val icon = if (toggle) iconSignal else iconLines
         val iconLeft = (modeButton.left + padH).toInt()
         val iconTop = (modeButton.centerY() - iconSize / 2f).toInt()
         icon?.setBounds(iconLeft, iconTop, iconLeft + iconSize.toInt(), iconTop + iconSize.toInt())
-        icon?.setTint(Color.rgb(23, 92, 211))
+        icon?.setTint(if (modePressed) Color.WHITE else ControllerStyle.LABEL)
         icon?.draw(c)
 
-        hintPaint.color = Color.rgb(63, 79, 96)
+        hintPaint.textSize = textSize
+        hintPaint.color = if (modePressed) Color.WHITE else ControllerStyle.LABEL
         hintPaint.textAlign = Paint.Align.LEFT
         hintPaint.typeface = android.graphics.Typeface.DEFAULT_BOLD
         c.drawText(text, modeButton.left + padH + iconSize + gap, modeButton.centerY() - (hintPaint.descent() + hintPaint.ascent()) / 2f, hintPaint)
         hintPaint.typeface = android.graphics.Typeface.DEFAULT
-        hintPaint.color = Color.rgb(122, 105, 72)
-        c.drawText(hint, modeButton.right + gap * 2, modeButton.centerY() - (hintPaint.descent() + hintPaint.ascent()) / 2f, hintPaint)
+        hintPaint.textSize = g.unit * 0.025f
+        hintPaint.color = ControllerStyle.SECONDARY
+        val hintLeft = modeButton.right + gap * 2
+        val fittedHint = TextUtils.ellipsize(hint, hintPaint, (width - width * ControllerStyle.SIDE - hintLeft).coerceAtLeast(0f), TextUtils.TruncateAt.END).toString()
+        c.drawText(fittedHint, hintLeft, modeButton.centerY() - (hintPaint.descent() + hintPaint.ascent()) / 2f, hintPaint)
     }
 
     /** 点击模式按钮：在长按 / 单击之间切换，并通知外部记录到本地。 */
@@ -266,12 +271,14 @@ class MicBallView(
             MotionEvent.ACTION_DOWN -> {
                 // 顶部模式按钮优先：命中就只切换模式，不进入录音 / 拖动手势。
                 if (modeButton.contains(e.x, e.y)) {
+                    onFeedback(KeyFeedback.Press)
                     pointer = -1; dragging = false; holdStarted = false
                     modePressed = true; invalidate()
                     return true
                 }
                 val (cx, cy) = ballCenter()
                 if (!hit(e.x, e.y, cx, cy)) return false
+                if (available) onFeedback(KeyFeedback.Press)
                 parent?.requestDisallowInterceptTouchEvent(true)
                 pointer = e.getPointerId(0); downX = e.x; downY = e.y; originX = cx; originY = cy; downTime = e.eventTime
                 dragging = false; holdStarted = false

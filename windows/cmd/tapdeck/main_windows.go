@@ -22,14 +22,15 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
-	"tapdeck/internal/audio"
 	"tapdeck/internal/apkdist"
+	"tapdeck/internal/audio"
 	"tapdeck/internal/autostart"
 	"tapdeck/internal/config"
 	"tapdeck/internal/driver"
 	"tapdeck/internal/input"
 	"tapdeck/internal/keyboard"
 	"tapdeck/internal/server"
+	"tapdeck/internal/vbcable"
 	"time"
 	"unsafe"
 )
@@ -39,6 +40,9 @@ func main() {
 	extractDriver := flag.String("extract-keyboard-driver", "", "extract bundled signed MSI to this directory")
 	installDriver := flag.Bool("install-keyboard-driver", false, "install the bundled driver (Windows UAC)")
 	keyboardStatus := flag.Bool("keyboard-status", false, "print virtual keyboard device status")
+	cableStatus := flag.Bool("cable-status", false, "print VB-CABLE driver and endpoint status without installing")
+	extractCable := flag.String("extract-cable", "", "extract and verify the original VB-CABLE pack without installing")
+	apkInfo := flag.Bool("apk-info", false, "verify and print bundled Android APK metadata")
 	headless := flag.Bool("headless", false, "启动接收端并与托盘常驻，但不弹出设置窗口（用于开机自启）")
 	data := flag.String("data-dir", config.Directory(), "settings directory")
 	list := flag.Bool("list-audio", false, "list WASAPI render endpoints")
@@ -79,6 +83,29 @@ func main() {
 	if *keyboardStatus {
 		engine := keyboard.NewEngine("auto")
 		_ = json.NewEncoder(os.Stdout).Encode(engine.Status())
+		return
+	}
+	if *cableStatus {
+		status, err := vbcable.DetectAt(filepath.Join(*data, "vbcable", "Pack45"))
+		if err != nil {
+			log.Fatal(err)
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(status)
+		return
+	}
+	if *extractCable != "" {
+		path, err := vbcable.Extract(*extractCable)
+		if err != nil {
+			log.Fatal(err)
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"installer": path, "sha256": vbcable.SHA256})
+		return
+	}
+	if *apkInfo {
+		if err := apkdist.Verify(); err != nil {
+			log.Fatal(err)
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"version_name": apkdist.Version(), "version_code": apkdist.VersionCode(), "sha256": apkdist.SHA256(), "bytes": len(apkdist.Bytes())})
 		return
 	}
 	if *probe > 0 {
@@ -131,13 +158,19 @@ func main() {
 		log.Fatal(e)
 	}
 	defer windows.CloseHandle(instance)
+	if err := apkdist.Verify(); err != nil {
+		log.Fatal(err)
+	}
+	if err := vbcable.Verify(); err != nil {
+		log.Fatal(err)
+	}
 	s, e := server.New(*data)
 	if e != nil {
 		log.Fatal(e)
 	}
 	defer s.Stop()
 	// 内置的 Android 安装包：配对网页会给出下载二维码。
-	s.SetAPK(apkdist.Name(), apkdist.Bytes(), apkdist.SHA256())
+	s.SetAPK(apkdist.Name(), apkdist.Bytes(), apkdist.SHA256(), apkdist.Version())
 	agent, e := keyboard.NewAgent(s.Config().KeyboardBackend)
 	if e != nil {
 		log.Fatal(e)
@@ -159,12 +192,10 @@ func main() {
 		log.Fatal(e)
 	}
 }
-// apkSummary 说明本次构建是否内置了 Android 安装包（配对网页据此决定显示二维码还是 Release 链接）。
+
+// apkSummary describes the Android artifact embedded by the official build.
 func apkSummary() string {
-	if apkdist.Available() {
-		return fmt.Sprintf("内置 Android 安装包：%s（%s），配对网页可扫码下载", apkdist.Name(), apkdist.SizeText())
-	}
-	return "未内置 Android 安装包：配对网页只显示 GitHub Release 链接（先运行 scripts/build-android.ps1 再构建接收端）"
+	return fmt.Sprintf("内置 Android %s（code %d，%s）\nSHA-256：%s", apkdist.Version(), apkdist.VersionCode(), apkdist.SizeText(), apkdist.SHA256())
 }
 
 func open(path string) {
@@ -201,13 +232,26 @@ func window(s *server.Server, dir string, startHidden bool) error {
 	var driverButton *walk.PushButton
 	var installing atomic.Bool
 	var holdKey, toggleStartKey, toggleStopKey *walk.LineEdit
-	var gain, sensitivity, delay, httpPort, wssPort, udpPort *walk.NumberEdit
+	var gain, delay, httpPort, wssPort, udpPort *walk.NumberEdit
 	var natural *walk.CheckBox
 	var autostartBox *walk.CheckBox
 	var autostartLabel *walk.Label
 	var labels, keys [config.ShortcutCount]*walk.LineEdit
 	var enabled [config.ShortcutCount]*walk.CheckBox
 	var pendingID string
+	var pairedTable *walk.TableView
+	var unpairButton *walk.PushButton
+	paired := &pairedModel{}
+	var cableLabel *walk.Label
+	var cableButton *walk.PushButton
+	var cableInstalling atomic.Bool
+	cableManager := vbcable.NewManager()
+	cableLicense, licenseErr := vbcable.License(filepath.Join(dir, "vbcable"))
+	if licenseErr != nil {
+		return licenseErr
+	}
+	cable, cableErr := vbcable.DetectAt(filepath.Join(dir, "vbcable", "Pack45"))
+	var cablePrompted bool
 	cfg := s.Config()
 	backendIDs := []string{"auto", "hid", "sendinput"}
 	backendNames := []string{"自动（优先虚拟键盘；不支持的键使用 SendInput）", "虚拟键盘（HID）", "软件按键（SendInput）"}
@@ -231,12 +275,11 @@ func window(s *server.Server, dir string, startHidden bool) error {
 	}
 	var qrBitmap *walk.Bitmap
 	refreshQR := func() {
-		s.RefreshQR()
 		q, e := qrcode.New(s.QRURI(), qrcode.Medium)
 		if e != nil {
 			return
 		}
-		b, e := walk.NewBitmapFromImage(q.Image(240))
+		b, e := walk.NewBitmapFromImage(q.Image(200))
 		if e != nil {
 			return
 		}
@@ -254,6 +297,79 @@ func window(s *server.Server, dir string, startHidden bool) error {
 		row = append(row, keyWidgets(func() walk.Form { return mw }, &keys[j], cfg.Shortcuts[j].Chord)...)
 		shortcutRows = append(shortcutRows, d.Composite{Layout: d.HBox{}, Children: row})
 	}
+	refreshAudio := func() {
+		items, err := audio.Devices()
+		if err != nil {
+			walk.MsgBox(mw, "设备错误", err.Error(), walk.MsgBoxIconError)
+			return
+		}
+		selected := ""
+		if i := devices.CurrentIndex(); i >= 0 && i < len(deviceIDs) {
+			selected = deviceIDs[i]
+		}
+		deviceNames, deviceIDs = []string{"自动选择 CABLE Input"}, []string{""}
+		index := 0
+		for _, item := range items {
+			deviceNames = append(deviceNames, item.Name)
+			deviceIDs = append(deviceIDs, item.ID)
+			if item.ID == selected {
+				index = len(deviceIDs) - 1
+			}
+		}
+		_ = devices.SetModel(deviceNames)
+		_ = devices.SetCurrentIndex(index)
+	}
+	applyCableStatus := func() {
+		if cableInstalling.Load() {
+			return
+		}
+		if cableErr != nil {
+			_ = cableLabel.SetText("VB-CABLE 检测失败：" + cableErr.Error())
+		} else {
+			_ = cableLabel.SetText(cable.Text())
+		}
+		cableButton.SetEnabled(cableErr == nil && cable.State == vbcable.Missing && !cable.RestartRequired)
+	}
+	redetectCable := func() {
+		go func() {
+			v, err := vbcable.DetectAt(filepath.Join(dir, "vbcable", "Pack45"))
+			mw.Synchronize(func() { cable, cableErr = v, err; applyCableStatus(); refreshAudio() })
+		}()
+	}
+	installCable := func() {
+		if !cableInstalling.CompareAndSwap(false, true) {
+			return
+		}
+		cableButton.SetEnabled(false)
+		_ = cableLabel.SetText("正在解包并启动 VB-Audio 官方安装向导，请处理管理员授权并在向导中完成安装…")
+		go func() {
+			r, err := cableManager.Install(filepath.Join(dir, "vbcable", "Pack45"))
+			v, detectionErr := vbcable.DetectAt(filepath.Join(dir, "vbcable", "Pack45"))
+			mw.Synchronize(func() {
+				cableInstalling.Store(false)
+				cable, cableErr = v, detectionErr
+				applyCableStatus()
+				refreshAudio()
+				switch {
+				case err != nil:
+					walk.MsgBox(mw, "VB-CABLE 安装", err.Error(), walk.MsgBoxIconInformation)
+				case r.AlreadyInstalled:
+					walk.MsgBox(mw, "已安装 VB-CABLE", r.Status.Text(), walk.MsgBoxIconInformation)
+				case r.RestartRequired:
+					walk.MsgBox(mw, "需要重启 Windows", "VB-Audio 要求安装后重启。请保存工作并自行安排重启；重启后在语音页重新检测。\n\nTapDeck 输出选择 CABLE Input；目标软件的麦克风选择 CABLE Output。", walk.MsgBoxIconInformation)
+				}
+			})
+		}()
+	}
+	checkCableOnce := func() {
+		if cablePrompted {
+			return
+		}
+		cablePrompted = true
+		if cableErr == nil && cable.State == vbcable.Missing && !cable.RestartRequired && walk.MsgBox(mw, "安装虚拟声卡", "语音传输需要 VB-Audio 的 VB-CABLE。TapDeck 已内置完整原包，可离线打开官方安装向导。\n\nVB-CABLE 是 donationware，欢迎向 VB-Audio 捐赠。安装需要管理员授权，完成后需自行重启 Windows。\n\n现在打开安装向导？也可稍后从“语音”页安装。", walk.MsgBoxYesNo|walk.MsgBoxIconQuestion) == walk.DlgCmdYes {
+			installCable()
+		}
+	}
 	save := func() {
 		c := s.Config()
 		for i := 0; i < config.ShortcutCount; i++ {
@@ -263,7 +379,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 		c.WSSPort = int(wssPort.Value())
 		c.UDPPort = int(udpPort.Value())
 		c.Gain = gain.Value()
-		c.Sensitivity = sensitivity.Value()
+		c.Sensitivity = config.PointerBaseSensitivity
 		c.NaturalScroll = natural.Checked()
 		c.KeyboardBackend = backendIDs[max(0, backend.CurrentIndex())]
 		c.AudioDevice = deviceIDs[max(0, devices.CurrentIndex())]
@@ -282,14 +398,46 @@ func window(s *server.Server, dir string, startHidden bool) error {
 	err := (d.MainWindow{AssignTo: &mw, Title: "TapDeck · Windows 接收端", Size: d.Size{Width: 740, Height: 800}, MinSize: d.Size{Width: 680, Height: 700}, Font: d.Font{Family: "Microsoft YaHei UI", PointSize: 9}, Layout: d.VBox{Margins: d.Margins{Left: 16, Top: 12, Right: 16, Bottom: 12}}, Children: []d.Widget{
 		d.Label{AssignTo: &status, Text: "正在启动…"},
 		d.TabWidget{Pages: []d.TabPage{
-			{Title: "连接", Layout: d.VBox{}, Children: []d.Widget{d.Label{Text: "在 Android 浏览器或 TapDeck 连接页输入下方网址。"}, d.LineEdit{AssignTo: &address, Text: s.PairURL(), ReadOnly: true}, d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.PushButton{Text: "复制网址", OnClicked: func() { _ = walk.Clipboard().SetText(s.PairURL()) }}, d.PushButton{Text: "打开配对网页", OnClicked: func() { open(s.PairURL()) }}, d.PushButton{Text: "刷新二维码", OnClicked: refreshQR}, d.PushButton{Text: "复制二维码配对信息", OnClicked: func() { _ = walk.Clipboard().SetText(s.QRURI()) }}}}, d.ImageView{AssignTo: &qrView, MinSize: d.Size{Width: 240, Height: 240}, MaxSize: d.Size{Width: 260, Height: 260}, Mode: d.ImageViewModeIdeal}, d.Label{AssignTo: &pendingLabel, Text: "等待配对请求"}, d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.PushButton{Text: "校验码一致，允许", OnClicked: func() { s.Approve(pendingID, true) }}, d.PushButton{Text: "拒绝", OnClicked: func() { s.Approve(pendingID, false) }}, d.PushButton{Text: "解除配对", OnClicked: func() {
-				if walk.MsgBox(mw, "解除配对", "删除已配对设备并停止当前输入？", walk.MsgBoxYesNo|walk.MsgBoxIconQuestion) == walk.DlgCmdYes {
-					if e := s.Unpair(); e != nil {
-						walk.MsgBox(mw, "解绑失败", e.Error(), walk.MsgBoxIconError)
+			{Title: "连接", Layout: d.VBox{}, Children: []d.Widget{
+				d.Label{Text: "手机和电脑连接同一局域网，扫码或在手机浏览器输入网址。"},
+				d.LineEdit{AssignTo: &address, Text: s.PairURL(), ReadOnly: true},
+				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.PushButton{Text: "复制网址", OnClicked: func() { _ = walk.Clipboard().SetText(s.PairURL()) }}, d.PushButton{Text: "打开安装与配对网页", OnClicked: func() { open(s.PairURL()) }}, d.PushButton{Text: "刷新二维码", OnClicked: refreshQR}}},
+				d.Composite{Layout: d.HBox{}, Children: []d.Widget{
+					d.ImageView{AssignTo: &qrView, MinSize: d.Size{Width: 200, Height: 200}, MaxSize: d.Size{Width: 200, Height: 200}, Mode: d.ImageViewModeIdeal},
+					d.Composite{Layout: d.VBox{}, Children: []d.Widget{
+						d.Label{Text: "扫码安装 Android 端\n已安装用户可从网页打开 App。\n首次连接须核对校验码，并在电脑上允许。"},
+						d.Label{AssignTo: &pendingLabel, Text: "等待配对请求"},
+						d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.PushButton{Text: "校验码一致，允许", OnClicked: func() { s.Approve(pendingID, true) }}, d.PushButton{Text: "拒绝", OnClicked: func() { s.Approve(pendingID, false) }}}}, d.VSpacer{},
+					}},
+				}},
+				d.Label{Text: "已配对设备（同名设备请核对设备标识）"},
+				d.TableView{AssignTo: &pairedTable, Model: paired, MinSize: d.Size{Height: 140}, StretchFactor: 1, Columns: []d.TableViewColumn{{Title: "名称", Width: 130}, {Title: "状态", Width: 50}, {Title: "设备标识", Width: 210}, {Title: "最近连接", Width: 150}}, OnCurrentIndexChanged: func() {
+					if unpairButton != nil {
+						_, ok := paired.selected(pairedTable)
+						unpairButton.SetEnabled(ok)
 					}
-					refreshQR()
-				}
-			}}}}, d.VSpacer{}}},
+				}},
+				d.Composite{Layout: d.HBox{}, Children: []d.Widget{
+					d.PushButton{AssignTo: &unpairButton, Text: "解除所选设备配对", Enabled: false, OnClicked: func() {
+						v, ok := paired.selected(pairedTable)
+						if !ok {
+							return
+						}
+						if walk.MsgBox(mw, "解除设备配对", fmt.Sprintf("解除“%s”的配对？\n设备标识：%s\n此设备需要重新连接并由电脑允许。", v.Name, v.ID), walk.MsgBoxYesNo|walk.MsgBoxIconQuestion) == walk.DlgCmdYes {
+							if err := s.UnpairDevice(v.ID); err != nil {
+								walk.MsgBox(mw, "解绑失败", err.Error(), walk.MsgBoxIconError)
+							}
+						}
+					}},
+					d.PushButton{Text: "解除全部配对", OnClicked: func() {
+						if walk.MsgBox(mw, "解除全部配对", "解除所有已配对设备，并断开全部控制端？", walk.MsgBoxYesNo|walk.MsgBoxIconQuestion) == walk.DlgCmdYes {
+							if err := s.Unpair(); err != nil {
+								walk.MsgBox(mw, "解绑失败", err.Error(), walk.MsgBoxIconError)
+							}
+						}
+					}},
+				}},
+			}},
 			{Title: "快捷键", Layout: d.VBox{}, Children: append([]d.Widget{d.Label{Text: "键盘发送方式"}, d.ComboBox{AssignTo: &backend, Model: backendNames, CurrentIndex: selectedBackend}, d.Label{AssignTo: &keyboardLabel, Text: "正在检测虚拟键盘…"}, d.PushButton{AssignTo: &driverButton, Text: "安装 / 修复虚拟键盘", OnClicked: func() {
 				if !installing.CompareAndSwap(false, true) {
 					return
@@ -315,22 +463,22 @@ func window(s *server.Server, dir string, startHidden bool) error {
 					})
 				}()
 			}}}, append(shortcutRows, d.VSpacer{})...)},
-			{Title: "语音", Layout: d.VBox{}, Children: []d.Widget{d.Label{Text: "PC 软件选择 CABLE Output 为麦克风；TapDeck 输出到 CABLE Input。"}, d.ComboBox{AssignTo: &devices, Model: deviceNames, CurrentIndex: selectedDevice}, d.PushButton{Text: "刷新音频设备", OnClicked: func() {
-				items, e := audio.Devices()
-				if e != nil {
-					walk.MsgBox(mw, "设备错误", e.Error(), walk.MsgBoxIconError)
-					return
-				}
-				deviceNames = []string{"自动选择 CABLE Input"}
-				deviceIDs = []string{""}
-				for _, v := range items {
-					deviceNames = append(deviceNames, v.Name)
-					deviceIDs = append(deviceIDs, v.ID)
-				}
-				_ = devices.SetModel(deviceNames)
-				_ = devices.SetCurrentIndex(0)
-			}}, d.Label{AssignTo: &audioStatus, Text: "正在检查音频设备"}, d.Label{Text: "音量倍率（0–3）"}, d.NumberEdit{AssignTo: &gain, Value: cfg.Gain, MinValue: 0, MaxValue: 3, Decimals: 2, Increment: 0.1}, d.Label{Text: "两种手势同时可用；热键留空时仅传音。"}, d.Label{Text: "长按热键（圆球按住 300 ms，松手释放）"}, d.Composite{Layout: d.HBox{}, Children: keyWidgets(func() walk.Form { return mw }, &holdKey, cfg.Voice.HoldKey)}, d.Label{Text: "免按开始热键（双击圆球开始）"}, d.Composite{Layout: d.HBox{}, Children: keyWidgets(func() walk.Form { return mw }, &toggleStartKey, cfg.Voice.ToggleStartKey)}, d.Label{Text: "免按结束热键（单击圆球停止）"}, d.Composite{Layout: d.HBox{}, Children: keyWidgets(func() walk.Form { return mw }, &toggleStopKey, cfg.Voice.ToggleStopKey)}, d.Label{Text: "尾音结束延迟 ms"}, d.NumberEdit{AssignTo: &delay, Value: float64(cfg.Voice.StopDelayMS), MinValue: 0, MaxValue: 1000}, d.VSpacer{}}},
-			{Title: "设置与状态", Layout: d.VBox{}, Children: []d.Widget{d.Label{Text: "HTTP / WSS / UDP 端口（修改后重启连接）"}, d.NumberEdit{AssignTo: &httpPort, Value: float64(cfg.HTTPPort), MinValue: 1024, MaxValue: 65535}, d.NumberEdit{AssignTo: &wssPort, Value: float64(cfg.WSSPort), MinValue: 1024, MaxValue: 65535}, d.NumberEdit{AssignTo: &udpPort, Value: float64(cfg.UDPPort), MinValue: 1024, MaxValue: 65535}, d.Label{Text: "触控灵敏度"}, d.NumberEdit{AssignTo: &sensitivity, Value: cfg.Sensitivity, MinValue: 0.1, MaxValue: 5, Decimals: 2, Increment: 0.1}, d.CheckBox{AssignTo: &natural, Text: "自然滚动", Checked: cfg.NaturalScroll}, d.CheckBox{AssignTo: &autostartBox, Text: "随 Windows 登录自动启动接收端", Checked: autostartEnabled(), OnCheckedChanged: func() {
+			{Title: "语音", Layout: d.VBox{}, Children: []d.Widget{
+				d.Label{Text: "TapDeck 输出选择 CABLE Input；目标输入法或录音软件的麦克风选择 CABLE Output。"},
+				d.Label{AssignTo: &cableLabel, Text: "正在检测 VB-CABLE…"},
+				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.PushButton{AssignTo: &cableButton, Text: "安装虚拟声卡", OnClicked: installCable}, d.PushButton{Text: "重新检测", OnClicked: redetectCable}, d.PushButton{Text: "VB-Audio 官网", OnClicked: func() { open(vbcable.Website) }}, d.PushButton{Text: "捐赠 / 购买", OnClicked: func() { open(vbcable.DonationURL) }}, d.PushButton{Text: "原包许可", OnClicked: func() { open(cableLicense) }}}},
+				d.Label{Text: "VB-CABLE 来自 VB-Audio，是 donationware，欢迎捐赠。安装后需重启 Windows。"},
+				d.ComboBox{AssignTo: &devices, Model: deviceNames, CurrentIndex: selectedDevice},
+				d.PushButton{Text: "刷新音频设备", OnClicked: refreshAudio},
+				d.Label{AssignTo: &audioStatus, Text: "正在检查音频设备"},
+				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.Label{Text: "音量倍率（0–3）"}, d.NumberEdit{AssignTo: &gain, Value: cfg.Gain, MinValue: 0, MaxValue: 3, Decimals: 2, Increment: 0.1}}},
+				d.Label{Text: "两种手势同时可用；热键留空时仅传音。"},
+				d.Label{Text: "长按热键（圆球按住 300 ms，松手释放）"}, d.Composite{Layout: d.HBox{}, Children: keyWidgets(func() walk.Form { return mw }, &holdKey, cfg.Voice.HoldKey)},
+				d.Label{Text: "免按开始热键（单击圆球开始）"}, d.Composite{Layout: d.HBox{}, Children: keyWidgets(func() walk.Form { return mw }, &toggleStartKey, cfg.Voice.ToggleStartKey)},
+				d.Label{Text: "免按结束热键（再单击圆球停止）"}, d.Composite{Layout: d.HBox{}, Children: keyWidgets(func() walk.Form { return mw }, &toggleStopKey, cfg.Voice.ToggleStopKey)},
+				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.Label{Text: "尾音结束延迟 ms"}, d.NumberEdit{AssignTo: &delay, Value: float64(cfg.Voice.StopDelayMS), MinValue: 0, MaxValue: 1000}}}, d.VSpacer{},
+			}},
+			{Title: "设置与状态", Layout: d.VBox{}, Children: []d.Widget{d.Label{Text: "HTTP / WSS / UDP 端口（修改后重启连接）"}, d.NumberEdit{AssignTo: &httpPort, Value: float64(cfg.HTTPPort), MinValue: 1024, MaxValue: 65535}, d.NumberEdit{AssignTo: &wssPort, Value: float64(cfg.WSSPort), MinValue: 1024, MaxValue: 65535}, d.NumberEdit{AssignTo: &udpPort, Value: float64(cfg.UDPPort), MinValue: 1024, MaxValue: 65535}, d.Label{Text: "触控板灵敏度：在各 Android 设备触控板左上角设置（0.5–3 倍）"}, d.Label{Text: "手机震动开关：Android 顶部连接图标 → 连接与设备设置"}, d.CheckBox{AssignTo: &natural, Text: "自然滚动", Checked: cfg.NaturalScroll}, d.CheckBox{AssignTo: &autostartBox, Text: "随 Windows 登录自动启动接收端", Checked: autostartEnabled(), OnCheckedChanged: func() {
 				on, err := autostart.Set(autostartBox.Checked())
 				if err != nil {
 					walk.MsgBox(mw, "开机自启设置失败", err.Error(), walk.MsgBoxIconError)
@@ -359,6 +507,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 		}
 	}()
 	refreshQR()
+	applyCableStatus()
 	iconImage := image.NewRGBA(image.Rect(0, 0, 32, 32))
 	for y := 0; y < 32; y++ {
 		for x := 0; x < 32; x++ {
@@ -382,7 +531,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 	defer tray.Dispose()
 	_ = tray.SetIcon(icon)
 	_ = tray.SetToolTip("TapDeck：点击打开设置")
-	show := func() { mw.Show(); mw.Activate() }
+	show := func() { mw.Show(); mw.Activate(); checkCableOnce() }
 	tray.MouseDown().Attach(func(x, y int, b walk.MouseButton) {
 		if b == walk.LeftButton {
 			show()
@@ -406,6 +555,9 @@ func window(s *server.Server, dir string, startHidden bool) error {
 		mw.Hide()
 		log.Printf("TapDeck %s（已常驻托盘，设置窗口未显示）", s.PairURL())
 	}
+	if !startHidden {
+		mw.Synchronize(checkCableOnce)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
@@ -420,7 +572,12 @@ func window(s *server.Server, dir string, startHidden bool) error {
 			case <-ticker.C:
 				v := s.Snapshot()
 				kb := agent.KeyboardStatus()
+				var cableUpdate bool
+				var detectedCable vbcable.Status
+				var detectionErr error
 				if time.Since(lastMetrics) >= 5*time.Second {
+					detectedCable, detectionErr = vbcable.DetectAt(filepath.Join(dir, "vbcable", "Pack45"))
+					cableUpdate = true
 					metrics, _ := json.Marshal(map[string]any{"at": time.Now().Format(time.RFC3339), "connected": v.Device != "", "mouse_packets": v.MousePackets, "audio_packets": v.AudioPackets, "injection_p95_ms": v.InjectionP95MS, "buffered_frames": v.BufferedFrames, "max_buffered_frames": v.MaxBufferedFrames, "concealed_frames": v.Concealed, "audio_ready": v.AudioReady})
 					_ = config.AtomicWrite(filepath.Join(dir, "runtime-stats.json"), metrics)
 					lastMetrics = time.Now()
@@ -430,6 +587,13 @@ func window(s *server.Server, dir string, startHidden bool) error {
 				}
 				mw.Synchronize(func() {
 					defer uiPending.Store(false)
+					paired.update(pairedTable, v.PairedDevices)
+					_, selected := paired.selected(pairedTable)
+					unpairButton.SetEnabled(selected)
+					if cableUpdate {
+						cable, cableErr = detectedCable, detectionErr
+						applyCableStatus()
+					}
 					text := "接收已停止"
 					if v.Running {
 						text = "等待 Android 连接"

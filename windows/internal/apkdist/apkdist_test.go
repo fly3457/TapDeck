@@ -30,7 +30,7 @@ func TestScanFindsAPK(t *testing.T) {
 	}
 }
 
-// 没有 APK（例如只构建 Windows 端）时必须是「空」而不是报错。
+// scan reports absence; Verify then rejects it at receiver startup.
 func TestScanWithoutAPK(t *testing.T) {
 	fsys := fstest.MapFS{"assets/README.txt": {Data: []byte("说明")}}
 	name, data, sum := scan(fsys)
@@ -48,5 +48,24 @@ func TestScanIgnoresEmptyAPK(t *testing.T) {
 	fsys := fstest.MapFS{"assets/TapDeck.apk": {Data: nil}}
 	if name, data, _ := scan(fsys); name != "" || data != nil {
 		t.Fatalf("empty apk accepted: %q %v", name, data)
+	}
+}
+
+func TestAPKVerificationRejectsMissingOrStaleMetadata(t *testing.T) {
+	body := []byte("new APK")
+	h := sha256.Sum256(body)
+	meta := Metadata{VersionName: "0.3.0", VersionCode: 3, SHA256: hex.EncodeToString(h[:])}
+	if err := verify(body, meta); err != nil {
+		t.Fatal(err)
+	}
+	if err := verify(nil, meta); err == nil {
+		t.Fatal("missing APK accepted")
+	}
+	if err := verify([]byte("old APK"), meta); err == nil {
+		t.Fatal("stale APK accepted")
+	}
+	meta.VersionName = ""
+	if err := verify(body, meta); err == nil {
+		t.Fatal("missing version accepted")
 	}
 }

@@ -14,6 +14,28 @@ import (
 
 type fakeInput struct{ events []string }
 
+func TestConfigUpdateKeepsLegacyClientPointerBaseline(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.cfg.Sensitivity = 0.5 // Even a stale in-memory snapshot exposes the fixed v2 baseline.
+	if s.Config().Sensitivity != 2 {
+		t.Fatal("snapshot did not normalize sensitivity")
+	}
+	c := s.Config()
+	c.Sensitivity = 3
+	c.NaturalScroll = false
+	if err = s.Update(c); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := config.Load(dir)
+	if err != nil || loaded.Sensitivity != 2 || s.Config().Sensitivity != 2 || loaded.NaturalScroll {
+		t.Fatalf("update did not preserve fixed baseline and other settings: %+v, %v", loaded, err)
+	}
+}
+
 func (f *fakeInput) Move(x, y, sx, sy int32) error {
 	if x != 0 || y != 0 {
 		f.events = append(f.events, "move")
@@ -72,14 +94,14 @@ func TestBootstrapDoesNotExposeCredentials(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	s.tokens["device"] = "sensitive-token-hash"
+	s.paired["device"] = pairedRecord{Hash: "sensitive-token-hash"}
 	m := httptest.NewRecorder()
 	s.pairPage(m, httptest.NewRequest("GET", "http://127.0.0.1/pair", nil))
-	if strings.Contains(m.Body.String(), s.secret) || strings.Contains(m.Body.String(), "sensitive-token-hash") {
+	if strings.Contains(m.Body.String(), "secret=") || strings.Contains(m.Body.String(), "sensitive-token-hash") {
 		t.Fatal("bootstrap exposed credentials")
 	}
 	b, _ := json.Marshal(s.metadata())
-	if strings.Contains(string(b), s.secret) {
+	if strings.Contains(string(b), "secret") || strings.Contains(string(b), "sensitive-token-hash") {
 		t.Fatal("metadata exposed secret")
 	}
 }

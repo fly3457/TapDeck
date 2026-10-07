@@ -26,8 +26,6 @@ type Agent struct {
 	epoch, id uint64
 	waiters   map[uint64]func(error)
 	busy      map[uint64]bool
-	voices    map[string]bool
-	held      int
 	status    Status
 	failed    bool
 	closed    bool
@@ -37,7 +35,7 @@ type Agent struct {
 }
 
 func NewAgent(mode string) (*Agent, error) {
-	a := &Agent{epoch: 1, waiters: map[uint64]func(error){}, busy: map[uint64]bool{}, voices: map[string]bool{}, mouse: input.New()}
+	a := &Agent{epoch: 1, waiters: map[uint64]func(error){}, busy: map[uint64]bool{}, mouse: input.New()}
 	path, err := os.Executable()
 	if err != nil {
 		return nil, err
@@ -118,8 +116,6 @@ func (a *Agent) fail(err error) {
 	waiters := a.waiters
 	a.waiters = map[uint64]func(error){}
 	a.busy = map[uint64]bool{}
-	a.voices = map[string]bool{}
-	a.held = 0
 	soft := append([]uint16(nil), a.softKeys...)
 	a.softKeys = nil
 	a.mu.Unlock()
@@ -143,13 +139,13 @@ func (a *Agent) submit(r request, done func(error)) error {
 		a.mu.Unlock()
 		return fmt.Errorf("键盘工作进程不可用，请重启 TapDeck")
 	}
-	if a.changing && r.Action != "configure" && r.Action != "clear" && r.Action != "voice_stop" {
+	if a.changing && r.Action != "configure" && r.Action != "clear" && r.Action != "voice_stop" && r.Action != "release_owner" {
 		a.mu.Unlock()
 		return fmt.Errorf("键盘发送方式正在切换")
 	}
 	a.id++
 	r.ID, r.Epoch = a.id, a.epoch
-	if len(a.waiters) >= 128 && r.Action != "clear" && r.Action != "voice_stop" {
+	if len(a.waiters) >= 128 && r.Action != "clear" && r.Action != "voice_stop" && r.Action != "release_owner" {
 		a.mu.Unlock()
 		return fmt.Errorf("键盘队列已满")
 	}
@@ -184,12 +180,12 @@ func (a *Agent) KeyboardStatus() Status {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	s := a.status
-	s.Busy = a.changing || len(a.busy) > 0 || len(a.voices) > 0 || a.held > 0
+	s.Busy = s.Busy || a.changing || len(a.busy) > 0
 	return s
 }
 func (a *Agent) ConfigureBackend(mode string) error {
 	a.mu.Lock()
-	busy := a.changing || len(a.busy) > 0 || len(a.voices) > 0 || a.held > 0
+	busy := a.changing || len(a.busy) > 0 || a.status.Busy
 	if !busy {
 		a.changing = true
 	}
@@ -207,6 +203,18 @@ func (a *Agent) ChordAsync(k string, done func(error)) error {
 	return a.submit(request{Action: "chord", Chord: k}, done)
 }
 func (a *Agent) Chord(k string) error { return a.sync(request{Action: "chord", Chord: k}) }
+func (a *Agent) ZoomAsync(steps int, done func(error)) error {
+	if err := validateZoom(steps); err != nil {
+		return err
+	}
+	return a.submit(request{Action: "zoom", Steps: steps}, done)
+}
+func (a *Agent) GestureAsync(direction string, done func(error)) error {
+	if err := validateGesture(direction); err != nil {
+		return err
+	}
+	return a.submit(request{Action: "gesture", Mode: direction}, done)
+}
 
 // HoldAsync presses (down) or releases a shortcut while the phone keeps the
 // button pressed, so holding the button repeats the key state instead of firing
@@ -220,32 +228,10 @@ func (a *Agent) HoldAsync(k string, down bool, done func(error)) error {
 	if !down {
 		action = "hold_up"
 	}
-	err := a.submit(request{Action: action, Chord: k}, func(err error) {
-		if err == nil {
-			a.mu.Lock()
-			if down {
-				a.held++
-			} else if a.held > 0 {
-				a.held--
-			}
-			a.mu.Unlock()
-		}
-		done(err)
-	})
-	return err
+	return a.submit(request{Action: action, Chord: k}, done)
 }
 func (a *Agent) Hold(k string, down bool) error {
-	err := a.sync(request{Action: "hold", Chord: k, Down: down})
-	if err == nil {
-		a.mu.Lock()
-		if down {
-			a.held++
-		} else if a.held > 0 {
-			a.held--
-		}
-		a.mu.Unlock()
-	}
-	return err
+	return a.sync(request{Action: "hold", Chord: k, Down: down})
 }
 
 // PressKey / ReleaseKey serve the phone's full keyboard: a held key stays down
@@ -270,26 +256,10 @@ func (a *Agent) StartVoice(token, mode, start, stop string, done func(error)) er
 	if err := Validate(stop, a.KeyboardStatus().Configured); err != nil {
 		return err
 	}
-	a.mu.Lock()
-	a.voices[token] = true
-	a.mu.Unlock()
-	err := a.submit(request{Action: "voice_start", Token: token, Mode: mode, Chord: start, Stop: stop}, func(err error) {
-		if err != nil {
-			a.mu.Lock()
-			delete(a.voices, token)
-			a.mu.Unlock()
-		}
-		done(err)
-	})
-	if err != nil {
-		a.mu.Lock()
-		delete(a.voices, token)
-		a.mu.Unlock()
-	}
-	return err
+	return a.submit(request{Action: "voice_start", Token: token, Mode: mode, Chord: start, Stop: stop}, done)
 }
 func (a *Agent) StopVoice(token string, done func(error)) error {
-	return a.submit(request{Action: "voice_stop", Token: token}, func(err error) { a.mu.Lock(); delete(a.voices, token); a.mu.Unlock(); done(err) })
+	return a.submit(request{Action: "voice_stop", Token: token}, done)
 }
 func (a *Agent) Move(dx, dy, sx, sy int32) error  { return a.mouse.Move(dx, dy, sx, sy) }
 func (a *Agent) Button(b string, down bool) error { return a.mouse.Button(b, down) }
@@ -297,8 +267,6 @@ func (a *Agent) ReleaseAll() {
 	a.mouse.ReleaseAll()
 	a.mu.Lock()
 	a.epoch++
-	a.voices = map[string]bool{}
-	a.held = 0
 	a.mu.Unlock()
 	if err := a.submit(request{Action: "clear"}, func(err error) {
 		if err != nil {

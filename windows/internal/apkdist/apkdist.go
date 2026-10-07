@@ -2,15 +2,15 @@
 
 // Package apkdist 把编译好的 Android 安装包打进接收端，让配对网页可以直接扫码下载。
 //
-// 构建前由 scripts/build-windows.ps1 把 dist\TapDeck-debug.apk 复制成
-// assets\TapDeck.apk；assets 目录里始终保留 README.txt，因此没有 APK 时也能编译
-// （此时网页只显示 GitHub Release 链接）。
+// scripts/build-windows.ps1 先构建 Android，再从该次 Gradle 输出复制 APK 和
+// 版本清单。Verify 在接收端启动前检查完整性，缺少 APK 的构建不能启动接收。
 package apkdist
 
 import (
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"strings"
@@ -21,16 +21,41 @@ import (
 var assets embed.FS
 
 var (
-	once sync.Once
-	name string
-	data []byte
-	sum  string
+	once     sync.Once
+	name     string
+	data     []byte
+	sum      string
+	metadata Metadata
 )
+
+type Metadata struct {
+	VersionName string `json:"version_name"`
+	VersionCode int    `json:"version_code"`
+	SHA256      string `json:"sha256"`
+}
 
 func load() {
 	once.Do(func() {
 		name, data, sum = scan(assets)
+		if b, err := assets.ReadFile("assets/apk.json"); err == nil {
+			_ = json.Unmarshal(b, &metadata)
+		}
 	})
+}
+
+func Version() string  { load(); return metadata.VersionName }
+func VersionCode() int { load(); return metadata.VersionCode }
+func Verify() error {
+	load()
+	return verify(data, metadata)
+}
+
+func verify(body []byte, meta Metadata) error {
+	h := sha256.Sum256(body)
+	if len(body) == 0 || meta.VersionName == "" || meta.VersionCode <= 0 || meta.SHA256 != hex.EncodeToString(h[:]) {
+		return fmt.Errorf("内置 APK 或版本清单无效，请用 scripts/build-windows.ps1 重新构建")
+	}
+	return nil
 }
 
 // scan 找出目录里第一个 *.apk；没有则返回空值。

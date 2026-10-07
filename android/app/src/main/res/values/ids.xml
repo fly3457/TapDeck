@@ -1,0 +1,8 @@
+<resources>
+    <item name="touchpad_sensitivity_button" type="id" />
+    <item name="controller_regions" type="id" />
+    <item name="connection_header" type="id" />
+    <item name="control_panel" type="id" />
+    <item name="shortcut_region" type="id" />
+    <item name="keyboard_region" type="id" />
+</resources>

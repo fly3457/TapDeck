@@ -64,10 +64,12 @@ class KeyHoldTest {
 
     @Test
     fun holdKeyStaysDownWhilePressed() {
-        hold.holdDown("LeftAlt")
-        assertEquals(listOf("down LeftAlt"), events)
-        hold.holdUp("LeftAlt")
-        assertEquals(listOf("down LeftAlt", "up LeftAlt"), events)
+        hold.holdDown("LeftCtrl")
+        assertEquals(listOf("down LeftCtrl"), events)
+        hold.dualShort("C")
+        assertEquals(listOf("down LeftCtrl", "down C", "up C"), events)
+        hold.holdUp("LeftCtrl")
+        assertEquals(listOf("down LeftCtrl", "down C", "up C", "up LeftCtrl"), events)
     }
 
     @Test

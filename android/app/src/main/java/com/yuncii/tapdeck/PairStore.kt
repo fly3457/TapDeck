@@ -12,11 +12,9 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import kotlinx.coroutines.flow.first
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 
 private val Context.dataStore by preferencesDataStore("tapdeck")
-@Serializable data class Peer(val host: String, val wssPort: Int, val httpPort: Int, val pin: String, val name: String = "电脑", val token: String = "")
 class PairStore(private val context: Context) {
     private val peerKey = stringPreferencesKey("protected_peer")
     private val idKey = stringPreferencesKey("device_id")
@@ -24,6 +22,8 @@ class PairStore(private val context: Context) {
     private val ballY = floatPreferencesKey("voice_ball_y")
     private val voiceModeKey = stringPreferencesKey("voice_mode")
     private val keyboardKey = booleanPreferencesKey("keyboard_mode")
+    private val sensitivityKey = doublePreferencesKey("touchpad_sensitivity_multiplier")
+    private val hapticsKey = booleanPreferencesKey("key_haptics")
     private fun key(): SecretKey {
         val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         (ks.getKey("tapdeck-pair", null) as? SecretKey)?.let { return it }
@@ -57,5 +57,15 @@ class PairStore(private val context: Context) {
 
     suspend fun saveKeyboardMode(on: Boolean) {
         context.dataStore.edit { it[keyboardKey] = on }
+    }
+
+    suspend fun loadInputSettings(): DeviceInputSettings {
+        val p = context.dataStore.data.first()
+        return DeviceInputSettings(p[sensitivityKey] ?: 1.0, p[hapticsKey] ?: true).normalized()
+    }
+
+    suspend fun saveInputSettings(settings: DeviceInputSettings) {
+        val value = settings.normalized()
+        context.dataStore.edit { it[sensitivityKey] = value.sensitivity; it[hapticsKey] = value.haptics }
     }
 }

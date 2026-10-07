@@ -1,22 +1,34 @@
 # TapDeck control protocol v2
 
-Control is JSON over pinned WSS `/ws`; native clients only. HTTP `/pair` and `/api/pair-info` are bootstrap endpoints and never expose the QR secret, device token, or UDP keys.
+Control is JSON over pinned WSS `/ws`; native clients only. HTTP `/pair` and `/api/pair-info` are bootstrap endpoints and never expose device tokens or UDP keys. The PC QR contains the HTTP `/pair` URL, used to install/open the Android app.
 
 ## Pairing and session
 
 HTTP metadata and health return `version=2`; pairing links carry `v=2`. A version mismatch returns `error` with `code=version_mismatch` and an upgrade reason, then closes the socket. Android also checks metadata when restoring saved peers, and stops automatic retry on an incompatible version. TLS identity and existing credentials remain valid across this upgrade.
 
-`hello`: `version=2`, `device_id`, `name`, `token`, `client_nonce` (32 random bytes, Base64URL), optional scanned `secret`.
-`pair_challenge`: server nonce, request ID, code and `qr_verified`. Code is the first 16 bytes of SHA-256(`tapdeck-pair-v1` + raw SPKI SHA-256 + client nonce + server nonce), displayed as eight groups of four uppercase hex digits.
-`pair_confirm`: matching `code`. URL clients also require approval in the PC window. Requests expire after 120 seconds. HTTP-derived pins remain provisional until both sides approve. QR secrets are one-use and valid for 120 seconds.
-`ready`: session ID (16 hex characters), optional new device token, PC configuration, UDP port, two independent AES-256-GCM keys and four-byte nonce prefixes (Base64URL).
+`hello`: `version=2`, `device_id`, `name`, `token`, `client_nonce` (32 random bytes, Base64URL). Legacy `secret` fields are accepted syntactically and ignored; they never authorize pairing.
+`pair_challenge`: server nonce, request ID, code and legacy `qr_verified=false`. Code is the first 16 bytes of SHA-256(`tapdeck-pair-v1` + raw SPKI SHA-256 + client nonce + server nonce), displayed as eight groups of four uppercase hex digits.
+`pair_confirm`: legacy matching `code`; accepted and ignored for compatibility. Every first pairing requires PC approval after code comparison. Requests expire after 120 seconds. Existing valid tokens can reconnect without another approval.
+`ready`: session ID (16 hex characters), optional new device token, PC configuration, UDP port, two independent AES-256-GCM keys and four-byte nonce prefixes (Base64URL). Windows 0.3.3 adds optional `features` (`touchpad_zoom`, `three_finger`) and `double_click_ms` (actual Windows setting). Missing capabilities disable only the new gestures; Android then shows an upgrade notice when attempted. Missing/invalid double-click time defaults to 500 ms. Old clients can ignore these fields; the version stays 2.
 
-Every connection receives new keys. Android uses Keystore-protected persistence; Windows hashes tokens and protects its persistent TLS identity with DPAPI. Unpairing closes the session and removes credentials.
+Since 0.3.4, PC configuration retains `sensitivity` fixed at `2.0` for older clients. Android 0.3.4 applies a local, per-device multiplier (0.5–3.0, default 1.0) to that baseline before encoding cumulative mouse movement. PC config updates do not overwrite it. The setting does not scale scroll/zoom or gesture thresholds and adds no wire fields; haptic feedback is also a local preference.
+
+Android 0.3.5 changes the local feedback backend and exposes its switch/test in the phone's connection and device settings. PC only displays the location of that switch; vibration requests and their state are never sent over the control protocol.
+
+Every connection receives new keys. Android uses Keystore-protected persistence; Windows hashes tokens and protects its persistent TLS identity with DPAPI. Per-device unpairing persists the removal before closing only that device's sessions, invalidates pending approvals and rechecks authorization before admitting racing sessions. A persistence failure leaves the original authorization active.
+
+`error` with `code=pairing_revoked` precedes revocation closure and is also returned for invalid saved tokens. Android 0.3 clears the matching computer credential, stops automatic retry, and requires a new user connection followed by PC approval. Legacy clients may ignore this error but cannot reuse the token. The local device-list API exposes only IDs, names, times and online state; the v2 pairing store backs up legacy records to `paired.v1.bak`.
+
+Keyboard queues, held keys, mouse-button references and voice tokens belong to a session. Disconnect/unpair cancels that session's queued/executing actions and releases its inputs; global release is reserved for stopping the receiver or exiting. The audio engine admits one recording at a time and uses an internal recording ID distinct from the client wire ID; push, stop and abort all check ownership. There is no multi-device mixing.
 
 ## Reliable controls
 
 `heartbeat` echoes client monotonic `tick`; send every 250 ms, disconnect after 1 second without inbound controls. Clock values are used for RTT, not cross-host one-way subtraction.
 `mouse_button`: button (`left`, `right`, `middle`), `down`, old `epoch`, `next_epoch`, cumulative `x/y/scroll_x/scroll_y`. PC flushes the old totals, applies the button, advances epoch, then applies any buffered new-epoch movement. Totals continue across epochs.
+
+`zoom`: nonzero integer `steps` from -4 to +4 (positive enlarges), plus the same `epoch`, `next_epoch`, cumulative `x/y/scroll_x/scroll_y` barrier. `gesture`: `action` is strictly `up` or `down`, with that barrier. Both are reliable WSS controls. The PC settles preceding movement/scroll, accepts an owner-scoped worker action and advances the epoch; late old-epoch packets are ignored. Queue/admission failure closes the session rather than leaving client/server epochs divergent. Larger Android zoom bursts are split into consecutive messages.
+
+Zoom sends Ctrl-down, vertical wheel (`steps × 120`) and Ctrl-up as one SendInput batch, adding/removing Ctrl only if it was not already held. All input backends share modifier ownership. Alt/Shift/Win conflict with zoom; any modifier conflicts with window shortcuts. Worker execution failures return `error` with `code=touchpad_error` and a user-facing reason. Queued/executing gestures are canceled by owner revocation or disconnect, without clearing other sessions' held keys or voice actions. The worker globally tracks normal windows / desktop / Task View, reconciled by native foreground and visibility events; three-finger operations are Win+D, Win+Tab and Esc.
 `shortcut`: zero-based `slot` and `revision`; a stale revision resynchronizes configuration without executing the key.
 `mic_start`: unique hexadecimal `recording` and `mode` (`hold` or `toggle`); server responds `mic_ready` or `mic_error`. The server snapshots that mode and its keys when accepting the start. Client begins capture only after ready and only while the recording is still requested and the app is foreground. A late ready after cancellation is aborted. `mic_stop` drains at most 60 ms; the configured stop delay applies to voice hotkeys. `mic_abort` drops buffered audio immediately. `mic_stopped` ends the recording lifecycle.
 `config`: PC-owned configuration with `schema_version=2`, `revision`, exactly eight shortcut slots (`label`, `chord`, `enabled`), `voice`, sensitivity and scroll direction. One to eight slots must be enabled. `shortcut.slot` remains the original zero-based slot 0–7, not the filtered UI position; disabled slots and stale revisions do not inject keys.

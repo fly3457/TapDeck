@@ -6,3 +6,6 @@
 *.exe binary
 *.apk binary
 *.zip binary
+
+# Keep the upstream VB-CABLE readme bytes, including its original CRLF and spacing.
+windows/internal/vbcable/assets/LICENSE.VB-CABLE.txt -text

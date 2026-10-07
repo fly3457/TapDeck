@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"fmt"
+	"html"
 	"net/http"
 	"time"
 
@@ -14,10 +15,13 @@ const ReleaseURL = "https://github.com/fly3457/TapDeck/releases"
 
 // SetAPK 注入内置的 Android 安装包（内容、建议文件名与 SHA-256）。
 // 未注入时配对网页只显示 Release 链接。
-func (s *Server) SetAPK(name string, data []byte, sum string) {
+func (s *Server) SetAPK(name string, data []byte, sum string, version ...string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.apkName, s.apkData, s.apkSHA = name, data, sum
+	if len(version) > 0 {
+		s.apkVersion = version[0]
+	}
 }
 
 func (s *Server) apkInfo() (string, []byte, string) {
@@ -82,13 +86,12 @@ func (s *Server) apkSection(r *http.Request) string {
 		name = "TapDeck.apk"
 	}
 	size := fmt.Sprintf("%.1f MB", float64(len(data))/(1024*1024))
-	short := sum
-	if len(short) > 16 {
-		short = short[:16]
-	}
+	s.mu.Lock()
+	version := s.apkVersion
+	s.mu.Unlock()
 	return `<h2>下载 Android 端</h2>` +
 		`<img class="qr" src="/apk/qr.png" alt="APK 下载二维码" width="220" height="220">` +
-		`<p>用手机扫码下载 <code>` + name + `</code>（` + size + `），或点下面的按钮直接下载。</p>` +
-		`<a href="/apk" download>` + name + `（` + size + `）</a>` +
-		`<p class="hint">下载地址：` + s.apkURL(r) + `<br>SHA-256 前 16 位：` + short + `<br>安装时若提示「未知来源」，请在系统提示里允许本次安装。</p>`
+		`<p>首次使用请下载安装；安装完成后返回本页打开 TapDeck 连接。</p>` +
+		`<a href="/apk" download>下载 Android APK · ` + html.EscapeString(version) + `（` + size + `）</a>` +
+		`<p class="hint">文件：` + html.EscapeString(name) + `<br>下载地址：` + html.EscapeString(s.apkURL(r)) + `<br>SHA-256：` + html.EscapeString(sum) + `<br>安装时若提示「未知来源」，请按系统提示允许本次安装。</p>`
 }

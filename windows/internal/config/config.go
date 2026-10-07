@@ -11,6 +11,10 @@ import (
 const SchemaVersion = 2
 const ShortcutCount = 8
 
+// The former PC sensitivity of 2 is now the Android device's 1x baseline.
+// Keep the v2 field fixed for clients that still read the PC configuration.
+const PointerBaseSensitivity = 2.0
+
 type Shortcut struct {
 	Label   string `json:"label"`
 	Chord   string `json:"chord"`
@@ -41,7 +45,7 @@ func Default() Config {
 	return Config{SchemaVersion: SchemaVersion, Revision: 1, HTTPPort: 41080, WSSPort: 41443, UDPPort: 41444,
 		Shortcuts: []Shortcut{{"复制", "Ctrl+C", true}, {"粘贴", "Ctrl+V", true}, {"撤销", "Ctrl+Z", true}, {"回车", "Enter", true},
 			{"快捷键 5", "", false}, {"快捷键 6", "", false}, {"快捷键 7", "", false}, {"快捷键 8", "", false}},
-		Voice: Voice{StopDelayMS: 200}, Gain: 1, Sensitivity: 1.5, NaturalScroll: true, KeyboardBackend: "auto"}
+		Voice: Voice{StopDelayMS: 200}, Gain: 1, Sensitivity: PointerBaseSensitivity, NaturalScroll: true, KeyboardBackend: "auto"}
 }
 func Directory() string { return filepath.Join(os.Getenv("LOCALAPPDATA"), "TapDeck") }
 func Load(dir string) (Config, error) {
@@ -56,6 +60,7 @@ func Load(dir string) (Config, error) {
 	if e = json.Unmarshal(b, &c); e != nil {
 		return c, e
 	}
+	c.Sensitivity = PointerBaseSensitivity
 	var old struct {
 		SchemaVersion int                                `json:"schema_version"`
 		Voice         struct{ Mode, Start, Stop string } `json:"voice"`
@@ -144,6 +149,7 @@ func (c Config) Validate() error {
 	return nil
 }
 func Save(dir string, c Config) error {
+	c.Sensitivity = PointerBaseSensitivity
 	if e := c.Validate(); e != nil {
 		return e
 	}

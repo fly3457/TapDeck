@@ -29,5 +29,4 @@ class ProtocolTest {
         assertEquals(8, restored.shortcuts.size)
     }
     @Test(expected = IllegalArgumentException::class) fun emptyEnabledShortcutsRejected() { PcConfig(shortcuts = List(8) { Shortcut("A", "F1", false) }).validate() }
-    @Test fun regionsFillEntireScreen() { assertEquals(1f, Regions.CONNECTION + Regions.TOUCHPAD + Regions.SHORTCUTS + Regions.MICROPHONE, 0.00001f) }
 }

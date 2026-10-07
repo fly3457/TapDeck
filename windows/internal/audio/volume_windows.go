@@ -4,6 +4,7 @@ package audio
 
 import (
 	"fmt"
+	"runtime"
 	"sync"
 	"unsafe"
 
@@ -32,130 +33,131 @@ const (
 	slotStepDown        = 18
 )
 
-// VolumeControl changes the volume and mute state of the default render
-// endpoint (the first active render device, which is the one Windows uses).
+// VolumeControl resolves the current Windows default console playback endpoint
+// for each operation. Enumeration order and TapDeck's CABLE output are unrelated
+// to the speaker/headphone volume controlled by the system volume keys.
 type VolumeControl struct {
-	mu    sync.Mutex
-	ready bool
-	vol   *com
+	mu       sync.Mutex
+	closed   bool
+	endpoint func(func(*com) error) error
 }
 
 // NewVolumeControl activates IAudioEndpointVolume on the default render
 // endpoint. A nil result means volume keys cannot be served on this machine.
 func NewVolumeControl() (*VolumeControl, error) {
-	// S_FALSE 只表示本线程已经初始化过 COM，go-ole 会把它当成错误返回；
-	// 这种情况下接口依然可用，所以不在此处直接失败。
-	_ = ole.CoInitializeEx(0, ole.COINIT_MULTITHREADED)
+	v := &VolumeControl{endpoint: withDefaultVolume}
+	if _, _, err := v.StepInfo(); err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
+// COM creation, use and release stay on one initialized MTA thread. In
+// particular, no interface is cached across Go goroutines or device switches.
+func withDefaultVolume(action func(*com) error) error {
+	done := make(chan error, 1)
+	go func() {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		if err := ole.CoInitializeEx(0, ole.COINIT_MULTITHREADED); err != nil {
+			if code, ok := err.(*ole.OleError); !ok || code.Code() != 1 { // S_FALSE is also successful.
+				done <- fmt.Errorf("初始化音量控制: %w", err)
+				return
+			}
+		}
+		defer ole.CoUninitialize()
+		done <- onDefaultVolume(action)
+	}()
+	return <-done
+}
+
+func onDefaultVolume(action func(*com) error) error {
 	e, err := enumerator()
 	if err != nil {
-		return nil, fmt.Errorf("创建音频枚举器: %w", err)
+		return fmt.Errorf("创建音频枚举器: %w", err)
 	}
 	defer release(e)
-	var coll *com
-	if err := call(e, 3, 0, 1, uintptr(unsafe.Pointer(&coll))); err != nil {
-		return nil, fmt.Errorf("EnumAudioEndpoints: %w", err)
+	vol, err := defaultVolume(e)
+	if err != nil {
+		return err
 	}
-	defer release(coll)
-	var n uint32
-	if err := call(coll, 3, uintptr(unsafe.Pointer(&n))); err != nil {
-		return nil, fmt.Errorf("GetCount: %w", err)
-	}
-	if n == 0 {
-		return nil, fmt.Errorf("没有可用的播放设备")
-	}
+	defer release(vol)
+	return action(vol)
+}
+
+func defaultVolume(e *com) (*com, error) {
 	var dev *com
-	if err := call(coll, 4, 0, uintptr(unsafe.Pointer(&dev))); err != nil {
-		return nil, fmt.Errorf("取默认播放设备失败: %w", err)
+	// IMMDeviceEnumerator::GetDefaultAudioEndpoint(eRender, eConsole).
+	if err := call(e, 4, 0, 0, uintptr(unsafe.Pointer(&dev))); err != nil {
+		return nil, fmt.Errorf("取系统默认播放设备失败: %w", err)
 	}
 	defer release(dev)
 	var vol *com
 	if err := call(dev, 3, uintptr(unsafe.Pointer(volumeIID)), 1, 0, uintptr(unsafe.Pointer(&vol))); err != nil {
 		return nil, fmt.Errorf("Activate IAudioEndpointVolume: %w", err)
 	}
-	return &VolumeControl{ready: true, vol: vol}, nil
+	return vol, nil
+}
+
+func (v *VolumeControl) apply(action func(*com) error) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.closed {
+		return fmt.Errorf("音量控制不可用")
+	}
+	return v.endpoint(action)
 }
 
 // Step raises or lowers the master volume by one system step.
 func (v *VolumeControl) Step(up bool) error {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	if !v.ready {
-		return fmt.Errorf("音量控制不可用")
-	}
 	slot := slotStepDown
 	if up {
 		slot = slotStepUp
 	}
-	return call(v.vol, slot, 0)
+	return v.apply(func(vol *com) error { return call(vol, slot, 0) })
 }
 
 // ToggleMute flips the master mute state.
 func (v *VolumeControl) ToggleMute() error {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	if !v.ready {
-		return fmt.Errorf("音量控制不可用")
-	}
-	var muted int32
-	if err := call(v.vol, slotGetMute, uintptr(unsafe.Pointer(&muted))); err != nil {
-		return err
-	}
-	next := int32(1)
-	if muted != 0 {
-		next = 0
-	}
-	return call(v.vol, slotSetMute, uintptr(next), 0)
+	return v.apply(func(vol *com) error {
+		var muted int32
+		if err := call(vol, slotGetMute, uintptr(unsafe.Pointer(&muted))); err != nil {
+			return err
+		}
+		next := int32(1)
+		if muted != 0 {
+			next = 0
+		}
+		return call(vol, slotSetMute, uintptr(next), 0)
+	})
 }
 
-// Close releases the COM interface.
+// Close stops accepting volume operations; every operation releases its own COM interface.
 func (v *VolumeControl) Close() {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if v.vol != nil {
-		release(v.vol)
-		v.vol = nil
-	}
-	v.ready = false
+	v.closed = true
 }
 
 // Mute reports the current mute state; used by diagnostics and tests.
 func (v *VolumeControl) Mute() (bool, error) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	if !v.ready {
-		return false, fmt.Errorf("音量控制不可用")
-	}
 	var muted int32
-	if err := call(v.vol, slotGetMute, uintptr(unsafe.Pointer(&muted))); err != nil {
-		return false, err
-	}
-	return muted != 0, nil
+	err := v.apply(func(vol *com) error { return call(vol, slotGetMute, uintptr(unsafe.Pointer(&muted))) })
+	return muted != 0, err
 }
 
 // Level reports the current master volume scalar.
 func (v *VolumeControl) Level() (float32, error) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	if !v.ready {
-		return 0, fmt.Errorf("音量控制不可用")
-	}
 	var level float32
-	if err := call(v.vol, slotGetVolumeScalar, uintptr(unsafe.Pointer(&level))); err != nil {
-		return 0, err
-	}
-	return level, nil
+	err := v.apply(func(vol *com) error { return call(vol, slotGetVolumeScalar, uintptr(unsafe.Pointer(&level))) })
+	return level, err
 }
 
 // StepInfo reports the current step index and the total number of steps.
 func (v *VolumeControl) StepInfo() (uint32, uint32, error) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	if !v.ready {
-		return 0, 0, fmt.Errorf("音量控制不可用")
-	}
 	var step, count uint32
-	if err := call(v.vol, slotGetStepInfo, uintptr(unsafe.Pointer(&step)), uintptr(unsafe.Pointer(&count))); err != nil {
-		return 0, 0, err
-	}
-	return step, count, nil
+	err := v.apply(func(vol *com) error {
+		return call(vol, slotGetStepInfo, uintptr(unsafe.Pointer(&step)), uintptr(unsafe.Pointer(&count)))
+	})
+	return step, count, err
 }

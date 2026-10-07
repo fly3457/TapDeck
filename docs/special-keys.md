@@ -1,6 +1,16 @@
 # 特殊按键：支持范围与音量键实现（2026-10-07）
 
-本次处理“后退键 / ESC 键保存不了、音量加减键不能保存”的问题。根因、修复与实测如下。
+本页记录特殊键的名称统一与音量实现。0.3.2 进一步修复“音量加减可以保存，但系统音量不变”：此前选择了枚举列表的第一个播放设备，而不是 Windows 默认播放设备。
+
+## 0.3.2：跟随系统默认播放设备
+
+音量加、减、静音每次操作都通过 `IMMDeviceEnumerator.GetDefaultAudioEndpoint(eRender, eConsole)` 取得当前默认播放设备；不使用枚举顺序，也不使用 TapDeck 语音输出所选的 CABLE Input。更换默认扬声器或耳机后，下一次操作跟随新的默认设备。COM 创建、调用与释放在同一条已初始化的线程完成，不缓存跨线程的设备接口。
+
+音量键在自动、HID、SendInput 三种发送方式下都走 Core Audio。HID 的支持检查跳过音量键，其他按键仍使用原有后端；已经按住的 HID 修饰键不会因音量操作被提前释放。失败的音量操作会恢复持有计数，避免残留 Ctrl 等修饰键，下一次按下可以重试。
+
+本机第一枚举设备与系统默认播放设备确实不同。使用独立的 Core Audio 读取核验新版软件输入控制器：`VolumeUp` 将默认音量从 `0.3310` 调到 `0.3600`，`VolumeDown` 调到 `0.3400`；其他端点的音量与静音均未变化。测试后精确恢复默认音量 `0.3310` 和全部原静音状态。日志为 `.tools/ui-validation/volume-0.3.2-verification.log`。此项验证了 Windows 控制器；新版手机到接收端的完整操作由用户真机验收。
+
+单测覆盖默认设备选择及切换、设备临时消失后恢复、COM 引用释放、三种后端的音量路由、HID 修饰键持有，以及音量失败后的重试与清理。接口说明见 [Microsoft GetDefaultAudioEndpoint](https://learn.microsoft.com/en-us/windows/desktop/api/Mmdeviceapi/nf-mmdeviceapi-immdeviceenumerator-getdefaultaudioendpoint)。更新该修复需要退出旧托盘程序并运行 `dist/0.3.2/TapDeck.exe`。
 
 ## 0. 快捷键的按下语义（同日追加）
 
@@ -8,9 +18,9 @@
 
 - 手指按下 → 手机发送 `shortcut_hold_start`（带 `slot`、`revision`、唯一 `hold` 编号）→ PC 保持组合键按下。
 - 手指抬起 → 发送 `shortcut_hold_stop`（带同一个 `hold` 编号）→ PC 释放该组合键。
-- 因此轻点＝一次完整的按下 / 抬起，按住＝组合键持续按下（Windows 会按键重复，方向键、音量键等都会连续生效）。
+- 因此轻点＝一次完整的按下 / 抬起，按住＝组合键持续按下（Windows 会按键重复，方向键、退格等会连续生效；音量每次按下只执行一步，需松手再按）。
 - 录制（单击语音输入）进行中按下任意快捷键时只结束录音，这一次不发送按键；开始录音时手机也会撤销仍按住的键。
-- 会话断开、心跳超时、解除配对时 PC 调用 `ReleaseAll()` 释放所有按键；重复的 `hold_start`（同一编号）不会重复按下，未知编号的 `hold_stop` 被忽略。
+- 会话断开、心跳超时、单设备解绑时 PC 取消并释放该会话持有的动作和按键，保留其他设备的按键。全局 `ReleaseAll()` 用于停止接收和退出；重复的 `hold_start`（同一编号）不会重复按下，未知编号的 `hold_stop` 被忽略。
 
 实现位置：Android `MainActivity.ShortcutHold` + `Modifier.shortcutPress`（按钮自身不处理点击，避免消费抬手事件）、`TapClient.shortcutHoldStart/shortcutHoldStop`；PC `internal/server` 的 `shortcut_hold_start` / `shortcut_hold_stop` 分支与 `session.holds`、`internal/keyboard` 的 `HoldAsync`（`hold_async` / `hold_up` 消息）。单测：`internal/server/keyboard_test.go` 的 `TestShortcutHoldPressesAndReleases`。
 
@@ -48,9 +58,9 @@ TapDeck 里按键有两条链路：设置页“录入”对话框写入的文本
 
 单元测试：`internal/input/keys_windows_test.go`（全表往返、历史别名、非法键拒绝）与 `cmd/tapdeck/walk_key_test.go`（录入门槛：backspace / esc / 音量键等必须记录成可解析名称）。
 
-## 3. 音量键：不能注入，改用 Core Audio
+## 3. 历史音量实现：本机注入无效，改用 Core Audio
 
-音量加减与静音**无法**通过注入按键实现。本机对 `VK_VOLUME_MUTE` 逐一实测了六种 SendInput 编码：
+本机音量加减与静音通过注入按键没有效果，曾对 `VK_VOLUME_MUTE` 逐一实测六种 SendInput 编码：
 
 | 编码 | 结果 |
 |---|---|
@@ -61,13 +71,13 @@ TapDeck 里按键有两条链路：设置页“录入”对话框写入的文本
 | 虚拟键码 + 扫描码 | 系统音量不变 |
 | 虚拟键码 + 扫描码 + 扩展标记 | 系统音量不变 |
 
-`SendInput` 均返回成功，但系统不会执行音量动作（Windows 忽略注入的音量 / 媒体键）。因此 TapDeck 改为在软件发送路径上拦截音量键，直接调用 Core Audio 的 `IAudioEndpointVolume`（`internal/audio/volume_windows.go`），与系统音量面板使用同一套接口：
+`SendInput` 均返回成功，但本机系统没有执行音量动作。因此 TapDeck 改为在软件发送路径上拦截音量键，直接调用 Core Audio 的 `IAudioEndpointVolume`（`internal/audio/volume_windows.go`），与系统音量面板使用同一套接口：
 
 - 音量加 / 减用 `VolumeStepUp` / `VolumeStepDown`，与系统音量键的步进一致。
 - 静音用 `SetMute` / `GetMute` 翻转。
 - 不使用 `SetMasterVolumeLevelScalar`：它要求按 x64 ABI 在 XMM1 传 float，Go 的 `syscall` 无法传浮点参数（实测返回 `E_INVALIDARG`）。
 - 接口槽位由本机实测确认：9 `GetMasterVolumeLevelScalar`、14 `SetMute`、15 `GetMute`、16 `GetVolumeStepInfo`、17 `VolumeStepUp`、18 `VolumeStepDown`。
-- 按住不放时只执行一次音量动作，松手后再次触发才继续调整；关闭虚拟声卡或没有播放设备时给出明确错误，不再发一个系统会忽略的按键。
+- 按住不放时只执行一次音量动作，松手后再次触发才继续调整；没有 Windows 默认播放设备时给出明确错误。是否启用 CABLE 不影响其他默认扬声器或耳机的音量控制。
 
 实测（`internal/audio/volume_windows_test.go`）：默认播放设备的音量在 `Step(true)` 后上升、`Step(false)` 后下降，静音状态可翻转并还原；测试结束恢复原状态。
 
@@ -87,7 +97,14 @@ go test ./...            # 含按键表、录入名称、音量路由与 Core Au
 go vet ./...
 ```
 
-音量与静音验证需要本机存在播放设备；没有设备时 `NewVolumeControl` 返回“没有可用的播放设备”，音量键会明确报错而不是静默失效。
+音量与静音验证需要本机存在默认播放设备；没有设备时 `NewVolumeControl` 返回“取系统默认播放设备失败”，音量键会明确报错而不是静默失效。
+
+可用以下诊断命令验证一次加减（会改变当前默认播放设备音量）：
+
+```powershell
+go run ./cmd/volkeycheck -chord VolumeUp
+go run ./cmd/volkeycheck -chord VolumeDown
+```
 
 观察「手机按键到底有没有到 PC」可以用 `cmd/keywatch`（轮询 `GetAsyncKeyState`，只报真实按下 / 抬起，与焦点窗口、输入法无关）：
 

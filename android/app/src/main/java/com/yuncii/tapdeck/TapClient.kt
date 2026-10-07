@@ -4,6 +4,7 @@ import android.app.Application
 import android.os.Build
 import android.os.SystemClock
 import android.util.Log
+import android.widget.Toast
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -16,6 +17,8 @@ import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,7 +26,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.serialization.json.*
 import okhttp3.*
 
-data class ClientState(val status: String = "未连接", val peerName: String = "TapDeck", val connected: Boolean = false, val pairing: String = "", val pairingConfirmed: Boolean = false, val config: PcConfig = PcConfig(), val mic: String = "idle", val micMode: String = "", val level: Float = 0f, val error: String = "", val rttMs: Long = 0)
+data class ClientState(val status: String = "未连接", val peerName: String = "TapDeck", val connected: Boolean = false, val pairing: String = "", val pairingConfirmed: Boolean = false, val config: PcConfig = PcConfig(), val mic: String = "idle", val micMode: String = "", val level: Float = 0f, val error: String = "", val rttMs: Long = 0, val touchpad: TouchpadCapabilities = TouchpadCapabilities())
 class TapClient(private val app: Application, private val scope: CoroutineScope) : TouchSink {
     private companion object {
         /** 自动重连的退避间隔（毫秒），最后一次会一直沿用。 */
@@ -32,8 +35,19 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
         const val IDLE_RETRY_MS = 30000L
     }
     private val store = PairStore(app)
+    private val pairingPersistence = Mutex()
+    private var revokedCredential: Peer? = null
     private val mutable = MutableStateFlow(ClientState())
     val state = mutable.asStateFlow()
+    private val inputPreferences = DeviceInputPreferences(store::loadInputSettings, store::saveInputSettings) { error ->
+        Log.w("TapDeck", "Device input settings could not be saved/loaded", error)
+        mutable.update { it.copy(error = "设备设置读写失败，请重试") }
+    }
+    val inputSettings = inputPreferences.state
+    fun setSensitivity(value: Double) { inputPreferences.update { it.copy(sensitivity = value) } }
+    fun setHaptics(on: Boolean) { inputPreferences.update { it.copy(haptics = on) } }
+    override val doubleClickMs: Int get() = state.value.touchpad.doubleClickMs
+    private var lastTouchpadNotice = -3000L
     private val lock = Any()
     private var socket: WebSocket? = null
     private var udp: DatagramSocket? = null
@@ -125,7 +139,7 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
                 if (wait > 0) { delay(wait); continue }
                 val current = synchronized(lock) { if (!reconnect || attempt != desiredConnection || connected) null else peer }
                 if (current == null) return@launch
-                connect(current, "", attempt)
+                connect(current, attempt)
                 return@launch
             }
         }
@@ -143,25 +157,24 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
                 mutable.update { it.copy(status = "请打开连接页授予局域网权限") }; return
             }
             synchronized(lock) { if (attempt != desiredConnection) return; peer = it; reconnect = true }
-            connect(it, "", attempt)
+            connect(it, attempt)
             // 首次恢复失败（电脑还没开机、Wi-Fi 尚未就绪等）时继续按退避重试。
             synchronized(lock) { if (reconnect && !connected && peer != null) scheduleReconnect() }
         }
     }
-    fun enter(raw: String, scanned: Boolean = false) {
+    fun enter(raw: String) {
         val attempt = synchronized(lock) { ++desiredConnection }
         reconnectJob?.cancel(); reconnect = false; disconnect("正在连接")
         scope.launch(Dispatchers.IO) {
             try {
                 val text = raw.trim()
-                val p: Peer; var secret = ""
+                val p: Peer
                 if (text.startsWith("tapdeck://")) {
                     val u = android.net.Uri.parse(text)
                     require(u.host == "pair") { "无效配对链接" }
                     require(u.getQueryParameter("v")?.toIntOrNull() == CONTROL_VERSION) { "协议版本不匹配，请同时升级 PC 和 Android 至 TapDeck 0.2" }
                     val host = u.getQueryParameter("host") ?: error("缺少地址")
                     p = Peer(host, u.getQueryParameter("wss")?.toIntOrNull() ?: 41443, u.getQueryParameter("http")?.toIntOrNull() ?: 41080, u.getQueryParameter("pin") ?: error("缺少服务器指纹"))
-                    if (scanned) secret = u.getQueryParameter("secret") ?: ""
                 } else {
                     val u = URI(if (text.contains("://")) text else "http://$text")
                     require(u.scheme == "http" && u.host != null && u.userInfo == null) { "请输入 PC 的 http 配对网址" }
@@ -174,13 +187,16 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
                     p = Peer(host, m.long("wss_port").toInt(), port, m.str("pin"), m.str("name", "电脑"))
                 }
                 validateHost(p.host); require(p.pin.matches(Regex("[0-9a-fA-F]{64}"))) { "服务器指纹无效" }; require(p.wssPort in 1024..65535 && p.httpPort in 1024..65535) { "端口无效" }
-                synchronized(lock) { if (attempt != desiredConnection) return@launch; reconnect = true; retryCount = 0; retryAt = 0L; peer = p }
-                connect(p, secret, attempt)
+                val existing = pairingPersistence.withLock { store.load() }
+                val usable = synchronized(lock) { existing?.takeUnless { saved -> revokedCredential?.sameCredential(saved) == true } }
+                val target = p.withCredentialFrom(usable)
+                synchronized(lock) { if (attempt != desiredConnection) return@launch; reconnect = true; retryCount = 0; retryAt = 0L; peer = target }
+                connect(target, attempt)
             } catch (e: Exception) { mutable.update { it.copy(status = "连接失败", error = e.message ?: "连接失败") } }
         }
     }
     private fun validateHost(host: String) { val a = InetAddress.getByName(host); require(a is java.net.Inet4Address && (a.isSiteLocalAddress || a.isLoopbackAddress)) { "原型仅支持局域网 IPv4 地址" } }
-    private suspend fun connect(p: Peer, secret: String, attempt: Long) {
+    private suspend fun connect(p: Peer, attempt: Long) {
         val gen = synchronized(lock) { if (attempt != desiredConnection) return; generation++; generation }
         mutable.update { it.copy(status = "正在连接 ${p.host}", pairing = "", pairingConfirmed = false, error = "") }
         // Check restored peers too: older receivers reject hello silently.
@@ -214,7 +230,7 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
         val ws = client.newWebSocket(Request.Builder().url("wss://${p.host}:${p.wssPort}/ws").build(), object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) {
                 if (synchronized(lock) { gen != generation }) { ws.cancel(); return }
-                sendOn(ws, message("hello", "version" to CONTROL_VERSION.j(), "device_id" to id.j(), "name" to "${Build.MANUFACTURER} ${Build.MODEL}".j(), "token" to p.token.j(), "client_nonce" to encode64(clientNonce).j(), "secret" to secret.j()))
+                sendOn(ws, message("hello", "version" to CONTROL_VERSION.j(), "device_id" to id.j(), "name" to "${Build.MANUFACTURER} ${Build.MODEL}".j(), "token" to p.token.j(), "client_nonce" to encode64(clientNonce).j()))
             }
             override fun onMessage(ws: WebSocket, text: String) {
                 if (synchronized(lock) { gen != generation }) return
@@ -234,6 +250,8 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
                             val saved = p.copy(token = m.str("token").ifEmpty { p.token })
                             val config = wireJson.decodeFromJsonElement<PcConfig>(m["config"]!!).validate()
                             synchronized(lock) {
+                                if (gen != generation || attempt != desiredConnection) return
+                                revokedCredential = null
                                 udp?.close(); udp = DatagramSocket(); target = InetAddress.getByName(p.host); udpPort = m.long("udp_port").toInt()
                                 val session = m.str("session").toULong(16).toLong()
                                 mouseCodec = UdpCodec(decode64(m.str("mouse_key")), decode64(m.str("mouse_prefix")), session, 1)
@@ -242,8 +260,8 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
                                 retryCount = 0; retryAt = 0L; retryNotice = ""
                                 updateWifiLock()
                             }
-                            scope.launch(Dispatchers.IO) { store.save(saved) }
-                            mutable.update { it.copy(status = "已连接", peerName = p.name, connected = true, pairing = "", pairingConfirmed = false, config = config, error = "") }
+                            scope.launch(Dispatchers.IO) { pairingPersistence.withLock { if (synchronized(lock) { gen == generation && attempt == desiredConnection }) store.save(saved) } }
+                            mutable.update { it.copy(status = "已连接", peerName = p.name, connected = true, pairing = "", pairingConfirmed = false, config = config, error = "", touchpad = m.touchpadCapabilities()) }
                             heartbeat?.cancel(); heartbeat = scope.launch(Dispatchers.IO) {
                                 while (isActive && synchronized(lock) { gen == generation && connected }) {
                                     if (SystemClock.elapsedRealtime() - lastResponse >= 1000) {
@@ -268,8 +286,10 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
                         }
                         "mic_stopped" -> synchronized(lock) { if (m.str("recording") == recording) { recording = ""; recordingRequested = false; mutable.update { it.copy(mic = "idle", micMode = "", level = 0f) } } }
                         "error" -> {
+                            if (m.str("code") == "pairing_revoked") { revokePair(gen, m.str("reason")); return }
                             if (m.str("code") == "version_mismatch") reconnect = false
                             mutable.update { it.copy(error = m.str("reason")) }
+                            if (m.str("code") == "touchpad_error") touchpadNotice(m.str("reason"))
                         }
                     }
                 }.onFailure { error -> mutable.update { it.copy(error = error.message ?: "协议错误") }; ws.cancel() }
@@ -285,10 +305,23 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
      * （兼容老接收端）并进入「等待电脑允许连接」。保留此方法以便手动重发。
      */
     fun confirmPair() { val code = mutable.value.pairing; if (code.isNotEmpty()) { send(message("pair_confirm", "code" to code.j())); mutable.update { it.copy(pairingConfirmed = true, status = "等待电脑允许连接") } } }
+    private fun revokePair(gen: Long, reason: String) {
+        val revoked = synchronized(lock) {
+            if (gen != generation) return
+            val old = peer
+            revokedCredential = old
+            desiredConnection++; reconnect = false; retryAt = 0L; retryCount = 0
+            reconnectJob?.cancel(); peer = null
+            old
+        }
+        disconnect("已解除配对")
+        scope.launch { pairingPersistence.withLock { if (revoked != null && store.load()?.sameCredential(revoked) == true) store.clear() } }
+        mutable.update { it.copy(error = reason.ifEmpty { "电脑已解除配对，请重新连接" }) }
+    }
     private fun lost(gen: Long, reason: String) {
         synchronized(lock) { if (gen != generation) return; generation++; connected = false; updateWifiLock(); recordingRequested = false; recording = ""; socket?.cancel(); socket = null; udp?.close(); udp = null }
         recorder.stop(); heartbeat?.cancel()
-        mutable.update { it.copy(connected = false, mic = "idle", micMode = "", level = 0f, status = "连接已断开", error = reason, pairing = "") }
+        mutable.update { it.copy(connected = false, mic = "idle", micMode = "", level = 0f, status = "连接已断开", error = reason, pairing = "", touchpad = TouchpadCapabilities()) }
         synchronized(lock) {
             // 只要还有保存的配对就继续自动重连，不要求已经拿到 token。
             if (reconnect && peer != null) { retryAt = 0; scheduleReconnect() }
@@ -296,18 +329,51 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
     }
     fun disconnect(reason: String = "未连接") {
         stopMic(true); synchronized(lock) { generation++; connected = false; recordingRequested = false; recording = ""; updateWifiLock(); socket?.cancel(); socket = null; udp?.close(); udp = null }
-        heartbeat?.cancel(); mutable.update { it.copy(connected = false, mic = "idle", micMode = "", level = 0f, pairing = "", status = reason) }
+        heartbeat?.cancel(); mutable.update { it.copy(connected = false, mic = "idle", micMode = "", level = 0f, pairing = "", status = reason, touchpad = TouchpadCapabilities()) }
     }
-    fun forget() { synchronized(lock) { desiredConnection++; reconnect = false; retryAt = 0L; retryCount = 0; reconnectJob?.cancel(); peer = null }; disconnect(); scope.launch { store.clear() } }
+    fun forget() { synchronized(lock) { desiredConnection++; reconnect = false; retryAt = 0L; retryCount = 0; reconnectJob?.cancel(); peer = null }; disconnect(); scope.launch { pairingPersistence.withLock { store.clear() } } }
     private fun sendOn(ws: WebSocket, m: JsonObject) = ws.send(m.toString())
     private fun send(m: JsonObject): Boolean = socket?.let { sendOn(it, m) } ?: false
-    override fun move(dx: Double, dy: Double): Unit = synchronized(lock) { if (!connected) return@synchronized; val gain = mutable.value.config.sensitivity; x += (dx * gain * 1024).toLong(); y += (dy * gain * 1024).toLong(); movement.trySend(generation to Movement(epoch, x, y, sx, sy)); Unit }
-    override fun scroll(dx: Double, dy: Double): Unit = synchronized(lock) { if (!connected) return@synchronized; val direction = if (mutable.value.config.natural_scroll) -1 else 1; sx += (dx * 5 * direction * 1024).toLong(); sy += (dy * 5 * direction * 1024).toLong(); movement.trySend(generation to Movement(epoch, x, y, sx, sy)); Unit }
-    override fun button(name: String, down: Boolean) = synchronized(lock) {
-        if (!connected) return@synchronized
-        send(message("mouse_button", "button" to name.j(), "down" to down.j(), "epoch" to epoch.j(), "next_epoch" to (epoch + 1).j(), "x" to x.j(), "y" to y.j(), "scroll_x" to sx.j(), "scroll_y" to sy.j())); epoch++
+    override fun move(dx: Double, dy: Double): Unit = synchronized(lock) { if (!connected) return@synchronized; val gain = inputSettings.value.pointerGain; x += (dx * gain * 1024).toLong(); y += (dy * gain * 1024).toLong(); movement.trySend(generation to Movement(epoch, x, y, sx, sy)); Unit }
+    override fun scroll(dx: Double, dy: Double): Unit = synchronized(lock) { if (!connected) return@synchronized; val units = scrollUnits(dx, dy, mutable.value.config.natural_scroll); sx += units.first; sy += units.second; movement.trySend(generation to Movement(epoch, x, y, sx, sy)); Unit }
+    private fun barrier(type: String, vararg fields: Pair<String, JsonElement>): Boolean {
+        if (!connected) return false
+        if (!send(message(type, *fields, "epoch" to epoch.j(), "next_epoch" to (epoch + 1).j(), "x" to x.j(), "y" to y.j(), "scroll_x" to sx.j(), "scroll_y" to sy.j()))) {
+            lost(generation, "触控指令发送失败"); return false
+        }
+        epoch++
+        return true
     }
-    override fun click(name: String) { button(name, true); button(name, false) }
+    override fun button(name: String, down: Boolean) = synchronized(lock) {
+        barrier("mouse_button", "button" to name.j(), "down" to down.j())
+        Unit
+    }
+    override fun click(name: String): Unit = synchronized(lock) { button(name, true); button(name, false) }
+    private fun touchpadNotice(reason: String) {
+        mutable.update { it.copy(error = reason) }
+        val now = SystemClock.elapsedRealtime()
+        val show = synchronized(lock) { if (now - lastTouchpadNotice < 3000) false else { lastTouchpadNotice = now; true } }
+        if (show) scope.launch(Dispatchers.Main) { Toast.makeText(app, reason, Toast.LENGTH_SHORT).show() }
+    }
+    private fun hasFeature(feature: String): Boolean {
+        if (feature in state.value.touchpad.features) return true
+        touchpadNotice("请将电脑端升级至 TapDeck 0.3.3 或更新版本，以使用双指缩放和三指手势")
+        return false
+    }
+    override fun zoom(steps: Int): Unit = synchronized(lock) {
+        if (!connected || !foreground || steps == 0 || !hasFeature(ZOOM_FEATURE)) return@synchronized
+        var remaining = steps
+        while (remaining != 0) {
+            val batch = remaining.coerceIn(-4, 4)
+            if (!barrier("zoom", "steps" to batch.j())) break
+            remaining -= batch
+        }
+    }
+    override fun gesture(direction: String): Unit = synchronized(lock) {
+        if (!connected || !foreground || direction !in listOf("up", "down") || !hasFeature(GESTURE_FEATURE)) return@synchronized
+        barrier("gesture", "action" to direction.j())
+        Unit
+    }
     fun shortcut(slot: Int) {
         val current = state.value
         if (current.connected && current.config.shortcuts.getOrNull(slot)?.enabled == true)
@@ -371,5 +437,5 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
                 send(message(if (abort) "mic_abort" else "mic_stop", "recording" to id.j()))
         }
     }
-    fun close() { reconnect = false; retryAt = 0L; reconnectJob?.cancel(); networkCallback?.let { runCatching { app.getSystemService(android.net.ConnectivityManager::class.java)?.unregisterNetworkCallback(it) } }; disconnect(); movement.close(); audio.close(); http.dispatcher.executorService.shutdown() }
+    fun close() { inputPreferences.close(); reconnect = false; retryAt = 0L; reconnectJob?.cancel(); networkCallback?.let { runCatching { app.getSystemService(android.net.ConnectivityManager::class.java)?.unregisterNetworkCallback(it) } }; disconnect(); movement.close(); audio.close(); http.dispatcher.executorService.shutdown() }
 }

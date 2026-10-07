@@ -1,11 +1,47 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestPointerBaselineNormalizesOldConfigAndSavedConfig(t *testing.T) {
+	for _, old := range []float64{0.1, 1.5, 2, 5} {
+		t.Run(fmt.Sprint(old), func(t *testing.T) {
+			dir := t.TempDir()
+			c := Default()
+			if c.Sensitivity != PointerBaseSensitivity {
+				t.Fatal("incorrect default baseline")
+			}
+			c.Sensitivity = old
+			c.Shortcuts[0].Label = "自定义复制"
+			b, _ := json.Marshal(c)
+			if err := os.WriteFile(filepath.Join(dir, "config.json"), b, 0600); err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := Load(dir)
+			if err != nil || loaded.Sensitivity != 2 || loaded.Shortcuts[0].Label != c.Shortcuts[0].Label {
+				t.Fatalf("load: %+v, %v", loaded, err)
+			}
+			if err = Save(dir, c); err != nil {
+				t.Fatal(err)
+			}
+			b, err = os.ReadFile(filepath.Join(dir, "config.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = json.Unmarshal(b, &c); err != nil {
+				t.Fatal(err)
+			}
+			if c.Sensitivity != 2 || c.Shortcuts[0].Label != "自定义复制" {
+				t.Fatal("saved baseline or bindings incorrect")
+			}
+		})
+	}
+}
 
 func TestLegacyMigrationPreservesBindingsAndBackup(t *testing.T) {
 	for _, mode := range []string{"mic", "hold", "toggle"} {

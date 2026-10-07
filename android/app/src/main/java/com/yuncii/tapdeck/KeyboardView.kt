@@ -1,11 +1,11 @@
 package com.yuncii.tapdeck
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -13,19 +13,26 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.Constraints
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -37,12 +44,14 @@ private enum class Kind {
     /** Shift：短按单次大写，长按锁定大写。 */
     Shift,
 
-    /** Alt / 退格 / 回车 / Shift+Enter：短按一次，长按真按住、连续触发。 */
+    /** Ctrl / 退格 / 回车 / Shift+Enter：短按一次，长按真按住、连续触发。 */
     Hold,
 
     /** 空格：短按一次空格；长按＝长按语音输入（开始传音并保持 PC 长按热键，松手结束）。 */
     VoiceDual,
 }
+
+private enum class KeyIcon { Shift, Backspace, Enter, ShiftEnter }
 
 /** 键盘上的一个键：主键位（短按）与副键位（长按）。 */
 private data class Key(
@@ -50,25 +59,11 @@ private data class Key(
     val secondary: String = "",
     val mainLabel: String = "",
     val altLabel: String = "",
+    val icon: KeyIcon? = null,
     val kind: Kind = Kind.Dual,
-    /** 特殊键（Shift / 退格 / Alt / Shift+Enter / Enter）用灰底，常规键白底。 */
+    /** 特殊键（Shift / 退格 / Ctrl / Shift+Enter / Enter）用灰底，常规键白底。 */
     val special: Boolean = false,
-    /** 键宽，单位是可用宽度的百分比；常规字母键 8.5%。 */
-    val widthPercent: Float = 8.5f,
 )
-
-/** 键之间的间隙与左右留白，都是可用宽度的百分比。 */
-private const val KEY_GAP_PERCENT = 1.5f
-private const val SIDE_PADDING_PERCENT = 0.75f
-
-/** 常规键（字母 / `.` / 空格）白底，其余特殊键用灰色底。 */
-private val NORMAL_COLOR = Color.White
-private val SPECIAL_COLOR = Color(0xFFCCCCCC)
-private val PRESSED_COLOR = Color(0xFF175CD3)
-private val NORMAL_BORDER = Color(0xFF8B95A5)
-private val SPECIAL_BORDER = Color(0xFF6E6E6E)
-private val LABEL_COLOR = Color(0xFF1F2A37)
-private val ALT_LABEL_COLOR = Color(0xFF4B5563)
 
 /**
  * 全键盘。激活后取代下方的快捷键区与语音区，占据屏幕下半部分。
@@ -77,22 +72,22 @@ private val ALT_LABEL_COLOR = Color(0xFF4B5563)
  * 1 行 副键 `1234567890` / 主键 `qwertyuiop`
  * 2 行 副键 `-/:;()~'"` / 主键 `asdfghjkl`
  * 3 行 副键 `[Shift]@-#&?!…[Backspace]` / 主键 `[Shift]zxcvbnm[Backspace]`
- * 4 行 `[alt]` · `.`（长按 `,`）· `空格` · `[Shift+Enter]` · `[Enter]`
+ * 4 行 `[Ctrl]` · `.`（长按 `,`）· `空格` · `[Shift+Enter]` · `[Enter]`
  *
  * 触发方式：
  * - 双键位键（字母 / 数字 / 符号 / `.`）：短按只发主键位一次，长按只发副键位一次。
  * - Shift：短按单次大写，长按锁定。
- * - 退格 / Alt / 回车 / Shift+Enter：短按一次，长按真按住、由 Windows 连续触发。
+ * - 退格 / Ctrl / 回车 / Shift+Enter：短按一次，长按真按住、由 Windows 连续触发。
  * - 空格：短按一次空格，长按＝长按语音输入（同时开始传音并保持 PC 长按热键，松手结束）。
  *
- * 宽度按屏幕宽度的百分比固定：常规键与 `.` 8.5%、间隙 1.5%、左右各留 0.75%。
- * 1 / 3 / 4 行的总宽正好铺满（3 行的 `[Shift]`、`[Backspace]` 各 13.5%，4 行的 `[alt]`、
- * `[Enter]` 各 18.5%、`[Shift+Enter]` 13.5%、空格 33.5%）；2 行只有 9 键，整行居中。
+ * KeyboardGeometry 统一计算键面边界：常规键 8.9%、间隙与左右留白 1%。
+ * 特殊键保留原网格跨度；第 2 行居中。上下留白复用原生父容器，不重复添加。
  */
 @Composable
 fun KeyboardView(
     connected: Boolean,
     voiceActive: Boolean,
+    scale: Float = 1f,
     hold: KeyHold,
     beginVoice: (String) -> Boolean,
     stopVoice: () -> Unit,
@@ -107,7 +102,7 @@ fun KeyboardView(
         ).map { dual(it) },
         // 3 行：Shift + 副键位符号 + 主键位字母 + 退格
         listOf(
-            Key(KeyHold.SHIFT, mainLabel = "⇧", kind = Kind.Shift, special = true, widthPercent = 13.5f),
+            Key(KeyHold.SHIFT, mainLabel = "Shift", icon = KeyIcon.Shift, kind = Kind.Shift, special = true),
             dual("LeftShift+2|Z"),
             dual("Minus|X"),
             dual("LeftShift+3|C"),
@@ -115,46 +110,41 @@ fun KeyboardView(
             dual("LeftShift+Slash|B"),
             dual("LeftShift+1|N"),
             dual("Ellipsis|M"),
-            Key("Backspace", mainLabel = "⌫", kind = Kind.Hold, special = true, widthPercent = 13.5f),
+            Key("Backspace", mainLabel = "Backspace", icon = KeyIcon.Backspace, kind = Kind.Hold, special = true),
         ),
-        // 4 行：Alt + 「.（长按 ,）」+ 空格（长按语音输入）+ Shift+Enter + 回车
+        // 4 行：Ctrl + 「.（长按 ,）」+ 空格（长按语音输入）+ Shift+Enter + 回车
         // 空格 / 退格 / 回车 / Shift+Enter 长按都是真按住，由 Windows 连续触发；
         // 空格的长按改为长按语音输入。
         listOf(
-            Key("LeftAlt", mainLabel = "Alt", kind = Kind.Hold, special = true, widthPercent = 18.5f),
+            Key("LeftCtrl", mainLabel = "Ctrl", kind = Kind.Hold, special = true),
             dual("Comma|Period"),
-            Key("Space", mainLabel = "空格", altLabel = "🎤", kind = Kind.VoiceDual, widthPercent = 33.5f),
-            Key("LeftShift+Enter", mainLabel = "⇧⏎", kind = Kind.Hold, special = true, widthPercent = 13.5f),
-            Key("Enter", mainLabel = "⏎", kind = Kind.Hold, special = true, widthPercent = 18.5f),
+            Key("Space", mainLabel = "空格", kind = Kind.VoiceDual),
+            Key("LeftShift+Enter", mainLabel = "Shift+Enter", icon = KeyIcon.ShiftEnter, kind = Kind.Hold, special = true),
+            Key("Enter", mainLabel = "Enter", icon = KeyIcon.Enter, kind = Kind.Hold, special = true),
         ),
     )
 
-    Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFFF1F3F6)) {
+    Surface(modifier = Modifier.fillMaxSize(), color = Color(ControllerStyle.PANEL)) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val available = maxWidth
-            val gap = available * (KEY_GAP_PERCENT / 100f)
-            val side = available * (SIDE_PADDING_PERCENT / 100f)
-            Column(
-                Modifier.fillMaxSize().padding(horizontal = side, vertical = side),
-                verticalArrangement = Arrangement.spacedBy(gap),
-            ) {
-                rows.forEach { row ->
-                    Row(
-                        Modifier.weight(1f).fillMaxWidth(),
-                        // 铺满的行居中不受影响；只有 9 键的 2 行会因此整体居中。
-                        horizontalArrangement = Arrangement.spacedBy(gap, Alignment.CenterHorizontally),
-                    ) {
-                        row.forEach { item ->
-                            KeyboardKeyCell(
-                                item = item,
-                                width = available * (item.widthPercent / 100f),
-                                connected = connected,
-                                voiceActive = voiceActive,
-                                hold = hold,
-                                beginVoice = beginVoice,
-                                stopVoice = stopVoice,
-                            )
-                        }
+            Layout(modifier = Modifier.fillMaxSize(), content = {
+                rows.flatten().forEach { item ->
+                    KeyboardKeyCell(
+                        item = item, viewportWidth = available, scale = scale,
+                        connected = connected, voiceActive = voiceActive, hold = hold,
+                        beginVoice = beginVoice, stopVoice = stopVoice,
+                    )
+                }
+            }) { measurables, constraints ->
+                val cells = KeyboardGeometry.measure(constraints.maxWidth, constraints.maxHeight, scale).flatten()
+                check(measurables.size == cells.size) { "Keyboard keys and geometry must match" }
+                val placeables = measurables.mapIndexed { index, measurable ->
+                    val cell = cells[index]
+                    measurable.measure(Constraints.fixed(cell.width, cell.height))
+                }
+                layout(constraints.maxWidth, constraints.maxHeight) {
+                    placeables.forEachIndexed { index, placeable ->
+                        placeable.placeRelative(cells[index].left, cells[index].top)
                     }
                 }
             }
@@ -180,9 +170,9 @@ private fun label(name: String): String = when (name) {
     "Quote" -> "'"
     "Comma" -> ","
     "Period" -> "."
-    "Enter" -> "⏎"
-    "Backspace" -> "⌫"
-    "LeftAlt" -> "Alt"
+    "Enter" -> "Enter"
+    "Backspace" -> "Backspace"
+    "LeftCtrl" -> "Ctrl"
     "LeftShift+1" -> "!"
     "LeftShift+2" -> "@"
     "LeftShift+3" -> "#"
@@ -193,15 +183,16 @@ private fun label(name: String): String = when (name) {
     "LeftShift+Quote" -> "\""
     "LeftShift+Backquote" -> "~"
     "LeftShift+Slash" -> "?"
-    "LeftShift+Enter" -> "⇧⏎"
+    "LeftShift+Enter" -> "Shift+Enter"
     "Ellipsis" -> "…"
     else -> name
 }
 
 @Composable
-private fun RowScope.KeyboardKeyCell(
+private fun KeyboardKeyCell(
     item: Key,
-    width: Dp,
+    viewportWidth: Dp,
+    scale: Float,
     connected: Boolean,
     voiceActive: Boolean,
     hold: KeyHold,
@@ -209,6 +200,7 @@ private fun RowScope.KeyboardKeyCell(
     stopVoice: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val feedback by rememberUpdatedState(LocalKeyFeedback.current)
     // 手指按住时立刻点亮（短按的键值在抬手或长按判定后才发出）。
     var pressed by remember { mutableStateOf(false) }
     val active = pressed || when (item.kind) {
@@ -222,58 +214,83 @@ private fun RowScope.KeyboardKeyCell(
         Kind.VoiceDual -> "空格：短按一次空格，长按等于长按语音输入（按住说话，松手结束）"
         Kind.Hold -> when (item.primary) {
             "Backspace" -> "退格：短按一次，长按连续退格"
-            "LeftAlt" -> "Alt：短按一次，长按连续按住"
+            "LeftCtrl" -> "Ctrl：短按一次，长按连续按住，可配合其他键"
             "LeftShift+Enter" -> "Shift+Enter：短按一次，长按连续换行"
             else -> "回车：短按一次，长按连续回车"
         }
         Kind.Dual -> if (item.altLabel.isEmpty()) "${item.mainLabel} 键"
         else "${item.mainLabel} 键，长按输入 ${item.altLabel}"
     }
-    Surface(
-        modifier = Modifier.width(width).fillMaxHeight()
-            .semantics { contentDescription = description }
-            .keyGesture(item, connected, hold, scope, beginVoice, stopVoice) { pressed = it },
-        shape = MaterialTheme.shapes.small,
-        color = when {
-            active -> PRESSED_COLOR
-            item.special -> SPECIAL_COLOR
-            else -> NORMAL_COLOR
-        },
-        contentColor = if (active) Color.White else LABEL_COLOR,
-        border = BorderStroke(
-            1.dp,
-            when {
-                active -> PRESSED_COLOR
-                item.special -> SPECIAL_BORDER
-                else -> NORMAL_BORDER
-            },
-        ),
+    KeySurface(
+        modifier = Modifier.fillMaxSize()
+            .semantics(mergeDescendants = true) {
+                contentDescription = description
+                role = Role.Button
+                if (!connected) disabled()
+                onClick {
+                    if (!connected) false else {
+                        feedback(KeyFeedback.Press)
+                        when (item.kind) {
+                            Kind.Shift -> hold.tapShift()
+                            Kind.Hold -> hold.tap(item.primary)
+                            Kind.Dual, Kind.VoiceDual -> hold.dualShort(item.primary)
+                        }
+                        true
+                    }
+                }
+            }
+            .keyGesture(item, connected, hold, scope, beginVoice, stopVoice, { feedback(it) }) { pressed = it },
+        viewportWidth = viewportWidth,
+        active = active,
+        special = item.special,
     ) {
+        val unit = viewportWidth * scale
+        val secondaryColor = if (active) Color.White.copy(alpha = 0.9f) else Color(ControllerStyle.SECONDARY)
+        val mainSize = widthFont(viewportWidth, if (item.mainLabel.length == 1) 0.05f else 0.04f, scale)
+        val altSize = widthFont(viewportWidth, 0.028f, scale)
+        // Center the two hints as a group, with a small explicit gap. This keeps
+        // secondary labels off the top edge and close to their primary labels.
         Column(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 2.dp, vertical = 2.dp),
-            verticalArrangement = Arrangement.Center,
+            Modifier.fillMaxSize().padding(horizontal = unit * 0.004f),
+            verticalArrangement = Arrangement.spacedBy(unit * 0.002f, Alignment.CenterVertically),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            if (item.altLabel.isNotEmpty()) {
+            if (item.kind == Kind.VoiceDual) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_lucide_mic_audio_lines),
+                    contentDescription = null,
+                    tint = secondaryColor,
+                    modifier = Modifier.size(unit * 0.035f),
+                )
+            } else if (item.altLabel.isNotEmpty()) {
                 Text(
                     text = item.altLabel,
-                    fontSize = if (item.altLabel.length == 1) 14.sp else 12.sp,
-                    lineHeight = 16.sp,
+                    fontSize = altSize,
+                    lineHeight = altSize * 1.1f,
                     textAlign = TextAlign.Center,
-                    color = if (active) Color.White.copy(alpha = 0.9f) else ALT_LABEL_COLOR,
+                    color = secondaryColor,
                     maxLines = 1,
                     overflow = TextOverflow.Clip,
                 )
             }
-            if (item.mainLabel.isNotEmpty()) {
+            if (item.icon != null) {
+                val icons = when (item.icon) {
+                    KeyIcon.Shift -> listOf(R.drawable.ic_lucide_arrow_big_up)
+                    KeyIcon.Backspace -> listOf(R.drawable.ic_lucide_delete)
+                    KeyIcon.Enter -> listOf(R.drawable.ic_lucide_corner_down_left)
+                    KeyIcon.ShiftEnter -> listOf(R.drawable.ic_lucide_arrow_big_up, R.drawable.ic_lucide_corner_down_left)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(unit * 0.0025f)) {
+                    icons.forEach { resource ->
+                        Icon(painterResource(resource), contentDescription = null,
+                            tint = LocalContentColor.current, modifier = Modifier.size(unit * 0.05f))
+                    }
+                }
+            } else if (item.mainLabel.isNotEmpty()) {
                 Text(
                     text = item.mainLabel,
-                    fontSize = when {
-                        item.mainLabel.length == 1 -> 20.sp
-                        item.mainLabel.length == 2 -> 17.sp
-                        else -> 13.sp
-                    },
-                    lineHeight = 22.sp,
+                    fontSize = mainSize,
+                    lineHeight = mainSize * 1.1f,
                     textAlign = TextAlign.Center,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -291,63 +308,78 @@ private fun Modifier.keyGesture(
     scope: CoroutineScope,
     beginVoice: (String) -> Boolean,
     stopVoice: () -> Unit,
+    feedback: (KeyFeedback) -> Unit,
     onPressed: (Boolean) -> Unit,
 ): Modifier = pointerInput(connected, item.primary, item.secondary, item.kind) {
     if (!connected) return@pointerInput
     awaitEachGesture {
         // 父布局会先消费按下事件，所以这里不要求未消费。
         awaitFirstDown(requireUnconsumed = false)
+        feedback(KeyFeedback.Press)
         onPressed(true)
-        when (item.kind) {
-            // 双键位：判定长按后才发副键位，因此长按不会先冒出一个主键位；
-            // 短按在抬手时发主键位一次，副键位也只发一次、不会连续触发。
-            Kind.Dual -> {
-                var long = false
-                val timer = scope.launch {
-                    delay(KeyHold.LONG_PRESS_MS)
-                    long = true
-                    hold.dualLong(item.secondary)
+        var timer: Job? = null
+        var held = false
+        var talking = false
+        try {
+            when (item.kind) {
+                // 双键位：判定长按后才发副键位，因此长按不会先冒出一个主键位；
+                // 短按在抬手时发主键位一次，副键位也只发一次、不会连续触发。
+                Kind.Dual -> {
+                    var long = false
+                    timer = scope.launch {
+                        delay(KeyHold.LONG_PRESS_MS)
+                        long = true
+                        hold.dualLong(item.secondary)
+                        feedback(KeyFeedback.LongPress)
+                    }
+                    val up = waitForUpOrCancellation()
+                    timer?.cancel()
+                    if (!long && up != null) hold.dualShort(item.primary)
                 }
-                val up = waitForUpOrCancellation()
-                timer.cancel()
-                if (!long && up != null) hold.dualShort(item.primary)
-            }
-            // 空格：短按一次空格；长按开始传音并保持 PC 长按热键，松手结束。
-            Kind.VoiceDual -> {
-                var talking = false
-                val timer = scope.launch {
-                    delay(KeyHold.LONG_PRESS_MS)
-                    talking = beginVoice(MicBallView.MODE_HOLD)
+                // 空格：短按一次空格；长按开始传音并保持 PC 长按热键，松手结束。
+                Kind.VoiceDual -> {
+                    timer = scope.launch {
+                        delay(KeyHold.LONG_PRESS_MS)
+                        talking = beginVoice(MicBallView.MODE_HOLD)
+                        if (talking) feedback(KeyFeedback.LongPress)
+                    }
+                    val up = waitForUpOrCancellation()
+                    timer?.cancel()
+                    if (talking) { stopVoice(); talking = false } else if (up != null) hold.dualShort(item.primary)
                 }
-                val up = waitForUpOrCancellation()
-                timer.cancel()
-                if (talking) stopVoice() else if (up != null) hold.dualShort(item.primary)
-            }
-            // 长按键：短按一次，长按真按住（由 Windows 连续触发）。
-            Kind.Hold -> {
-                var long = false
-                val timer = scope.launch {
-                    delay(KeyHold.LONG_PRESS_MS)
-                    long = true
-                    hold.holdDown(item.primary)
+                // 长按键：短按一次，长按真按住（由 Windows 连续触发）。
+                Kind.Hold -> {
+                    var long = false
+                    timer = scope.launch {
+                        delay(KeyHold.LONG_PRESS_MS)
+                        long = true
+                        held = true
+                        hold.holdDown(item.primary)
+                        feedback(KeyFeedback.LongPress)
+                    }
+                    val up = waitForUpOrCancellation()
+                    timer?.cancel()
+                    if (long) { hold.holdUp(item.primary); held = false } else if (up != null) hold.tap(item.primary)
                 }
-                val up = waitForUpOrCancellation()
-                timer.cancel()
-                if (long) hold.holdUp(item.primary) else if (up != null) hold.tap(item.primary)
-            }
-            // Shift：短按单次大写，长按锁定大写。
-            Kind.Shift -> {
-                var locked = false
-                val timer = scope.launch {
-                    delay(KeyHold.LONG_PRESS_MS)
-                    locked = true
-                    hold.lockShift()
+                // Shift：短按单次大写，长按锁定大写。
+                Kind.Shift -> {
+                    var locked = false
+                    timer = scope.launch {
+                        delay(KeyHold.LONG_PRESS_MS)
+                        locked = true
+                        hold.lockShift()
+                        feedback(KeyFeedback.LongPress)
+                    }
+                    val up = waitForUpOrCancellation()
+                    timer?.cancel()
+                    if (!locked && up != null) hold.tapShift()
                 }
-                val up = waitForUpOrCancellation()
-                timer.cancel()
-                if (!locked && up != null) hold.tapShift()
             }
+        } finally {
+            timer?.cancel()
+            if (held) hold.holdUp(item.primary)
+            if (talking) stopVoice()
+            onPressed(false)
         }
-        onPressed(false)
     }
 }

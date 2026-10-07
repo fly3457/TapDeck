@@ -6,20 +6,24 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.View
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
@@ -28,15 +32,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.ComposeView
@@ -47,19 +54,14 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.journeyapps.barcodescanner.ScanContract
-import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import kotlin.math.min
 
-object Regions { const val CONNECTION = 0.10f; const val TOUCHPAD = 0.40f; const val SHORTCUTS = 0.25f; const val MICROPHONE = 0.25f }
 class TapViewModel(app: Application) : AndroidViewModel(app) {
     val client = TapClient(app, viewModelScope)
     private val store = PairStore(app)
@@ -97,8 +99,12 @@ class MainActivity : ComponentActivity() {
     private var touchpad: TouchpadView? = null
     private var microphone: MicBallView? = null
     private var deferredLink: String? = null
-    private var scannedLink: Boolean = false
     private var settings by mutableStateOf(false)
+    private var sensitivitySettings by mutableStateOf(false)
+    private val feedbackController by lazy { KeyFeedbackController({ vm.client.inputSettings.value.haptics }, AndroidFeedbackBackend(applicationContext)) }
+    private var feedbackAvailability by mutableStateOf(FeedbackResult.Requested)
+    private var feedbackTestMessage by mutableStateOf("")
+    private var pageResumed by mutableStateOf(false)
     private var address by mutableStateOf("http://192.168.1.11:41080/pair")
     /** 语音模式默认长按语音输入；切换入口在语音区的按钮上，状态记在本地。 */
     private val voiceToggle: Boolean get() = vm.voiceMode.value == MicBallView.MODE_TOGGLE
@@ -109,73 +115,93 @@ class MainActivity : ComponentActivity() {
     /** 切换全键盘 / 快捷键+语音两种下半区布局。 */
     private var modeViews: (() -> Unit)? = null
     private val microphonePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (!granted) android.widget.Toast.makeText(this, "麦克风权限未授予，键鼠仍可使用", android.widget.Toast.LENGTH_LONG).show() }
-    private val lanPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) deferredLink?.let { vm.client.enter(it, scannedLink); deferredLink = null } else android.widget.Toast.makeText(this, "需要局域网权限才能连接电脑", android.widget.Toast.LENGTH_LONG).show() }
-    private val scanner = registerForActivityResult(ScanContract()) { result -> result.contents?.let { enter(it, true) } }
-    private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) scan() }
+    private val lanPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) deferredLink?.let { vm.client.enter(it); deferredLink = null } else android.widget.Toast.makeText(this, "需要局域网权限才能连接电脑", android.widget.Toast.LENGTH_LONG).show() }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState); fullscreen()
-        fun compose(content: @Composable () -> Unit) = ComposeView(this).apply {
+        fun compose(compact: Boolean = true, content: @Composable () -> Unit) = ComposeView(this).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            val feedbackView = this
             setContent {
-                MaterialTheme(colorScheme = lightColorScheme(primary = Color(0xFF175CD3), background = Color.White, surface = Color.White)) { content() }
+                CompositionLocalProvider(LocalKeyFeedback provides { kind ->
+                    feedbackView.keyFeedback(kind, feedbackController)
+                }) {
+                    MaterialTheme(colorScheme = lightColorScheme(primary = Color(0xFF175CD3), background = Color.White, surface = Color.White)) {
+                        if (compact) CompactControls(content) else content()
+                    }
+                }
             }
         }
         // One native parent routes simultaneous pointer IDs to different regions.
         // Keeping it outside AndroidView also exposes nested Compose buttons to
         // Android accessibility instead of collapsing the entire screen to one node.
-        val regions = LinearLayout(this).apply {
+        val dimensions = mutableStateOf(ControllerLayout.measure(0, 0))
+        lateinit var headerView: View
+        lateinit var panelView: FrameLayout
+        val regions = object : LinearLayout(this) {
+            override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                val measured = ControllerLayout.measure(MeasureSpec.getSize(widthMeasureSpec), MeasureSpec.getSize(heightMeasureSpec))
+                headerView.layoutParams.height = measured.header
+                panelView.layoutParams.height = measured.panel
+                panelView.setPadding(0, measured.panelPadding, 0, measured.panelPadding)
+                touchpad?.verticalScale = measured.scale
+                microphone?.verticalScale = measured.scale
+                if (dimensions.value != measured) dimensions.value = measured
+                super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+            }
+        }.apply {
+            id = R.id.controller_regions
             orientation = LinearLayout.VERTICAL
             isMotionEventSplittingEnabled = true
             setBackgroundColor(android.graphics.Color.WHITE)
-            fun region(view: android.view.View, weight: Float): android.view.View {
-                addView(view, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, weight))
-                return view
-            }
-            fun fixedRegion(view: android.view.View, fraction: Float): android.view.View {
-                addView(view, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (resources.displayMetrics.heightPixels * fraction).toInt()))
-                return view
-            }
-            // 状态区固定为屏幕高度的 10%；其余区域按权重吃满剩余高度，
-            // 键盘关闭时下半区由触控板(0.40) + 快捷键(0.25) + 语音(0.25) 填满。
-            fixedRegion(compose {
+            headerView = compose {
                 val state by vm.client.state.collectAsStateWithLifecycle()
                 val keyboardOn by vm.keyboardOn.collectAsStateWithLifecycle()
                 ConnectionHeader(
                     state,
                     keyboardOn,
+                    scale = dimensions.value.scale,
+                    reminderEnabled = pageResumed && !settings && !sensitivitySettings && state.pairing.isEmpty() && !state.connected,
                     onKeyboardToggle = { on ->
+                        touchpad?.cancel()
                         vm.setKeyboardOn(on)
                         // 立即切换下半区布局，不必等 onResume。
                         modeViews?.invoke()
                         // 退出全键盘时释放所有按键与修饰键；进入时结束可能正在进行的录音。
                         if (!on) keyHold.releaseAll() else if (vm.client.state.value.mic != "idle") vm.client.stopMic()
                     },
-                    onSettings = { settings = true },
+                    onSettings = { touchpad?.cancel(); feedbackAvailability = feedbackController.availability(); feedbackTestMessage = ""; settings = true },
                 )
-            }, Regions.CONNECTION)
-            region(TouchpadView(context, vm.client).also { touchpad = it }, Regions.TOUCHPAD)
-            // 快捷键区 / 语音区 / 全键盘区共用下半部分：全键盘激活时前两者隐藏，
-            // 键盘权重等于两者之和，因此两种模式下各区域高度一致。
+            }.apply { id = R.id.connection_header }
+            addView(headerView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0))
+            // Only the touchpad has a weight: it fills everything between header and panel.
+            addView(TouchpadView(context, vm.client).also { view ->
+                touchpad = view
+                view.onSensitivitySettings = { view.cancel(); sensitivitySettings = true }
+            },
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
             val shortcutsRegion = compose {
                 val state by vm.client.state.collectAsStateWithLifecycle()
                 ShortcutButtons(
                     state,
                     shortcutHold,
+                    scale = dimensions.value.scale,
                     stopRecording = {
                         // 单击语音输入录音中：按下快捷键先结束录音，这一次不再发送按键。
-                        val active = microphone?.gestureMode == MicBallView.MODE_TOGGLE && state.mic in listOf("preparing", "transmitting")
+                        val active = microphone?.gestureMode == MicBallView.MODE_TOGGLE && vm.client.state.value.mic in listOf("preparing", "transmitting")
                         if (active) vm.client.stopMic()
                         active
                     },
                 )
-            }
+            }.apply { id = R.id.shortcut_region }
             val voiceRegion = MicBallView(context, ::beginMic, vm.client::stopMic, vm::saveBallPosition, vm::setVoiceMode).also { view ->
                 microphone = view
+                view.onFeedback = { view.keyFeedback(it, feedbackController) }
                 view.gestureMode = if (voiceToggle) MicBallView.MODE_TOGGLE else MicBallView.MODE_HOLD
             }
-            val voiceComposite = LinearLayout(context).apply {
+            val ordinaryPanel = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 isMotionEventSplittingEnabled = true
+                addView(shortcutsRegion, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
                 addView(voiceRegion, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
             }
             val keyboardRegion = compose {
@@ -184,33 +210,67 @@ class MainActivity : ComponentActivity() {
                 if (keyboardOn) KeyboardView(
                     connected = state.connected,
                     voiceActive = state.mic == "preparing" || state.mic == "transmitting",
+                    scale = dimensions.value.scale,
                     hold = keyHold,
                     beginVoice = ::beginMic,
                     stopVoice = { vm.client.stopMic() },
                 )
+            }.apply { id = R.id.keyboard_region }
+            panelView = FrameLayout(context).apply {
+                id = R.id.control_panel
+                isMotionEventSplittingEnabled = true
+                setBackgroundColor(ControllerStyle.PANEL)
+                addView(ordinaryPanel, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+                addView(keyboardRegion, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
             }
-            val shortcutsView = region(shortcutsRegion, Regions.SHORTCUTS)
-            val voiceView = region(voiceComposite, Regions.MICROPHONE)
-            val keyboardView = region(keyboardRegion, Regions.SHORTCUTS + Regions.MICROPHONE)
-            // 下半部分只有一组子视图是可见的：键盘区权重等于两个隐藏区域之和，
-            // LinearLayout 按可见子视图的权重归一化，所以两种模式下各区域都吃满高度。
-            // （此前的占位视图也带权重，导致键盘关闭时底部空出约三分之一。）
+            addView(panelView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0))
             modeViews = {
                 val on = vm.keyboardOn.value
-                val hidden = if (on) android.view.View.GONE else android.view.View.VISIBLE
-                shortcutsView.visibility = hidden
-                voiceView.visibility = hidden
-                keyboardView.visibility = if (on) android.view.View.VISIBLE else android.view.View.GONE
+                if (on) shortcutHold.cancelAll()
+                ordinaryPanel.visibility = if (on) View.GONE else View.VISIBLE
+                keyboardRegion.visibility = if (on) View.VISIBLE else View.GONE
             }
             modeViews?.invoke()
         }
-        val dialogs = compose {
+        val dialogs = compose(compact = false) {
             val state by vm.client.state.collectAsStateWithLifecycle()
-            if (settings) AlertDialog(onDismissRequest = { settings = false }, title = { Text("连接电脑") }, text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            val inputSettings by vm.client.inputSettings.collectAsStateWithLifecycle()
+            if (sensitivitySettings) SensitivitySettings(inputSettings, vm.client::setSensitivity) { sensitivitySettings = false }
+            if (settings) AlertDialog(onDismissRequest = { settings = false }, title = { Text("连接与设备设置") }, text = {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("按键震动反馈", Modifier.weight(1f))
+                        Switch(checked = inputSettings.haptics, onCheckedChange = { on ->
+                            vm.client.setHaptics(on)
+                            feedbackTestMessage = ""
+                            if (on) window.decorView.keyFeedback(KeyFeedback.Press, feedbackController)
+                        },
+                            modifier = Modifier.semantics { contentDescription = "按键震动反馈" })
+                    }
+                    Text("控制当前手机的按键震动。", style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = {
+                        feedbackAvailability = feedbackController.availability()
+                        feedbackTestMessage = when (window.decorView.keyFeedback(KeyFeedback.Press, feedbackController)) {
+                            FeedbackResult.Requested -> "已触发测试震动"
+                            FeedbackResult.AppDisabled -> "请先开启按键震动反馈"
+                            FeedbackResult.SystemDisabled -> "手机系统触感反馈已关闭"
+                            FeedbackResult.NoVibrator -> "这台设备没有振动马达"
+                            FeedbackResult.Failed -> "未能触发震动，请检查手机振动设置"
+                        }
+                    }) { Text("测试震动") }
+                    if (feedbackTestMessage.isNotEmpty()) Text(feedbackTestMessage, style = MaterialTheme.typography.bodySmall)
+                    if (feedbackAvailability == FeedbackResult.SystemDisabled && feedbackTestMessage != "手机系统触感反馈已关闭") {
+                        Text("手机系统触感反馈已关闭", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    } else if (feedbackAvailability == FeedbackResult.NoVibrator && feedbackTestMessage != "这台设备没有振动马达") {
+                        Text("这台设备没有振动马达", style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (feedbackAvailability != FeedbackResult.NoVibrator) TextButton(onClick = {
+                        runCatching { startActivity(Intent(android.provider.Settings.ACTION_SOUND_SETTINGS)) }
+                            .onFailure { feedbackTestMessage = "请在手机系统设置中打开声音与振动" }
+                    }) { Text("手机系统振动设置") }
+                    HorizontalDivider()
                     Text("输入 PC 设置窗口显示的配对网址，或粘贴完整配对信息。")
                     OutlinedTextField(value = address, onValueChange = { address = it }, label = { Text("PC 配对网址") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
-                    if (packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) TextButton(onClick = { if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) scan() else cameraPermission.launch(Manifest.permission.CAMERA) }) { Text("扫描电脑二维码") }
                     if (state.connected) TextButton(onClick = { vm.client.forget() }) { Text("忘记当前电脑") }
                 }
             }, confirmButton = { TextButton(onClick = { enter(address); settings = false }) { Text("连接") } }, dismissButton = { TextButton(onClick = { settings = false }) { Text("关闭") } })
@@ -218,10 +278,11 @@ class MainActivity : ComponentActivity() {
         }
         val root = FrameLayout(this).apply {
             isMotionEventSplittingEnabled = true
-            // 系统状态栏的留白放在最外层：四个区域的高度仍然严格按比例分配。
+            // Native regions are measured inside these system-bar/cutout safe insets.
             setOnApplyWindowInsetsListener { view, insets ->
-                val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-                val cutout = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
+                val safe = WindowInsetsCompat.toWindowInsetsCompat(insets, view)
+                val bars = safe.getInsets(WindowInsetsCompat.Type.systemBars())
+                val cutout = safe.getInsets(WindowInsetsCompat.Type.displayCutout())
                 view.setPadding(maxOf(bars.left, cutout.left), maxOf(bars.top, cutout.top), maxOf(bars.right, cutout.right), maxOf(bars.bottom, cutout.bottom))
                 insets
             }
@@ -262,11 +323,10 @@ class MainActivity : ComponentActivity() {
             show(WindowInsetsCompat.Type.systemBars())
         }
     }
-    private fun enter(link: String, scanned: Boolean = false) {
+    private fun enter(link: String) {
         val permission = "android.permission.ACCESS_LOCAL_NETWORK"
-        if (Build.VERSION.SDK_INT >= 37 && applicationInfo.targetSdkVersion >= 37 && checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) { deferredLink = link; scannedLink = scanned; lanPermission.launch(permission) } else vm.client.enter(link, scanned)
+        if (Build.VERSION.SDK_INT >= 37 && applicationInfo.targetSdkVersion >= 37 && checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) { deferredLink = link; lanPermission.launch(permission) } else vm.client.enter(link)
     }
-    private fun scan() { scanner.launch(ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE).setPrompt("扫描 TapDeck 电脑端二维码").setBeepEnabled(false).setOrientationLocked(true)) }
     private fun beginMic(mode: String): Boolean {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             android.util.Log.i("TapDeck", "beginMic $mode：未授予麦克风权限")
@@ -278,88 +338,158 @@ class MainActivity : ComponentActivity() {
         return started
     }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); intent.data?.let { enter(it.toString()) } }
-    override fun onResume() { super.onResume(); fullscreen(); modeViews?.invoke() }
+    override fun onResume() {
+        super.onResume(); pageResumed = true; fullscreen(); modeViews?.invoke()
+        if (settings) { feedbackAvailability = feedbackController.availability(); feedbackTestMessage = "" }
+    }
+    override fun onPause() { pageResumed = false; super.onPause() }
     override fun onStart() { super.onStart(); vm.client.setForeground(true) }
     override fun onStop() { touchpad?.cancel(); microphone?.cancel(); vm.client.stopMic(true); vm.client.setForeground(false); super.onStop() }
+}
+
+@Composable private fun SensitivitySettings(settings: DeviceInputSettings, change: (Double) -> Unit, close: () -> Unit) {
+    AlertDialog(onDismissRequest = close, title = { Text("触控板灵敏度") }, text = {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("1.0× 为默认速度，仅影响鼠标移动。")
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Slider(value = settings.sensitivity.toFloat(), onValueChange = { change(it.toDouble()) },
+                    valueRange = DeviceInputSettings.MIN.toFloat()..DeviceInputSettings.MAX.toFloat(), steps = 24,
+                    modifier = Modifier.weight(1f).semantics { contentDescription = "触控板灵敏度滑块" })
+                Spacer(Modifier.width(12.dp))
+                Text(settings.sensitivityLabel, modifier = Modifier.width(52.dp))
+            }
+        }
+    }, confirmButton = { TextButton(onClick = close) { Text("完成") } },
+        dismissButton = { TextButton(onClick = { change(1.0) }) { Text("恢复 1.0×") } })
 }
 
 @Composable private fun ConnectionHeader(
     state: ClientState,
     keyboardOn: Boolean,
+    scale: Float,
+    reminderEnabled: Boolean,
     onKeyboardToggle: (Boolean) -> Unit,
     onSettings: () -> Unit,
 ) {
+    val feedback = LocalKeyFeedback.current
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val scale = LocalDensity.current.fontScale
-        // 状态区固定 10%：内容压成单行，避免两行文字把区域撑高、挤掉下面的区域。
-        val titleSize = min(18f, maxHeight.value * 0.30f / scale).sp
-        val iconBox = (30f.coerceAtMost(maxHeight.value * 0.66f)).dp
+        val width = maxWidth
+        val titleSize = widthFont(width, 0.032f, scale)
+        val iconSize = width * (0.055f * scale)
+        val jump = remember { Animatable(0f) }
+        val amplitude = with(LocalDensity.current) { (width * (ConnectionReminder.AMPLITUDE * scale)).toPx() }
+        LaunchedEffect(reminderEnabled) {
+            jump.snapTo(0f)
+            if (reminderEnabled) ConnectionReminder.run { target, duration ->
+                jump.animateTo(target, tween(durationMillis = duration, easing = FastOutSlowInEasing))
+            }
+        }
         Row(
-            Modifier.fillMaxSize().padding(start = 12.dp, end = 8.dp),
+            Modifier.fillMaxSize().background(Color.White).padding(start = width * 0.02f, end = width * 0.01f),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 text = if (state.error.isNotEmpty()) "${state.peerName} · ${state.error}"
-                else "${state.peerName} · ${state.status} · RTT ${state.rttMs} ms",
+                else if (state.connected) "${state.peerName} · ${state.status} · RTT ${state.rttMs} ms"
+                else "${state.peerName} · ${state.status}",
                 modifier = Modifier.weight(1f),
+                color = Color(ControllerStyle.LABEL),
                 fontSize = titleSize, lineHeight = titleSize * 1.2f, maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
-            // 全键盘开关：Lucide keyboard 图标按钮，未激活 #AAA、激活 #000。
-            IconButton(
-                onClick = { onKeyboardToggle(!keyboardOn) },
-                modifier = Modifier.size(iconBox).semantics {
-                    contentDescription = if (keyboardOn) "全键盘已激活，点击返回快捷键与语音输入" else "切换到全键盘"
-                },
+            // Explicit click bounds avoid Material's minimum size enlarging a 0.10W header.
+            Box(
+                Modifier.width(width * 0.10f).fillMaxHeight()
+                    .clip(RoundedCornerShape(width * ControllerStyle.CORNER))
+                    .clickable(role = Role.Button) { feedback(KeyFeedback.Press); onKeyboardToggle(!keyboardOn) }
+                    .semantics { contentDescription = if (keyboardOn) "全键盘已激活，点击返回快捷键与语音输入" else "切换到全键盘" },
+                contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     painter = painterResource(R.drawable.ic_lucide_keyboard),
                     contentDescription = null,
                     tint = if (keyboardOn) Color(0xFF000000) else Color(0xFFAAAAAA),
-                    modifier = Modifier.size(iconBox * 0.8f),
+                    modifier = Modifier.size(iconSize),
                 )
             }
-            Spacer(Modifier.width(6.dp))
-            TextButton(onClick = onSettings, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("连接", fontSize = titleSize, lineHeight = titleSize * 1.2f) }
+            Spacer(Modifier.width(width * 0.01f))
+            Box(
+                Modifier.width(width * 0.10f).fillMaxHeight()
+                    .clip(RoundedCornerShape(width * ControllerStyle.CORNER))
+                    .clickable(role = Role.Button, onClick = onSettings)
+                    .semantics { contentDescription = "连接设置与手机震动设置，${if (state.connected) "已连接" else "未连接"}" },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_lucide_plug),
+                    contentDescription = null,
+                    tint = Color(if (state.connected) ControllerStyle.CONNECTED else ControllerStyle.DISCONNECTED),
+                    modifier = Modifier.size(iconSize).graphicsLayer {
+                        translationY = if (reminderEnabled) jump.value * amplitude else 0f
+                    },
+                )
+            }
         }
     }
 }
 
-@Composable private fun ShortcutButtons(state: ClientState, hold: ShortcutHold, stopRecording: () -> Boolean) {
+@Composable internal fun ShortcutButtons(state: ClientState, hold: ShortcutHold, scale: Float, stopRecording: () -> Boolean) {
+    val feedback by rememberUpdatedState(LocalKeyFeedback.current)
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val visible = state.config.visibleShortcuts()
         val rows = if (visible.size > 4) 2 else 1
         val columns = if (rows == 2) 4 else visible.size.coerceAtLeast(1)
-        val scale = LocalDensity.current.fontScale
-        val cellWidth = (maxWidth.value - 8f - (columns - 1) * 4f) / columns
-        val cellHeight = (maxHeight.value - 8f - (rows - 1) * 4f) / rows
-        val titleSize = min(17f, min(cellWidth * 0.26f, cellHeight * 0.30f) / scale).sp
-        val chordSize = min(10f, min(cellWidth * 0.17f, cellHeight * 0.22f) / scale).sp
-        Column(Modifier.fillMaxSize().padding(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        val width = maxWidth
+        val side = width * ControllerStyle.SIDE
+        val gap = width * ControllerStyle.GAP
+        val rowGap = gap * scale
+        val cellWidth = (width.value - side.value * 2 - (columns - 1) * gap.value) / columns
+        val cellHeight = (maxHeight.value - rowGap.value * rows) / rows
+        val titleSize = with(LocalDensity.current) {
+            min(width.value * 0.035f * scale, min(cellWidth * 0.26f, cellHeight * 0.32f)).coerceAtLeast(0f).dp.toSp()
+        }
+        val chordSize = with(LocalDensity.current) {
+            min(width.value * 0.022f * scale, min(cellWidth * 0.17f, cellHeight * 0.22f)).coerceAtLeast(0f).dp.toSp()
+        }
+        Column(Modifier.fillMaxSize().background(Color(ControllerStyle.PANEL)).padding(start = side, end = side, bottom = rowGap),
+            verticalArrangement = Arrangement.spacedBy(rowGap)) {
             repeat(rows) { row ->
-                Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap)) {
                     repeat(columns) { column ->
                         val item = visible.getOrNull(row * columns + column)
                         if (item == null) Spacer(Modifier.weight(1f).fillMaxHeight())
-                        else Box(
-                            Modifier.weight(1f).fillMaxHeight()
-                                .semantics { contentDescription = "快捷键 ${item.index + 1}：${item.value.label}" }
-                                .shortcutPress(state.connected, item.index, hold, stopRecording),
-                        ) {
-                            // 自绘按钮外观：不用 Button，避免它消费抬手事件而收不到释放。
-                            Surface(
-                                modifier = Modifier.fillMaxSize(),
-                                shape = MaterialTheme.shapes.small,
-                                color = MaterialTheme.colorScheme.surface,
-                                contentColor = MaterialTheme.colorScheme.primary,
-                                border = BorderStroke(1.dp, if (state.connected) MaterialTheme.colorScheme.primary else Color(0xFFCBD5E1)),
+                        else {
+                            var pressed by remember(state.connected, item.index) { mutableStateOf(false) }
+                            Box(
+                                Modifier.weight(1f).fillMaxHeight()
+                                    .semantics(mergeDescendants = true) {
+                                        contentDescription = "快捷键 ${item.index + 1}：${item.value.label}"
+                                        role = Role.Button
+                                        if (!state.connected) disabled()
+                                        onClick {
+                                            if (!state.connected) false else {
+                                                feedback(KeyFeedback.Press)
+                                                hold.press(item.index, stopRecording())
+                                                hold.release(item.index)
+                                                true
+                                            }
+                                        }
+                                    }
+                                    .shortcutPress(state.connected, item.index, hold, stopRecording, { feedback(it) }) { pressed = it },
                             ) {
-                                Column(
-                                    modifier = Modifier.fillMaxSize().padding(3.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.Center,
+                                // 自绘按钮外观：不用 Button，避免它消费抬手事件而收不到释放。
+                                KeySurface(
+                                    modifier = Modifier.fillMaxSize(),
+                                    viewportWidth = width,
+                                    active = pressed,
                                 ) {
-                                    Text(item.value.label, fontSize = titleSize, lineHeight = titleSize * 1.25f, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Text(item.value.chord, fontSize = chordSize, lineHeight = chordSize * 1.25f, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Column(
+                                        modifier = Modifier.fillMaxSize().padding(width * (0.005f * scale)),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.Center,
+                                    ) {
+                                        Text(item.value.label, color = if (pressed) Color.White else Color(ControllerStyle.LABEL).copy(alpha = if (state.connected) 1f else 0.55f), fontSize = titleSize, lineHeight = titleSize * 1.2f, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(item.value.chord, color = if (pressed) Color.White.copy(alpha = 0.9f) else Color(ControllerStyle.SECONDARY), fontSize = chordSize, lineHeight = chordSize * 1.2f, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }
                                 }
                             }
                         }
@@ -407,13 +537,21 @@ private fun Modifier.shortcutPress(
     slot: Int,
     hold: ShortcutHold,
     stopRecording: () -> Boolean,
+    feedback: (KeyFeedback) -> Unit,
+    onPressed: (Boolean) -> Unit,
 ): Modifier = pointerInput(connected, slot) {
     awaitEachGesture {
         awaitFirstDown(requireUnconsumed = false)
         if (!connected) return@awaitEachGesture
-        val wasRecording = stopRecording()
-        hold.press(slot, wasRecording)
-        waitForUpOrCancellation()
-        hold.release(slot)
+        try {
+            feedback(KeyFeedback.Press)
+            val wasRecording = stopRecording()
+            onPressed(!wasRecording)
+            hold.press(slot, wasRecording)
+            waitForUpOrCancellation()
+        } finally {
+            hold.release(slot)
+            onPressed(false)
+        }
     }
 }

@@ -93,6 +93,43 @@ func TestSharedModifierAcrossHIDAndUnsupportedFallback(t *testing.T) {
 		t.Fatal("aliases failed to release")
 	}
 }
+
+func TestVolumeKeysUseSoftwareControllerInEveryKeyboardMode(t *testing.T) {
+	for _, mode := range []string{"auto", "hid", "sendinput"} {
+		t.Run(mode, func(t *testing.T) {
+			e, soft, reports := fixture()
+			e.mode = mode
+			for _, chord := range []string{"VolumeUp", "VolumeDown", "VolumeMute"} {
+				if err := Validate(chord, mode); err != nil {
+					t.Fatal("volume action rejected by HID validation", err)
+				}
+				if err := pulse(context.Background(), e, chord); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if len(*reports) != 0 || len(soft.down) != 3 || len(soft.up) != 3 || len(e.owners) != 0 {
+				t.Fatal("volume action entered HID or leaked held state", *reports, soft)
+			}
+		})
+	}
+}
+
+func TestVolumeShortcutLeavesHIDHeldModifierUntouched(t *testing.T) {
+	e, soft, reports := fixture()
+	e.mode = "hid"
+	if err := e.Hold("LeftCtrl+C", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := pulse(context.Background(), e, "Ctrl+VolumeUp"); err != nil {
+		t.Fatal(err)
+	}
+	if len(*reports) != 1 || e.hidKeys[0xA2] != 1 || e.hidKeys['C'] != 1 || len(soft.down) != 1 || soft.down[0] != 0xAF {
+		t.Fatal("volume shortcut changed the HID-held keys", *reports, soft)
+	}
+	if err := e.Hold("LeftCtrl+C", false); err != nil {
+		t.Fatal(err)
+	}
+}
 func TestReverseBackendReferenceOwnership(t *testing.T) {
 	e, s, _ := fixture()
 	if err := e.Hold("Ctrl+F24", true); err != nil {

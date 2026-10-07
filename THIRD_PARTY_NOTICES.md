@@ -16,6 +16,7 @@ TapDeck 自有源码采用根目录 [MIT License](LICENSE)。第三方组件保�
 | [govaluate](https://github.com/Knetic/govaluate) | 3.0.0 | MIT | [LICENSE](licenses/govaluate-LICENSE.txt) |
 | [rsrc](https://github.com/akavel/rsrc)，构建资源工具 | 0.10.2 | MIT | [LICENSE](licenses/rsrc-LICENSE.txt) |
 | [FakerInput](https://github.com/Ryochan7/FakerInput/releases/tag/v0.1.1)，内嵌驱动安装包 | 0.1.1 x64 | MIT | [LICENSE](windows/internal/driver/assets/LICENSE.FakerInput.txt)、[分发副本](licenses/FakerInput-LICENSE.txt) |
+| [VB-CABLE](https://vb-audio.com/Cable/)，内嵌完整官方原包 | Driver Pack45 | VB-Audio donationware / 专有许可 | [原包 readme](windows/internal/vbcable/assets/LICENSE.VB-CABLE.txt)、[官方分发条件](https://vb-audio.com/Services/licensing.htm) |
 
 内嵌 MSI 是未修改的上游签名安装包；来源、发布者及 SHA-256 记录在 `windows/internal/driver/assets/manifest.json`。HID 客户端依据公开的报告格式使用 Go 实现，接口参考 [FakerInputDll](https://github.com/Ryochan7/FakerInputDll)，不分发其源码或客户端 DLL。上游已归档，当前版本固定使用。
 
@@ -32,7 +33,6 @@ TapDeck 自有源码采用根目录 [MIT License](LICENSE)。第三方组件保�
 | kotlinx.coroutines | 1.10.2 | [Coroutines](https://github.com/Kotlin/kotlinx.coroutines) |
 | kotlinx.serialization | 1.9.0 | [Serialization](https://github.com/Kotlin/kotlinx.serialization) |
 | OkHttp 与其 Okio 依赖 | OkHttp 5.5.0 | [OkHttp](https://github.com/square/okhttp)、[Okio](https://github.com/square/okio) |
-| ZXing Android Embedded 与 ZXing Core | Embedded 4.3.0 | [Embedded](https://github.com/journeyapps/zxing-android-embedded)、[Core](https://github.com/zxing/zxing) |
 | Gradle Wrapper | 9.3.1 | [Gradle](https://github.com/gradle/gradle) |
 | Android Gradle Plugin，外部构建工具 | 9.1.1 | [Android Tools](https://android.googlesource.com/platform/tools/base/) |
 
@@ -40,8 +40,18 @@ DataStore 的 `androidx.datastore:datastore-preferences-external-protobuf:1.1.7`
 
 Gradle Wrapper 的原始版权和许可头保留在 `android/gradlew` 与 `android/gradlew.bat` 中。测试工具 JUnit 4（EPL-1.0）、Hamcrest（BSD）及 AndroidX Test 不属于主 APK 的运行依赖，由依赖管理器获取。
 
-## 单独安装的软件
+## Lucide 图标
 
-[VB-CABLE](https://vb-audio.com/Cable/) 是用户单独安装的外部虚拟声卡，按其官方条款使用，本仓库和交付包不包含 VB-CABLE 安装文件。豆包输入法等语音识别应用同样由用户单独安装，不随 TapDeck 分发。
+Android 使用 Lucide 的 `keyboard`、`mic-audio-lines`、`mic-signal`、`plug`、`arrow-big-up`、`corner-down-left`、`delete` 和 `sliders-horizontal` 矢量图标；Shift+Enter 组合 `arrow-big-up` 与 `corner-down-left`。图标适用 ISC 许可及其原始版权声明。完整上游原文（含 Feather 来源附录）保留在 [Lucide-LICENSE.txt](licenses/Lucide-LICENSE.txt)，同一份声明也随 APK 的 `assets/Lucide-LICENSE.txt` 分发。
+
+## VB-CABLE 原包与分发
+
+VB-CABLE 的作者和来源是 **VB-Audio / Vincent Burel**，官网 [vb-audio.com](https://vb-audio.com/Cable/)。它是 **donationware**，欢迎通过[官方捐赠 / 购买页面](https://vb-audio.com/Services/licensing.htm)支持作者。TapDeck 的 MIT 许可证不适用于 VB-CABLE。
+
+单 EXE 内嵌未修改的 `VBCABLE_Driver_Pack45.zip`，来源、大小与 SHA-256 见 [manifest.json](windows/internal/vbcable/assets/manifest.json)。解包保留全部文件及原始 `readme.txt`，由用户打开官方安装向导。语音页提供来源、donationware 说明、原文许可和捐赠入口。[官方分发条款](https://vb-audio.com/Services/licensing.htm)允许按其说明将基础 VB-CABLE 包随其他应用分发，须保留来源、donationware 说明和参与捐赠的入口；本轮用途为个人及公开发布。企业部署应按该页面的相应许可方案处理。
+
+原包 readme 中关于作者授权的限制原文保留；公开分发以官网当前分发条件为依据。安装需要管理员授权并按[官方安装说明](https://vb-audio.com/Cable/VBCABLE_ReferenceManual.pdf)重启 Windows。TapDeck 不修改驱动、不添加自签名证书、不更改默认麦克风。
+
+豆包输入法等语音识别应用由用户单独安装，不随 TapDeck 分发。
 
 分发 TapDeck 时，请同时保留项目 LICENSE、本文及 `licenses/` 下对应声明。交付 ZIP 已包含这些文件；内嵌 FakerInput MSI 的许可证也保留在 Windows EXE 内。

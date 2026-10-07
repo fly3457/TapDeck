@@ -56,6 +56,7 @@ func (a *manualAudio) End(_ uint64, _ time.Duration, done func()) {
 	a.mu.Unlock()
 }
 func (*manualAudio) Abort()                      {}
+func (*manualAudio) AbortRecording(uint64)       {}
 func (*manualAudio) Run(ctx context.Context)     { <-ctx.Done() }
 func (*manualAudio) Push(uint64, uint64, []byte) {}
 func (*manualAudio) BufferStats() (int, int)     { return 0, 0 }

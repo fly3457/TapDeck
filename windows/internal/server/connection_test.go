@@ -15,13 +15,22 @@ import (
 	"time"
 )
 
-type quietInput struct{ releases atomic.Int64 }
+type quietInput struct{ releases, held atomic.Int64 }
 
 func (*quietInput) Move(int32, int32, int32, int32) error { return nil }
 func (*quietInput) Button(string, bool) error             { return nil }
 func (*quietInput) Chord(string) error                    { return nil }
-func (*quietInput) Hold(string, bool) error               { return nil }
-func (q *quietInput) ReleaseAll()                         { q.releases.Add(1) }
+func (q *quietInput) Hold(k string, down bool) error {
+	if k != "" {
+		if down {
+			q.held.Add(1)
+		} else {
+			q.held.Add(-1)
+		}
+	}
+	return nil
+}
+func (q *quietInput) ReleaseAll() { q.releases.Add(1) }
 
 func testReceiver(t *testing.T, configure ...func(*Server)) (*Server, *http.Client) {
 	t.Helper()
@@ -147,17 +156,26 @@ func TestPairReconnectAndRevoke(t *testing.T) {
 	if err := s.Unpair(); err != nil {
 		t.Fatal(err)
 	}
+	revoked := testRead(t, ctx2, second)
+	if stringField(revoked, "code") != "pairing_revoked" {
+		t.Fatal("missing revocation notice")
+	}
 	if _, _, err := second.Read(ctx2); err == nil {
 		t.Fatal("revoked connection survived")
 	}
 	third, ctx3 := testSocket(t, s, client, token)
-	challenge := testRead(t, ctx3, third)
-	if stringField(challenge, "type") != "pair_challenge" {
+	invalid := testRead(t, ctx3, third)
+	if stringField(invalid, "code") != "pairing_revoked" {
 		t.Fatal("revoked credential accepted")
 	}
-	_ = write(ctx3, third, Message{Type: "pair_confirm", Code: stringField(challenge, "code")})
+	fourth, ctx4 := testSocket(t, s, client, "")
+	challenge := testRead(t, ctx4, fourth)
+	if stringField(challenge, "type") != "pair_challenge" {
+		t.Fatal("new pairing skipped confirmation")
+	}
+	_ = write(ctx4, fourth, Message{Type: "pair_confirm", Code: stringField(challenge, "code")})
 	s.Approve(stringField(challenge, "request_id"), false)
-	if _, _, err := third.Read(ctx3); err == nil {
+	if _, _, err := fourth.Read(ctx4); err == nil {
 		t.Fatal("rejected pair remained open")
 	}
 }
@@ -200,17 +218,20 @@ func TestHeartbeatTimeoutReleasesInput(t *testing.T) {
 	s, client := testReceiver(t)
 	conn, ctx := testSocket(t, s, client, "")
 	_ = testPair(t, s, conn, ctx)
+	_ = write(ctx, conn, Message{Type: "shortcut_hold_start", Slot: 0, Revision: s.Config().Revision, Hold: "held-before-timeout"})
+	_ = write(ctx, conn, Message{Type: "heartbeat"})
+	testRead(t, ctx, conn)
 	deadline, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if _, _, err := conn.Read(deadline); err == nil {
 		t.Fatal("silent peer was not disconnected")
 	}
-	if s.Input.(*quietInput).releases.Load() == 0 {
+	if s.Input.(*quietInput).held.Load() != 0 {
 		deadline := time.Now().Add(100 * time.Millisecond)
-		for s.Input.(*quietInput).releases.Load() == 0 && time.Now().Before(deadline) {
+		for s.Input.(*quietInput).held.Load() != 0 && time.Now().Before(deadline) {
 			time.Sleep(time.Millisecond)
 		}
-		if s.Input.(*quietInput).releases.Load() == 0 {
+		if s.Input.(*quietInput).held.Load() != 0 {
 			t.Fatal("timeout did not release held inputs")
 		}
 	}
@@ -228,6 +249,9 @@ func TestFailedMouseBarrierDisconnectsAndReleases(t *testing.T) {
 	s.Input = fake
 	conn, ctx := testSocket(t, s, client, "")
 	_ = testPair(t, s, conn, ctx)
+	_ = write(ctx, conn, Message{Type: "shortcut_hold_start", Slot: 0, Revision: s.Config().Revision, Hold: "held-before-failure"})
+	_ = write(ctx, conn, Message{Type: "heartbeat"})
+	testRead(t, ctx, conn)
 	if err := write(ctx, conn, Message{Type: "mouse_button", Button: "left", Down: true, Epoch: 0, NextEpoch: 1}); err != nil {
 		t.Fatal(err)
 	}
@@ -239,10 +263,10 @@ func TestFailedMouseBarrierDisconnectsAndReleases(t *testing.T) {
 		t.Fatal("failed barrier left mismatched peers connected")
 	}
 	deadline := time.Now().Add(100 * time.Millisecond)
-	for fake.releases.Load() == 0 && time.Now().Before(deadline) {
+	for fake.held.Load() != 0 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
-	if fake.releases.Load() == 0 {
+	if fake.held.Load() != 0 {
 		t.Fatal("failed input did not release held keys")
 	}
 }

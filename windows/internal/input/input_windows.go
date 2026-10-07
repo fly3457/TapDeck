@@ -25,6 +25,7 @@ type nativeInput struct {
 	Pad2  uint32
 	Extra uintptr
 }
+
 // Volume 由 Core Audio 实现（见 internal/audio）。音量 / 媒体键无法通过注入
 // 按键实现：本机实测 SendInput 的六种编码都不会让 Windows 改变音量。
 type Volume interface {
@@ -53,8 +54,8 @@ func (c *Controller) SetVolume(v Volume) {
 	c.volume = v
 }
 
-// volumeKey reports whether the key is served by Core Audio instead of injection.
-func volumeKey(k uint16) bool { return k == 0xAD || k == 0xAE || k == 0xAF }
+// IsVolumeKey reports whether the key is served by Core Audio instead of injection.
+func IsVolumeKey(k uint16) bool { return k == 0xAD || k == 0xAE || k == 0xAF }
 
 // applyVolume runs the volume action for a freshly pressed volume key.
 func (c *Controller) applyVolume(k uint16) error {
@@ -64,16 +65,19 @@ func (c *Controller) applyVolume(k uint16) error {
 	if c.volumeDone[k] {
 		return nil
 	}
-	c.volumeDone[k] = true
+	var err error
 	switch k {
 	case 0xAD:
-		return c.volume.ToggleMute()
+		err = c.volume.ToggleMute()
 	case 0xAE:
-		return c.volume.Step(false)
+		err = c.volume.Step(false)
 	case 0xAF:
-		return c.volume.Step(true)
+		err = c.volume.Step(true)
 	}
-	return nil
+	if err == nil {
+		c.volumeDone[k] = true
+	}
+	return err
 }
 func send(items ...nativeInput) error {
 	if len(items) == 0 {
@@ -144,7 +148,7 @@ func (c *Controller) Chord(chord string) error {
 	items := []nativeInput{}
 	var volumeErr error
 	for _, k := range keys {
-		if volumeKey(k) {
+		if IsVolumeKey(k) {
 			// 音量键交给 Core Audio，不注入按键。
 			if e := c.applyVolume(k); e != nil && volumeErr == nil {
 				volumeErr = e
@@ -156,7 +160,7 @@ func (c *Controller) Chord(chord string) error {
 		}
 	}
 	for i := len(keys) - 1; i >= 0; i-- {
-		if k := keys[i]; volumeKey(k) {
+		if k := keys[i]; IsVolumeKey(k) {
 			delete(c.volumeDone, k)
 			continue
 		}
@@ -168,7 +172,7 @@ func (c *Controller) Chord(chord string) error {
 		// SendInput may accept only a prefix; release keys owned by this chord.
 		cleanup := []nativeInput{}
 		for i := len(keys) - 1; i >= 0; i-- {
-			if c.keys[keys[i]] == 0 {
+			if c.keys[keys[i]] == 0 && !IsVolumeKey(keys[i]) {
 				cleanup = append(cleanup, keyInput(keys[i], true))
 			}
 		}
@@ -191,11 +195,15 @@ func (c *Controller) HoldKeys(keys []uint16, down bool) error {
 	for k, n := range c.keys {
 		previous[k] = n
 	}
+	previousVolume := map[uint16]bool{}
+	for k, done := range c.volumeDone {
+		previousVolume[k] = done
+	}
 	items := []nativeInput{}
 	var volumeErr error
 	if down {
 		for _, k := range keys {
-			if volumeKey(k) {
+			if IsVolumeKey(k) {
 				// 音量键不注入按键：按住期间只执行一次音量动作。
 				c.keys[k]++
 				if e := c.applyVolume(k); e != nil && volumeErr == nil {
@@ -215,7 +223,7 @@ func (c *Controller) HoldKeys(keys []uint16, down bool) error {
 				c.keys[k]--
 				if c.keys[k] == 0 {
 					delete(c.volumeDone, k)
-					if volumeKey(k) {
+					if IsVolumeKey(k) {
 						continue
 					}
 					items = append(items, keyInput(k, true))
@@ -223,17 +231,24 @@ func (c *Controller) HoldKeys(keys []uint16, down bool) error {
 			}
 		}
 	}
+	if volumeErr != nil {
+		// The engine cannot own a failed press. Keep its software state unchanged
+		// so a later attempt after an endpoint recovers can really execute again.
+		c.keys, c.volumeDone = previous, previousVolume
+		return volumeErr
+	}
 	if e := c.inject(items...); e != nil {
 		cleanup := []nativeInput{}
 		for i := len(keys) - 1; i >= 0; i-- {
 			k := keys[i]
-			if !down || previous[k] == 0 {
+			if (!down || previous[k] == 0) && !IsVolumeKey(k) {
 				cleanup = append(cleanup, keyInput(k, true))
 			}
 		}
 		_ = c.inject(cleanup...)
 		if down {
 			c.keys = previous
+			c.volumeDone = previousVolume
 		}
 		return e
 	}
