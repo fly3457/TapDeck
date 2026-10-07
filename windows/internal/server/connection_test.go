@@ -64,6 +64,12 @@ func testReceiver(t *testing.T, configure ...func(*Server)) (*Server, *http.Clie
 }
 func testSocket(t *testing.T, s *Server, client *http.Client, token string) (*websocket.Conn, context.Context) {
 	t.Helper()
+	return testSocketDevice(t, s, client, token, "integration-device")
+}
+
+// testSocketDevice 用指定设备编号连接：多控制端测试需要不同的设备编号。
+func testSocketDevice(t *testing.T, s *Server, client *http.Client, token, deviceID string) (*websocket.Conn, context.Context) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
 	conn, _, err := websocket.Dial(ctx, fmt.Sprintf("wss://127.0.0.1:%d/ws", s.cfg.WSSPort), &websocket.DialOptions{HTTPClient: client})
@@ -72,7 +78,7 @@ func testSocket(t *testing.T, s *Server, client *http.Client, token string) (*we
 	}
 	t.Cleanup(func() { conn.CloseNow() })
 	nonce := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
-	if err = write(ctx, conn, Message{Type: "hello", Version: ControlVersion, DeviceID: "integration-device", Name: "Test device", Token: token, ClientNonce: nonce}); err != nil {
+	if err = write(ctx, conn, Message{Type: "hello", Version: ControlVersion, DeviceID: deviceID, Name: "Test device", Token: token, ClientNonce: nonce}); err != nil {
 		t.Fatal(err)
 	}
 	return conn, ctx

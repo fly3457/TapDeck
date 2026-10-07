@@ -225,8 +225,10 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
                         "pair_challenge" -> {
                             val code = comparisonCode(p.pin.lowercase(), clientNonce, decode64(m.str("server_nonce")))
                             require(code == m.str("code")) { "配对校验失败" }
-                            mutable.update { it.copy(status = "请核对电脑上的校验码", pairing = code) }
-                            if (secret.isNotEmpty() && m["qr_verified"]?.jsonPrimitive?.booleanOrNull == true) confirmPair()
+                            // 手机上只要看到校验码，不用点确认：由 PC 端核对并允许。
+                            // 仍然回一条 pair_confirm（老版本接收端需要它才会等待 PC 允许）。
+                            mutable.update { it.copy(status = "等待电脑允许连接", pairing = code, pairingConfirmed = true) }
+                            send(message("pair_confirm", "code" to code.j()))
                         }
                         "ready" -> {
                             val saved = p.copy(token = m.str("token").ifEmpty { p.token })
@@ -278,6 +280,10 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
         })
         synchronized(lock) { if (gen == generation) socket = ws else ws.cancel() }
     }
+    /**
+     * 配对不再需要手机确认：校验码只用于 PC 端核对，收到后自动回一条 pair_confirm
+     * （兼容老接收端）并进入「等待电脑允许连接」。保留此方法以便手动重发。
+     */
     fun confirmPair() { val code = mutable.value.pairing; if (code.isNotEmpty()) { send(message("pair_confirm", "code" to code.j())); mutable.update { it.copy(pairingConfirmed = true, status = "等待电脑允许连接") } } }
     private fun lost(gen: Long, reason: String) {
         synchronized(lock) { if (gen != generation) return; generation++; connected = false; updateWifiLock(); recordingRequested = false; recording = ""; socket?.cancel(); socket = null; udp?.close(); udp = null }

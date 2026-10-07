@@ -68,10 +68,16 @@ type Pending struct {
 	Expires time.Time
 	answer  chan bool
 }
+// MaxSessions 是接收端同时接受的控制端数量上限。
+const MaxSessions = 5
+
 type Snapshot struct {
 	Running           bool
 	URL               string
+	// Device 是所有已连接控制端名字的拼接（旧字段，运行时统计与界面兼容用）。
 	Device            string
+	// Devices 是当前已连接控制端的名字（最多 MaxSessions 个）。
+	Devices           []string
 	Pending           []Pending
 	AudioStatus       string
 	AudioReady        bool
@@ -143,7 +149,8 @@ type Server struct {
 	secret       string
 	secretUntil  time.Time
 	pending      map[string]*Pending
-	current      *session
+	// sessions 是当前已连接的控制端，按会话 id 索引，最多 MaxSessions 个。
+	sessions     map[uint64]*session
 	http         *http.Server
 	wss          *http.Server
 	udp          *net.UDPConn
@@ -225,7 +232,7 @@ func New(dir string) (*Server, error) {
 		host = ips[1].String()
 	}
 	name, _ := os.Hostname()
-	s := &Server{cfg: c, dir: dir, host: host, name: name, pin: pin, cert: cert, tokens: map[string]string{}, pending: map[string]*Pending{}, Input: input.New(), Audio: audio.New()}
+	s := &Server{cfg: c, dir: dir, host: host, name: name, pin: pin, cert: cert, tokens: map[string]string{}, pending: map[string]*Pending{}, sessions: map[uint64]*session{}, Input: input.New(), Audio: audio.New()}
 	if b, e := os.ReadFile(filepath.Join(dir, "paired.json")); e == nil {
 		if e = json.Unmarshal(b, &s.tokens); e != nil {
 			return nil, e
@@ -290,7 +297,10 @@ func (s *Server) Update(c config.Config) error {
 		return e
 	}
 	s.cfg = c
-	cur := s.current
+	sessions := make([]*session, 0, len(s.sessions))
+	for _, ss := range s.sessions {
+		sessions = append(sessions, ss)
+	}
 	running := s.running
 	s.mu.Unlock()
 	s.Audio.Configure(c.AudioDevice, c.Gain)
@@ -299,8 +309,10 @@ func (s *Server) Update(c config.Config) error {
 			s.Stop()
 			return s.Start()
 		}
-	} else if cur != nil {
-		_ = cur.send(map[string]any{"type": "config", "config": c})
+	} else {
+		for _, ss := range sessions {
+			_ = ss.send(map[string]any{"type": "config", "config": c})
+		}
 	}
 	return nil
 }
@@ -402,13 +414,13 @@ func (s *Server) Stop() {
 	s.running = false
 	s.generation++
 	cancel := s.cancel
-	h, w, u, cur, audioDone := s.http, s.wss, s.udp, s.current, s.audioDone
-	s.current = nil
+	h, w, u, sessions, audioDone := s.http, s.wss, s.udp, s.sessions, s.audioDone
+	s.sessions = map[uint64]*session{}
 	s.pending = map[string]*Pending{}
 	s.mu.Unlock()
 	cancel()
-	if cur != nil {
-		cur.close("接收端已停止")
+	for _, ss := range sessions {
+		ss.close("接收端已停止")
 	}
 	h.Close()
 	w.Close()
@@ -420,9 +432,11 @@ func (s *Server) Stop() {
 func (s *Server) Snapshot() Snapshot {
 	s.mu.Lock()
 	v := Snapshot{Running: s.running, URL: fmt.Sprintf("http://%s:%d/pair", s.host, s.cfg.HTTPPort), Error: s.lastError}
-	if s.current != nil {
-		v.Device = s.current.name
+	for _, ss := range s.sessions {
+		v.Devices = append(v.Devices, ss.name)
 	}
+	sort.Strings(v.Devices)
+	v.Device = strings.Join(v.Devices, "、")
 	for _, p := range s.pending {
 		v.Pending = append(v.Pending, *p)
 	}
@@ -460,8 +474,11 @@ func (s *Server) Unpair() error {
 	s.tokens = map[string]string{}
 	b, _ := json.Marshal(s.tokens)
 	e := config.AtomicWrite(filepath.Join(s.dir, "paired.json"), b)
-	cur := s.current
-	s.current = nil
+	sessions := make([]*session, 0, len(s.sessions))
+	for _, ss := range s.sessions {
+		sessions = append(sessions, ss)
+	}
+	s.sessions = map[uint64]*session{}
 	for _, p := range s.pending {
 		select {
 		case p.answer <- false:
@@ -470,8 +487,8 @@ func (s *Server) Unpair() error {
 	}
 	s.secret = ""
 	s.mu.Unlock()
-	if cur != nil {
-		cur.close("已解除配对")
+	for _, ss := range sessions {
+		ss.close("已解除配对")
 	}
 	s.RefreshQR()
 	return e
@@ -548,6 +565,21 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 	if len(hello.DeviceID) < 8 || len(hello.DeviceID) > 128 || len(hello.Name) > 128 {
 		return
 	}
+	// 名额检查放在配对之前：满了就立刻拒绝，不再让新设备走一遍配对。
+	// 同一台设备自己重连不受限（下面会替换它的旧会话）。
+	s.mu.Lock()
+	full := s.running && len(s.sessions) >= MaxSessions
+	owns := false
+	for _, old := range s.sessions {
+		if old.deviceID == hello.DeviceID {
+			owns = true
+		}
+	}
+	s.mu.Unlock()
+	if full && !owns {
+		_ = write(ctx, ws, map[string]any{"type": "error", "code": "too_many_clients", "reason": fmt.Sprintf("接收端最多同时连接 %d 个控制端，请先断开其中一个", MaxSessions), "limit": MaxSessions})
+		return
+	}
 	s.mu.Lock()
 	hash := s.tokens[hello.DeviceID]
 	trusted := hash != "" && subtle.ConstantTimeCompare([]byte(hash), []byte(secure.Hash(hello.Token))) == 1
@@ -578,10 +610,8 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 		if e = write(pairCtx, ws, map[string]any{"type": "pair_challenge", "request_id": id, "server_nonce": base64.RawURLEncoding.EncodeToString(serverNonce), "code": p.Code, "qr_verified": qr}); e != nil {
 			return
 		}
-		confirm, e := read(pairCtx, ws)
-		if e != nil || confirm.Type != "pair_confirm" || confirm.Code != p.Code {
-			return
-		}
+		// 手机上只需要看到校验码，不再需要点“一致”：这里直接等 PC 端确认。
+		// （老版本 App 仍会发一条 pair_confirm，控制循环会把它当未知消息忽略。）
 		if !qr {
 			select {
 			case allow := <-p.answer:
@@ -623,27 +653,35 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 		s.lifecycleMu.Unlock()
 		return
 	}
-	old := s.current
-	s.current = nil
-	s.mu.Unlock()
-	if old != nil {
-		old.close("新的设备连接")
+	// 同一台设备重连时替换掉它的旧会话，避免占掉两个名额。
+	var replaced []*session
+	for id, old := range s.sessions {
+		if old.deviceID == ss.deviceID {
+			replaced = append(replaced, old)
+			delete(s.sessions, id)
+		}
 	}
-	s.mu.Lock()
-	s.current = ss
+	if len(s.sessions) >= MaxSessions {
+		s.mu.Unlock()
+		s.lifecycleMu.Unlock()
+		_ = write(ctx, ws, map[string]any{"type": "error", "code": "too_many_clients", "reason": fmt.Sprintf("接收端最多同时连接 %d 个控制端，请先断开其中一个", MaxSessions), "limit": MaxSessions})
+		return
+	}
+	s.sessions[ss.id] = ss
 	cfg := s.cfg
 	s.mu.Unlock()
+	for _, old := range replaced {
+		old.close("同一设备重新连接")
+	}
 	s.lifecycleMu.Unlock()
 	defer func() {
 		s.lifecycleMu.Lock()
 		defer s.lifecycleMu.Unlock()
 		s.mu.Lock()
-		current := s.current == ss
-		if current {
-			s.current = nil
-		}
+		_, present := s.sessions[ss.id]
+		delete(s.sessions, ss.id)
 		s.mu.Unlock()
-		if current {
+		if present {
 			ss.close("连接结束")
 		}
 	}()
@@ -673,7 +711,9 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 						id, voice := ss.recording, ss.voice
 						ss.recording = 0
 						ss.ending = false
-						s.Audio.Abort()
+						if id != 0 {
+							s.Audio.Abort()
+						}
 						if a, ok := s.Input.(asyncKeyboard); ok {
 							_ = a.StopVoice(ss.voiceToken(id), func(error) {})
 						} else if voice.Mode == "hold" {
@@ -722,7 +762,10 @@ func (ss *session) close(reason string) {
 		ss.mu.Unlock()
 		ss.cancel()
 		ss.ws.CloseNow()
-		ss.s.Audio.Abort()
+		// 只有这台设备正在录音时才中断音频：其他控制端可能正在传音。
+		if recording != 0 {
+			ss.s.Audio.Abort()
+		}
 		if _, ok := ss.s.Input.(asyncKeyboard); !ok && recording != 0 && voice.Mode == "toggle" {
 			_ = ss.s.Input.Chord(voice.Stop)
 		}
@@ -990,6 +1033,9 @@ func (ss *session) handle(m Message) error {
 		}
 		ss.ending = true
 		ss.s.Audio.End(id, time.Duration(v.StopDelayMS)*time.Millisecond, finish)
+	case "pair_confirm":
+		// 老版本 App 配对时仍会发这条消息（现在改由 PC 端确认）：收到就忽略。
+		return nil
 	default:
 		return fmt.Errorf("未知消息类型")
 	}
@@ -1048,11 +1094,8 @@ func (s *Server) udpLoop(ctx context.Context, u *net.UDPConn) {
 func (s *Server) activeSession(p []byte) *session {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ss := s.current
-	if ss == nil || binary.LittleEndian.Uint64(p[8:]) != ss.id {
-		return nil
-	}
-	return ss
+	// UDP 包头里带会话 id，多台控制端各自路由到自己的会话。
+	return s.sessions[binary.LittleEndian.Uint64(p[8:])]
 }
 func (s *Server) mousePacket(p []byte) {
 	start := time.Now()

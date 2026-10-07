@@ -434,8 +434,11 @@ func window(s *server.Server, dir string, startHidden bool) error {
 					if v.Running {
 						text = "等待 Android 连接"
 					}
-					if v.Device != "" {
-						text = "已连接：" + v.Device
+					switch {
+					case len(v.Devices) == 1:
+						text = "已连接：" + v.Devices[0]
+					case len(v.Devices) > 1:
+						text = fmt.Sprintf("已连接 %d 个控制端：%s", len(v.Devices), strings.Join(v.Devices, "、"))
 					}
 					_ = status.SetText(text)
 					_ = keyboardLabel.SetText(fmt.Sprintf("实际发送：%s · 驱动：%s · API %d\n%s", kb.Actual, kb.Driver, kb.API, kb.Error))
@@ -446,9 +449,9 @@ func window(s *server.Server, dir string, startHidden bool) error {
 					if len(v.Pending) > 0 {
 						p := v.Pending[0]
 						pendingID = p.ID
-						_ = pendingLabel.SetText(p.Name + "\n核对校验码：\n" + p.Code)
+						_ = pendingLabel.SetText(fmt.Sprintf("%s 请求连接（同时连接上限 %d）\n核对校验码：\n%s", p.Name, server.MaxSessions, p.Code))
 					} else {
-						_ = pendingLabel.SetText("等待配对请求")
+						_ = pendingLabel.SetText(fmt.Sprintf("等待配对请求（最多同时连接 %d 个控制端）", server.MaxSessions))
 					}
 				})
 			}

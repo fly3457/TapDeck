@@ -214,7 +214,7 @@ class MainActivity : ComponentActivity() {
                     if (state.connected) TextButton(onClick = { vm.client.forget() }) { Text("忘记当前电脑") }
                 }
             }, confirmButton = { TextButton(onClick = { enter(address); settings = false }) { Text("连接") } }, dismissButton = { TextButton(onClick = { settings = false }) { Text("关闭") } })
-            if (state.pairing.isNotEmpty()) AlertDialog(onDismissRequest = { vm.client.forget() }, title = { Text("核对配对校验码") }, text = { Column { Text("请与 PC 设置窗口的校验码比较："); Spacer(Modifier.height(12.dp)); Text(state.pairing, fontSize = 19.sp); Spacer(Modifier.height(12.dp)); Text(if (state.pairingConfirmed) "等待电脑允许连接…" else "相同后点击确认，并在电脑允许连接。") } }, confirmButton = { TextButton(onClick = vm.client::confirmPair, enabled = !state.pairingConfirmed) { Text("与电脑一致") } }, dismissButton = { TextButton(onClick = vm.client::forget) { Text("取消") } })
+            if (state.pairing.isNotEmpty()) AlertDialog(onDismissRequest = { vm.client.forget() }, title = { Text("等待电脑允许连接") }, text = { Column { Text("请核对 PC 设置窗口里的校验码是否一致，一致后在电脑上点“允许连接”："); Spacer(Modifier.height(12.dp)); Text(state.pairing, fontSize = 19.sp); Spacer(Modifier.height(12.dp)); Text("电脑允许后会自动连上，手机上不需要额外操作。") } }, confirmButton = {}, dismissButton = { TextButton(onClick = vm.client::forget) { Text("取消") } })
         }
         val root = FrameLayout(this).apply {
             isMotionEventSplittingEnabled = true
