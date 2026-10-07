@@ -7,7 +7,7 @@ Kotlin Android 触控板与 Go Windows 接收端原型。手机通过 Wi-Fi 控�
 ## 使用
 
 1. 在 Windows 11 x64 启动 `dist/TapDeck.exe`。窗口关闭后保留托盘程序；从托盘选择“退出”才停止接收。可在设置页「设置与状态」勾选“随 Windows 登录自动启动接收端”，登录后自动在后台监听（等价命令 `TapDeck.exe --autostart-on` / `--autostart-off`）。自启用 `--headless` 启动：**同样常驻托盘**，只是不弹出设置窗口，左键单击托盘图标即可打开设置。
-2. 在 Android 安装 `dist/TapDeck-debug.apk`，支持 Android 8/API 26 及以上。两端连接同一可互通的 Wi-Fi。
+2. 在 Android 安装 `dist/TapDeck-debug.apk`，支持 Android 8/API 26 及以上。两端连接同一可互通的 Wi-Fi。**新手机可以直接用浏览器打开配对网页，页面下方「下载 Android 端」会显示 APK 下载二维码**（编译好的 APK 已打进接收端，扫码即可下载，详见 [`docs/apk-download.md`](docs/apk-download.md)）。
 3. Android“连接”页输入 PC 窗口中的网址，例如 `http://192.168.1.11:41080/pair`。核对两端显示的校验码，在 Android 确认，在 PC 允许连接。成功后保存凭据，下次启动自动重连。
 4. 也可以在 Android 浏览器访问这个网址，点击“打开 TapDeck 配对”。有摄像头的设备还可扫描二维码；二维码的自动授权凭证有效期 120 秒且只使用一次，过期后可刷新或改为两端核对校验码。
 5. 配对成功后无需再操作：重开 Android App、重启接收端或电脑重启（且已开启自启）都会自动恢复连接；Android 端在启动、网络变化和回到前台时都会重试，间隔从 1 秒递增到 30 秒。详见 [`docs/auto-connect.md`](docs/auto-connect.md)。
@@ -57,12 +57,14 @@ Windows 使用 coder/websocket 1.8.15、go-ole 1.3.0、Walk、go-qrcode、x/sys/
 在项目根目录的 PowerShell 执行：
 
 ```powershell
-.\scripts\build-windows.ps1
 .\scripts\build-android.ps1 -JavaHome 'C:\path\to\jdk17' -SdkRoot "$env:LOCALAPPDATA\Android\Sdk"
+.\scripts\build-windows.ps1
 .\scripts\install-android.ps1
 # 同时连接多台设备时，使用 adb devices 查到的编号：
 .\scripts\install-android.ps1 -Serial 'DEVICE_SERIAL'
 ```
+
+先构建 Android 再构建 Windows：`build-windows.ps1` 会把 `dist/TapDeck-debug.apk` 内嵌进接收端（配对网页的下载二维码用它）。找不到 APK 时会打印警告并继续，此时接收端不含内置包。
 
 请预先安装 JDK 17，传入 `-JavaHome` 或设置 `JAVA_HOME`；本地 `.tools/jdk17` 中已有的 JDK 也可被脚本自动找到，该目录不随源码发布。首次安装 SDK 可使用 SDK Manager 安装 `platforms;android-37.0`、`build-tools;36.0.0` 和 `platform-tools`。本机的 `android/local.properties` 不提交到 Git。
 

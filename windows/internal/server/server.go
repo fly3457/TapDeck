@@ -160,6 +160,10 @@ type Server struct {
 	latencyMu    sync.Mutex
 	latencies    [4096]int64
 	latencyCount uint64
+	// apkData/apkName/apkSHA 是内嵌的 Android 安装包，供配对网页扫码下载。
+	apkName string
+	apkData []byte
+	apkSHA  string
 }
 type session struct {
 	closeOnce                sync.Once
@@ -359,6 +363,8 @@ func (s *Server) Start() error {
 		jsonResponse(w, s.metadata())
 	})
 	mux.HandleFunc("GET /pair", s.pairPage)
+	mux.HandleFunc("GET /apk", s.apkFile)
+	mux.HandleFunc("GET /apk/qr.png", s.apkQR)
 	s.http = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second}
 	wm := http.NewServeMux()
 	wm.HandleFunc("GET /ws", s.connect)
@@ -1100,7 +1106,7 @@ func (s *Server) pairPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'")
-	fmt.Fprint(w, pairHTML)
+	fmt.Fprint(w, strings.Replace(pairHTML, "<!--APK-->", s.apkSection(r), 1))
 }
 
-const pairHTML = `<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TapDeck 配对</title><style>body{font:18px system-ui;margin:0;background:#f2f5f9;color:#172331}main{max-width:520px;margin:8vh auto;padding:28px}h1{font-size:36px}a,button{display:block;padding:18px;margin:20px 0;border:0;border-radius:12px;background:#175cd3;color:white;text-align:center;text-decoration:none;font:inherit}input{box-sizing:border-box;width:100%;padding:12px;font:inherit}p{line-height:1.7}</style><main><h1>TapDeck</h1><p>打开应用后，核对电脑和 Android 显示的校验码，并在电脑允许连接。</p><a id="open" href="#">打开 TapDeck 配对</a><p>如果浏览器无法打开应用，请在 TapDeck 连接页输入下面的网址：</p><input readonly id="address"><p id="status">正在获取连接信息…</p></main><script>document.getElementById('address').value=location.origin+'/pair';fetch('/api/pair-info',{cache:'no-store'}).then(r=>r.json()).then(m=>{const q=new URLSearchParams({v:m.version,host:location.hostname,wss:m.wss_port,http:m.http_port,pin:m.pin});let uri='tapdeck://pair?'+q;const a=document.getElementById('open');a.href=uri;if(/Chrome/.test(navigator.userAgent))a.href='intent://pair?'+q+'#Intent;scheme=tapdeck;package=com.yuncii.tapdeck;end';document.getElementById('status').textContent='电脑：'+m.name}).catch(()=>document.getElementById('status').textContent='无法连接电脑，请检查网络后刷新页面。')</script></html>`
+const pairHTML = `<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TapDeck 配对</title><style>body{font:18px system-ui;margin:0;background:#f2f5f9;color:#172331}main{max-width:520px;margin:8vh auto;padding:28px}h1{font-size:36px}h2{font-size:22px;margin:36px 0 8px}a,button{display:block;padding:18px;margin:20px 0;border:0;border-radius:12px;background:#175cd3;color:white;text-align:center;text-decoration:none;font:inherit}a.plain{display:inline;padding:0;margin:0;background:none;color:#175cd3;text-decoration:underline}input{box-sizing:border-box;width:100%;padding:12px;font:inherit}p{line-height:1.7}p.hint{font-size:15px;color:#5b6675;word-break:break-all}img.qr{display:block;margin:16px auto;background:white;border:1px solid #cbd5e1;border-radius:12px;padding:8px}code{font-size:16px}</style><main><h1>TapDeck</h1><p>打开应用后，核对电脑和 Android 显示的校验码，并在电脑允许连接。</p><a id="open" href="#">打开 TapDeck 配对</a><p>如果浏览器无法打开应用，请在 TapDeck 连接页输入下面的网址：</p><input readonly id="address"><p id="status">正在获取连接信息…</p><!--APK--></main><script>document.getElementById('address').value=location.origin+'/pair';fetch('/api/pair-info',{cache:'no-store'}).then(r=>r.json()).then(m=>{const q=new URLSearchParams({v:m.version,host:location.hostname,wss:m.wss_port,http:m.http_port,pin:m.pin});let uri='tapdeck://pair?'+q;const a=document.getElementById('open');a.href=uri;if(/Chrome/.test(navigator.userAgent))a.href='intent://pair?'+q+'#Intent;scheme=tapdeck;package=com.yuncii.tapdeck;end';document.getElementById('status').textContent='电脑：'+m.name}).catch(()=>document.getElementById('status').textContent='无法连接电脑，请检查网络后刷新页面。')</script></html>`

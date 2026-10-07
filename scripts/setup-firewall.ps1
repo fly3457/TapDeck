@@ -1,4 +1,4 @@
-#Requires -RunAsAdministrator
+﻿#Requires -RunAsAdministrator
 param([string]$ExecutablePath)
 $ErrorActionPreference = 'Stop'
 if (-not $ExecutablePath) { $ExecutablePath = Join-Path (Split-Path -Parent $PSScriptRoot) 'dist\TapDeck.exe' }

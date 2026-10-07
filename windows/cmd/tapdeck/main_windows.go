@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"tapdeck/internal/audio"
+	"tapdeck/internal/apkdist"
 	"tapdeck/internal/autostart"
 	"tapdeck/internal/config"
 	"tapdeck/internal/driver"
@@ -135,6 +136,8 @@ func main() {
 		log.Fatal(e)
 	}
 	defer s.Stop()
+	// 内置的 Android 安装包：配对网页会给出下载二维码。
+	s.SetAPK(apkdist.Name(), apkdist.Bytes(), apkdist.SHA256())
 	agent, e := keyboard.NewAgent(s.Config().KeyboardBackend)
 	if e != nil {
 		log.Fatal(e)
@@ -156,6 +159,14 @@ func main() {
 		log.Fatal(e)
 	}
 }
+// apkSummary 说明本次构建是否内置了 Android 安装包（配对网页据此决定显示二维码还是 Release 链接）。
+func apkSummary() string {
+	if apkdist.Available() {
+		return fmt.Sprintf("内置 Android 安装包：%s（%s），配对网页可扫码下载", apkdist.Name(), apkdist.SizeText())
+	}
+	return "未内置 Android 安装包：配对网页只显示 GitHub Release 链接（先运行 scripts/build-android.ps1 再构建接收端）"
+}
+
 func open(path string) {
 	p, _ := windows.UTF16PtrFromString(path)
 	verb, _ := windows.UTF16PtrFromString("open")
@@ -326,7 +337,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 				}
 				autostartBox.SetChecked(on)
 				_ = autostartLabel.SetText(autostart.Summary())
-			}}, d.Label{AssignTo: &autostartLabel, Text: autostart.Summary()}, d.Label{AssignTo: &stats, Text: "等待数据"}, d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.PushButton{Text: "启动接收", OnClicked: func() {
+			}}, d.Label{AssignTo: &autostartLabel, Text: autostart.Summary()}, d.Label{Text: apkSummary()}, d.Label{AssignTo: &stats, Text: "等待数据"}, d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.PushButton{Text: "启动接收", OnClicked: func() {
 				if e := s.Start(); e != nil {
 					walk.MsgBox(mw, "启动失败", e.Error(), walk.MsgBoxIconError)
 				}
