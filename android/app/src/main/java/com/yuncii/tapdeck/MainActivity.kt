@@ -162,13 +162,7 @@ class MainActivity : ComponentActivity() {
             }
             val keyboardRegion = compose {
                 val state by vm.client.state.collectAsStateWithLifecycle()
-                if (keyboardMode) KeyboardView(
-                    connected = state.connected,
-                    voiceActive = state.mic == "preparing" || state.mic == "transmitting",
-                    hold = keyHold,
-                    beginVoice = ::beginMic,
-                    stopVoice = { vm.client.stopMic() },
-                )
+                if (keyboardMode) KeyboardView(connected = state.connected, hold = keyHold)
             }
             val shortcutsView = region(shortcutsRegion, Regions.SHORTCUTS)
             val voiceView = region(voiceComposite, Regions.MICROPHONE)
