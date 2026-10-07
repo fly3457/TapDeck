@@ -101,11 +101,12 @@ fun KeyboardView(
             Key("Backspace", mainLabel = "⌫", kind = Kind.Hold, widthPercent = 13.5f),
         ),
         // 4 行：Alt + 「.（长按语音输入）」+ 空格（长按 Shift+Enter）+ Shift+Enter + 回车
+        // 第 4、5 格主副键位共用：短按单次触发，长按真按住、连续触发。
         listOf(
             Key("LeftAlt", mainLabel = "Alt", kind = Kind.Hold, widthPercent = 18.5f),
             Key("Period", mainLabel = ".", altLabel = "🎤", kind = Kind.VoiceDual),
             dual("LeftShift+Enter|Space").copy(mainLabel = "空格", altLabel = "⇧⏎", widthPercent = 33.5f),
-            Key("LeftShift+Enter", "Enter", mainLabel = "⇧⏎", altLabel = "⏎", kind = Kind.Dual, widthPercent = 13.5f),
+            Key("LeftShift+Enter", mainLabel = "⇧⏎", kind = Kind.Hold, widthPercent = 13.5f),
             Key("Enter", mainLabel = "⏎", kind = Kind.Hold, widthPercent = 18.5f),
         ),
     )
@@ -201,6 +202,7 @@ private fun RowScope.KeyboardKeyCell(
         Kind.Hold -> when (item.primary) {
             "Backspace" -> "退格：短按一次，长按连续退格"
             "LeftAlt" -> "Alt：短按一次，长按连续按住"
+            "LeftShift+Enter" -> "Shift+Enter：短按一次，长按连续换行"
             else -> "回车：短按一次，长按连续回车"
         }
         Kind.Dual -> if (item.altLabel.isEmpty()) "${item.mainLabel} 键"
