@@ -48,6 +48,8 @@ private data class Key(
     val mainLabel: String = "",
     val altLabel: String = "",
     val kind: Kind = Kind.Dual,
+    /** 特殊键（Shift / 退格 / Alt / Shift+Enter / Enter）用灰底，常规键白底。 */
+    val special: Boolean = false,
     /** 键宽，单位是可用宽度的百分比；常规字母键 8.5%。 */
     val widthPercent: Float = 8.5f,
 )
@@ -72,7 +74,12 @@ private val ALT_LABEL_COLOR = Color(0xFF4B5563)
  * 1 行 副键 `1234567890` / 主键 `qwertyuiop`
  * 2 行 副键 `-/:;()~'"` / 主键 `asdfghjkl`
  * 3 行 副键 `[Shift]@-#&?!…[Backspace]` / 主键 `[Shift]zxcvbnm[Backspace]`
- * 4 行 副键 `[alt], [Shift+Enter] [Shift+Enter] [Enter]` / 主键 `[alt].[空格][Shift+Enter][Enter]`
+ * 4 行 `[alt]` · `.`（长按 `,`）· `空格` · `[Shift+Enter]` · `[Enter]`
+ *
+ * 触发方式：
+ * - 双键位键（字母 / 数字 / 符号 / `.`）：短按只发主键位一次，长按只发副键位一次。
+ * - Shift：短按单次大写，长按锁定。
+ * - 空格 / 退格 / Alt / 回车 / Shift+Enter：短按一次，长按真按住、由 Windows 连续触发。
  *
  * 宽度按屏幕宽度的百分比固定：常规键与 `.` 8.5%、间隙 1.5%、左右各留 0.75%。
  * 1 / 3 / 4 行的总宽正好铺满（3 行的 `[Shift]`、`[Backspace]` 各 13.5%，4 行的 `[alt]`、
@@ -93,7 +100,7 @@ fun KeyboardView(
         ).map { dual(it) },
         // 3 行：Shift + 副键位符号 + 主键位字母 + 退格
         listOf(
-            Key(KeyHold.SHIFT, mainLabel = "⇧", kind = Kind.Shift, widthPercent = 13.5f),
+            Key(KeyHold.SHIFT, mainLabel = "⇧", kind = Kind.Shift, special = true, widthPercent = 13.5f),
             dual("LeftShift+2|Z"),
             dual("Minus|X"),
             dual("LeftShift+3|C"),
@@ -101,16 +108,16 @@ fun KeyboardView(
             dual("LeftShift+Slash|B"),
             dual("LeftShift+1|N"),
             dual("Ellipsis|M"),
-            Key("Backspace", mainLabel = "⌫", kind = Kind.Hold, widthPercent = 13.5f),
+            Key("Backspace", mainLabel = "⌫", kind = Kind.Hold, special = true, widthPercent = 13.5f),
         ),
-        // 4 行：Alt + 「.（长按 ,）」+ 空格（长按 Shift+Enter）+ Shift+Enter + 回车
-        // 第 4、5 格主副键位共用：短按一次，长按真按住、连续触发。
+        // 4 行：Alt + 「.（长按 ,）」+ 空格 + Shift+Enter + 回车
+        // 空格 / 退格 / 回车 / Shift+Enter 长按都是真按住，由 Windows 连续触发。
         listOf(
-            Key("LeftAlt", mainLabel = "Alt", kind = Kind.Hold, widthPercent = 18.5f),
+            Key("LeftAlt", mainLabel = "Alt", kind = Kind.Hold, special = true, widthPercent = 18.5f),
             dual("Comma|Period"),
-            dual("LeftShift+Enter|Space").copy(mainLabel = "空格", altLabel = "⇧⏎", widthPercent = 33.5f),
-            Key("LeftShift+Enter", mainLabel = "⇧⏎", kind = Kind.Hold, widthPercent = 13.5f),
-            Key("Enter", mainLabel = "⏎", kind = Kind.Hold, widthPercent = 18.5f),
+            Key("Space", mainLabel = "空格", kind = Kind.Hold, widthPercent = 33.5f),
+            Key("LeftShift+Enter", mainLabel = "⇧⏎", kind = Kind.Hold, special = true, widthPercent = 13.5f),
+            Key("Enter", mainLabel = "⏎", kind = Kind.Hold, special = true, widthPercent = 18.5f),
         ),
     )
 
@@ -195,13 +202,13 @@ private fun RowScope.KeyboardKeyCell(
         Kind.Hold -> hold.isHeld(item.primary)
         Kind.Dual -> false
     }
-    val special = item.kind != Kind.Dual
     val description = when (item.kind) {
         Kind.Shift -> "Shift：短按单次大写，长按锁定大写"
         Kind.Hold -> when (item.primary) {
             "Backspace" -> "退格：短按一次，长按连续退格"
             "LeftAlt" -> "Alt：短按一次，长按连续按住"
             "LeftShift+Enter" -> "Shift+Enter：短按一次，长按连续换行"
+            "Space" -> "空格：短按一次，长按连续空格"
             else -> "回车：短按一次，长按连续回车"
         }
         Kind.Dual -> if (item.altLabel.isEmpty()) "${item.mainLabel} 键"
@@ -214,7 +221,7 @@ private fun RowScope.KeyboardKeyCell(
         shape = MaterialTheme.shapes.small,
         color = when {
             active -> PRESSED_COLOR
-            special -> SPECIAL_COLOR
+            item.special -> SPECIAL_COLOR
             else -> NORMAL_COLOR
         },
         contentColor = if (active) Color.White else LABEL_COLOR,
@@ -222,7 +229,7 @@ private fun RowScope.KeyboardKeyCell(
             1.dp,
             when {
                 active -> PRESSED_COLOR
-                special -> SPECIAL_BORDER
+                item.special -> SPECIAL_BORDER
                 else -> NORMAL_BORDER
             },
         ),
