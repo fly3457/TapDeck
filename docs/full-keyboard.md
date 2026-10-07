@@ -26,7 +26,7 @@
 
 ### 键面样式
 
-- 常规键（A–Z 字母、`.`、空格）白底；其余特殊键（`[Shift]`、`[Backspace]`、`[alt]`、`[Shift+Enter]`、`[Enter]`）用 `#AAA` 灰底。
+- 常规键（A–Z 字母、`.`、空格）白底；其余特殊键（`[Shift]`、`[Backspace]`、`[alt]`、`[Shift+Enter]`、`[Enter]`）用 `#CCC` 灰底。
 - 描边比底色深：白底键 `#8B95A5`，灰底键 `#6E6E6E`；按下时整键变蓝底白字。
 - 一格里的两个键位（副键位在上、主键位在下）都**居中**排布，字号比早期版本大：主键位单字符 20sp、双字符 17sp、更长的 13sp；副键位单字符 14sp、双字符 12sp。空格键的副键位用 🎤 标注，表示长按是语音输入。
 - 手指按下即刻点亮（因为键值要等抬手或长按判定才发出），松手或切换界面时熄灭；Shift 单次 / 锁定、长按键按住、空格传音中同样点亮。
@@ -91,7 +91,7 @@ Windows 键盘上没有 `…` 这个按键，虚拟键盘（HID）无法表示�
 | 退格 | 轻点 → `Backspace` 按下 / 抬起 51 ms；按住 1.2 s → `Backspace` 一直保持按下，松手释放 |
 | 回车 | 轻点 → `Enter` 56 ms |
 | `Shift+Enter` | 轻点 9 ms；按住 1.1 s 期间 `Shift` 与 `Enter` 一直保持按下 |
-| 键面 | 常规键白底、`[Shift]`/`[Backspace]`/`[alt]`/`[Shift+Enter]`/`[Enter]` 为 `#AAA` 灰底；2 行整行居中；副键位与主键位都居中、字号加大；按下与传音时整键变蓝 |
+| 键面 | 常规键白底、`[Shift]`/`[Backspace]`/`[alt]`/`[Shift+Enter]`/`[Enter]` 为 `#CCC` 灰底；2 行整行居中；副键位与主键位都居中、字号加大；按下与传音时整键变蓝 |
 | 单元测试 | `go test ./...` 含 `TestKeyboardKeyStatesAreForwarded`、`TestUnicodeOnlyKeyFallsBackToSendInput`、`TestPunctuationKeysUseHID`、`TestUnicodeOnlyKey`；`gradlew testDebugUnitTest` 含 `KeyHoldTest` 8 项（短按主键位一次、长按副键位一次、Shift 单次与锁定、长按键按住） |
 
 上表全部为真机（ONYX Tab8C / Android 11 + `dist/TapDeck.exe`）实测。

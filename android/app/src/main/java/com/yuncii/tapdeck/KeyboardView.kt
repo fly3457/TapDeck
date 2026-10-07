@@ -63,7 +63,7 @@ private const val SIDE_PADDING_PERCENT = 0.75f
 
 /** 常规键（字母 / `.` / 空格）白底，其余特殊键用灰色底。 */
 private val NORMAL_COLOR = Color.White
-private val SPECIAL_COLOR = Color(0xFFAAAAAA)
+private val SPECIAL_COLOR = Color(0xFFCCCCCC)
 private val PRESSED_COLOR = Color(0xFF175CD3)
 private val NORMAL_BORDER = Color(0xFF8B95A5)
 private val SPECIAL_BORDER = Color(0xFF6E6E6E)
