@@ -2,7 +2,11 @@
 
 ## 安装与配对
 
-PC“连接”页二维码内容是 `http://<PC 地址>:<HTTP 端口>/pair`。手机用系统扫码工具打开网页，下载内置 Android APK；安装后返回网页点击“打开 TapDeck 连接”。已安装用户也可在 App“连接与设备设置”的网址下方操作行右侧点扫码图标（与“忘记当前电脑”同排），扫描 PC 二维码自动填写网址，再点“连接”；仍支持手动输入。
+PC“连接”页二维码内容是 `http://<PC 地址>:<HTTP 端口>/pair`。手机用系统扫码工具打开网页，下载内置 Android APK；安装后返回网页点击“打开 TapDeck 连接”。已安装用户也可在 App“连接与设置”的“输入PC连接窗口URL”标题右侧点扫码图标，扫描 PC 二维码自动填写网址，再点“连接”；仍支持手动输入。弹窗版本下方提供 GitHub 项目主页入口。
+
+0.3.15 的 PC 连接页依次显示二维码与三步说明、网址及复制／网页按钮、已配对设备，不再显示刷新二维码和默认审批按钮。首次请求到达时自动弹出设备名、标识和两行校验码；其他页面或托盘状态也会提示，多请求依次处理。关闭或 Esc 等同拒绝；手机取消、超时或接收停止后自动关闭失效请求。Android 0.3.15 收到拒绝／超时原因后停止本次自动重试，等待用户再次点击连接；已有凭据的自动重连不变。
+
+“连接”“关于”不显示保存按钮：配对和解绑独立持久化，输入测试仅保留在当前窗口。“快捷键”“语音”“设置与状态”继续显示“保存并同步配置”，统一保存各页配置；切换页面不丢失未保存的编辑。二维码在启动和网址变化时自动更新。
 
 App 内扫码使用 [ZXing Android Embedded](https://github.com/journeyapps/zxing-android-embedded)，仅在点击扫码时请求相机权限；相机硬件可选，无相机或拒绝权限时仍可手动输入。扫码只回填 PC 配对网址，取消或扫到非配对二维码时保留原值，不自动发起连接。所有首次配对都显示校验码，由 PC 核对并允许。旧链接的 `secret` 字段不会产生授权。控制协议仍为 v2，现有凭据和旧客户端的 `pair_confirm` 保持兼容。
 
@@ -16,11 +20,11 @@ App 内扫码使用 [ZXing Android Embedded](https://github.com/journeyapps/zxin
 4. 从接收端版本生成 Windows 清单与 VERSIONINFO 资源，运行 Go 测试、`go vet`，构建带版本号的 EXE，并校验文件版本及产品版本。
 5. 从两个接收端 EXE 读取 `--apk-info`，核对实际内嵌 APK 版本、code、名称、大小与哈希，生成 `release-manifest.json` 和 `SHA256SUMS.txt`。APK 缺失、Android 失败、哈希或版本信息不一致均终止交付。
 
-当前接收端为 `0.3.14`，Android `versionName=0.3.14`、`versionCode=17`，均来自根目录 `version.properties`，两端版本允许不同。保留 `com.yuncii.tapdeck` 及本机原有开发签名。APK 文件名为 `TapDeck-0.3.14.apk`；独立 Android 构建、Windows 交付目录和内嵌下载均使用 Android 版本命名，另保留 `TapDeck-debug.apk` 兼容副本。手机“连接与设备设置”标题下显示安装版本，网页和 PC 显示内嵌版本及完整 SHA-256。`TapDeck-debug.exe --version` 输出接收端版本，`--apk-info` 可分别核对两端版本、下载文件名和内嵌哈希。每次迭代的修改位置和固定步骤见 [版本管理](versioning.md)。
+当前接收端为 `0.3.15`，Android `versionName=0.3.15`、`versionCode=18`，均来自根目录 `version.properties`，两端版本允许不同。保留 `com.yuncii.tapdeck` 及本机原有开发签名。APK 文件名为 `TapDeck-0.3.15.apk`；独立 Android 构建、Windows 交付目录和内嵌下载均使用 Android 版本命名，另保留 `TapDeck-debug.apk` 兼容副本。手机“连接与设置”标题下显示安装版本，网页和 PC 显示内嵌版本及完整 SHA-256。`TapDeck-debug.exe --version` 输出接收端版本，`--apk-info` 可分别核对两端版本、下载文件名和内嵌哈希。每次迭代的修改位置和固定步骤见 [版本管理](versioning.md)。
 
-换构建机时必须保留相同签名密钥，才能覆盖已有安装。主界面说明见 [android-ui.md](android-ui.md)，本次单 EXE 输出至 `dist/0.3.14`。更新时退出旧托盘程序后启动新版 EXE，再覆盖安装 Android APK。连接不支持双指缩放和三指窗口操作的旧电脑端时，App 会提示新手势需要升级。
+换构建机时必须保留相同签名密钥，才能覆盖已有安装。主界面说明见 [android-ui.md](android-ui.md)，本次单 EXE 输出至 `dist/0.3.15`。更新时退出旧托盘程序后启动新版 EXE，再覆盖安装 Android APK。连接不支持双指缩放和三指窗口操作的旧电脑端时，App 会提示新手势需要升级。
 
-Windows 主程序为 `TapDeck-0.3.14.exe`，控制台诊断版为 `TapDeck-debug-0.3.14.exe`，HID 工具为 `TapDeck-hidprobe-0.3.14.exe`。三者的文件版本与产品版本均显示 `0.3.14`，Windows 数字版本为 `0.3.14.0`。构建仍保留 `TapDeck.exe`、`TapDeck-debug.exe` 和 `TapDeck-hidprobe.exe`，分别与带版本号的文件完全相同。资源生成器保留原有 Common Controls、DPI 和管理员权限清单。
+Windows 主程序为 `TapDeck-0.3.15.exe`，控制台诊断版为 `TapDeck-debug-0.3.15.exe`，HID 工具为 `TapDeck-hidprobe-0.3.15.exe`。三者的文件版本与产品版本均显示 `0.3.15`，Windows 数字版本为 `0.3.15.0`。构建仍保留 `TapDeck.exe`、`TapDeck-debug.exe` 和 `TapDeck-hidprobe.exe`，分别与带版本号的文件完全相同。资源生成器保留原有 Common Controls、DPI 和管理员权限清单。
 
 ## 虚拟键盘启动检测
 
@@ -68,6 +72,6 @@ VB-CABLE 来自 [VB-Audio / Vincent Burel](https://vb-audio.com/Cable/)，是 do
 
 自动测试覆盖旧格式迁移及备份失败、保存失败保留授权、同名离线设备、在线单设备解绑、待处理请求取消、并发重连、旧 secret 不能自动授权、已有凭据重连、按会话键盘队列清理、鼠标共享持有、另一台设备录音隔离，以及模拟安装结果和完整原包解出后的签名验证。APK 验证包含内嵌／HTTP 内容哈希、版本及 Range 下载。Kotlin 测试覆盖凭据继承、地址变化、不同电脑身份隔离及旧凭据撤销匹配。
 
-Windows 官方构建完成 Go／Kotlin 单元测试和 `go vet`。默认自动构建跳过会实际修改本机音量、开机自启注册表的两项测试，其余测试执行。0.3.14 新增虚拟键盘检测与提示时机、输入设置启动及回退用例，PC 最小窗口与 120 DPI 布局检查通过。本机 FakerInput 和 VB-CABLE 均可用；没有重复运行安装向导。
+Windows 官方构建完成 Go／Kotlin 单元测试和 `go vet`。默认自动构建跳过会实际修改本机音量、开机自启注册表的两项测试，其余测试执行。0.3.15 新增配对弹窗、拒绝／过期原因、断开清理和请求隔离用例；默认与最小窗口、120 DPI 的连接和语音布局检查通过。本轮未重复运行驱动安装向导。
 
-仍需在干净 Windows 11 x64 环境人工验证离线安装、UAC 取消、重启后端点可用，以及新版手机传音进入 CABLE Output。本机无可用干净虚拟机，新版 APK 真机覆盖升级、凭据保留与系统扫码／网页唤起由用户实机验收；构建继续使用相同包名和签名，versionCode 递增。API 34 模拟器布局和交互的历史结果及真机记录见 [verification.md](verification.md)，0.3.14 未重跑 Android 设备 UI，历史结果不作为本轮实机结论。
+仍需在干净 Windows 11 x64 环境人工验证离线安装、UAC 取消、重启后端点可用，以及新版手机传音进入 CABLE Output。本机无可用干净虚拟机，新版 APK 真机覆盖升级、凭据保留与系统扫码／网页唤起由用户实机验收；构建继续使用相同包名和签名，versionCode 递增。0.3.15 在 API 34 隔离模拟器普通屏、小屏 130% 字体下完成共 10 项设备回归，覆盖连接与设置、扫码回填和拒绝后停止重试；这些结果不代表实体手机端到端验收。详情见 [verification.md](verification.md)。

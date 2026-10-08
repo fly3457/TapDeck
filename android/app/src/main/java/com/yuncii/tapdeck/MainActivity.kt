@@ -280,8 +280,16 @@ class MainActivity : ComponentActivity() {
             if (sensitivitySettings) SensitivitySettings(inputSettings, vm.client::setSensitivity) { sensitivitySettings = false }
             if (settings) AlertDialog(onDismissRequest = { settings = false }, title = {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("连接与设备设置")
+                    Text("连接与设置")
                     Text("TapDeck ${BuildConfig.VERSION_NAME}（${BuildConfig.VERSION_CODE}）", style = MaterialTheme.typography.bodySmall)
+                    Text("github.com/fly3457/TapDeck", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable(role = Role.Button) {
+                            try {
+                                startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://github.com/fly3457/TapDeck")))
+                            } catch (_: android.content.ActivityNotFoundException) {
+                                android.widget.Toast.makeText(this@MainActivity, "未找到可用的浏览器", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        })
                 }
             }, text = {
                 Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -307,22 +315,22 @@ class MainActivity : ComponentActivity() {
                     if (feedbackAvailability == FeedbackResult.NoVibrator && feedbackTestMessage != "这台设备没有振动马达") {
                         Text("这台设备没有振动马达", style = MaterialTheme.typography.bodySmall)
                     }
-                    HorizontalDivider()
-                    Text("输入PC设置窗口显示的配对网址：")
-                    OutlinedTextField(value = address, onValueChange = { address = it; pairingScanError = "" },
-                        modifier = Modifier.fillMaxWidth(), label = { Text("PC 配对网址") }, singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
-                    if (pairingScanError.isNotEmpty()) Text(pairingScanError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    // Together with the column's 8dp spacing, leave 16dp on each side.
+                    HorizontalDivider(Modifier.padding(vertical = 8.dp))
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        if (state.connected) TextButton(onClick = { vm.client.forget() }) { Text("忘记当前电脑") }
-                        Spacer(Modifier.weight(1f))
+                        Text("输入PC连接窗口URL", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
                         IconButton(onClick = ::scanPairingAddress) {
                             Icon(painterResource(R.drawable.ic_lucide_scan_line), contentDescription = "扫码填写 PC 配对网址")
                         }
                     }
+                    OutlinedTextField(value = address, onValueChange = { address = it; pairingScanError = "" },
+                        modifier = Modifier.fillMaxWidth(), label = { Text("PC 配对网址") }, singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
+                    if (pairingScanError.isNotEmpty()) Text(pairingScanError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    if (state.connected) TextButton(onClick = { vm.client.forget() }) { Text("忘记当前电脑") }
                 }
             }, confirmButton = { TextButton(onClick = { enter(address); settings = false }) { Text("连接") } }, dismissButton = { TextButton(onClick = { settings = false }) { Text("关闭") } })
-            if (state.pairing.isNotEmpty()) AlertDialog(onDismissRequest = { vm.client.forget() }, title = { Text("等待电脑允许连接") }, text = { Column { Text("请核对 PC 设置窗口里的校验码是否一致，一致后在电脑上点“允许连接”："); Spacer(Modifier.height(12.dp)); Text(state.pairing, fontSize = 19.sp); Spacer(Modifier.height(12.dp)); Text("电脑允许后会自动连上，手机上不需要额外操作。") } }, confirmButton = {}, dismissButton = { TextButton(onClick = vm.client::forget) { Text("取消") } })
+            if (state.pairing.isNotEmpty()) AlertDialog(onDismissRequest = { vm.client.forget() }, title = { Text("等待电脑允许连接") }, text = { Column { Text("核对电脑弹窗中的校验码，一致后在电脑上点“允许连接”。"); Spacer(Modifier.height(12.dp)); Text(state.pairing, fontSize = 19.sp); Spacer(Modifier.height(12.dp)); Text("电脑允许后会自动连接。") } }, confirmButton = {}, dismissButton = { TextButton(onClick = vm.client::forget) { Text("取消") } })
         }
         val root = FrameLayout(this).apply {
             isMotionEventSplittingEnabled = true

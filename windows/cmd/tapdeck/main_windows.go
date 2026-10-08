@@ -243,7 +243,9 @@ func window(s *server.Server, dir string, startHidden bool) error {
 	var mw *walk.MainWindow
 	var address *walk.LineEdit
 	var inputTest *walk.TextEdit
-	var status, audioStatus, pendingLabel, stats *walk.Label
+	var status, audioStatus, stats *walk.Label
+	var tabs *walk.TabWidget
+	var saveButton *walk.PushButton
 	var qrView *walk.ImageView
 	var devices *walk.ComboBox
 	var backend *walk.ComboBox
@@ -257,7 +259,8 @@ func window(s *server.Server, dir string, startHidden bool) error {
 	var autostartLabel *walk.Label
 	var labels, keys [config.ShortcutCount]*walk.LineEdit
 	var enabled [config.ShortcutCount]*walk.CheckBox
-	var pendingID string
+	var prompts pairingPrompts
+	var pairingWaiting bool
 	var pairedTable *walk.TableView
 	var unpairButton *walk.PushButton
 	paired := &pairedModel{}
@@ -460,7 +463,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 	}
 	var prerequisitePromptActive bool
 	checkPrerequisites := func() {
-		if prerequisitePromptActive || !mw.Visible() || installing.Load() || cableInstalling.Load() || agent.KeyboardStatus().Busy {
+		if prerequisitePromptActive || pairingWaiting || prompts.dialog != nil || !mw.Visible() || !mw.Enabled() || installing.Load() || cableInstalling.Load() || agent.KeyboardStatus().Busy {
 			return
 		}
 		prerequisitePromptActive = true
@@ -499,19 +502,8 @@ func window(s *server.Server, dir string, startHidden bool) error {
 	}
 	err := (d.MainWindow{AssignTo: &mw, Title: "TapDeck · Windows 接收端", Size: d.Size{Width: 740, Height: 800}, MinSize: d.Size{Width: 680, Height: 700}, Font: d.Font{Family: "Microsoft YaHei UI", PointSize: 9}, Layout: d.VBox{Margins: d.Margins{Left: 16, Top: 12, Right: 16, Bottom: 12}}, Children: []d.Widget{
 		d.Label{AssignTo: &status, Text: "正在启动…"},
-		d.TabWidget{Pages: []d.TabPage{
-			{Title: "连接", Layout: d.VBox{}, Children: []d.Widget{
-				d.Label{Text: "手机和电脑连接同一局域网，扫码或在手机浏览器输入网址。"},
-				d.LineEdit{AssignTo: &address, Text: s.PairURL(), ReadOnly: true},
-				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.PushButton{Text: "复制网址", OnClicked: func() { _ = walk.Clipboard().SetText(s.PairURL()) }}, d.PushButton{Text: "打开安装与配对网页", OnClicked: func() { open(s.PairURL()) }}, d.PushButton{Text: "刷新二维码", OnClicked: refreshQR}}},
-				d.Composite{Layout: d.HBox{}, Children: []d.Widget{
-					d.ImageView{AssignTo: &qrView, MinSize: d.Size{Width: 200, Height: 200}, MaxSize: d.Size{Width: 200, Height: 200}, Mode: d.ImageViewModeIdeal},
-					d.Composite{Layout: d.VBox{}, Children: []d.Widget{
-						d.Label{Text: "扫码安装 Android 端\n已安装用户可从网页打开 App。\n首次连接须核对校验码，并在电脑上允许。"},
-						d.Label{AssignTo: &pendingLabel, Text: "等待配对请求"},
-						d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.PushButton{Text: "校验码一致，允许", OnClicked: func() { s.Approve(pendingID, true) }}, d.PushButton{Text: "拒绝", OnClicked: func() { s.Approve(pendingID, false) }}}}, d.VSpacer{},
-					}},
-				}},
+		d.TabWidget{AssignTo: &tabs, OnCurrentIndexChanged: func() { updateSaveVisibility(tabs, saveButton) }, Pages: []d.TabPage{
+			{Title: "连接", Layout: d.VBox{}, Children: append(connectionIntro(&address, &qrView, s.PairURL(), func() { _ = walk.Clipboard().SetText(s.PairURL()) }, func() { open(s.PairURL()) }), []d.Widget{
 				d.Label{Text: "已配对设备（同名设备请核对设备标识）"},
 				d.TableView{AssignTo: &pairedTable, Model: paired, MinSize: d.Size{Height: 140}, StretchFactor: 1, Columns: []d.TableViewColumn{{Title: "名称", Width: 130}, {Title: "状态", Width: 50}, {Title: "设备标识", Width: 210}, {Title: "最近连接", Width: 150}}, OnCurrentIndexChanged: func() {
 					if unpairButton != nil {
@@ -539,7 +531,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 						}
 					}},
 				}},
-			}},
+			}...)},
 			{Title: "快捷键", Layout: d.VBox{}, Children: append([]d.Widget{
 				d.Label{Text: "键盘发送方式"}, d.ComboBox{AssignTo: &backend, Model: backendNames, CurrentIndex: selectedBackend},
 				d.Label{AssignTo: &keyboardLabel, Text: "正在检测虚拟键盘…"},
@@ -553,22 +545,19 @@ func window(s *server.Server, dir string, startHidden bool) error {
 				d.Label{AssignTo: &cableLabel, Text: "正在检测 VB-CABLE…"},
 				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.PushButton{AssignTo: &cableButton, Text: "安装虚拟声卡", OnClicked: installCable}, d.PushButton{Text: "重新检测", OnClicked: redetectCable}, d.PushButton{Text: "VB-Audio 官网", OnClicked: func() { open(vbcable.Website) }}, d.PushButton{Text: "原包许可", OnClicked: func() { open(cableLicense) }}}},
 				d.Label{Text: cableAttributionText},
-				d.ComboBox{AssignTo: &devices, Model: deviceNames, CurrentIndex: selectedDevice},
-				d.Composite{Layout: d.HBox{}, Children: []d.Widget{
-					d.PushButton{Text: "刷新音频设备", OnClicked: refreshAudio},
-					d.PushButton{Text: "系统音频输入设置", OnClicked: func() {
-						if err := launchSoundInputSettings(shellOpen); err != nil {
-							walk.MsgBox(mw, "音频输入设置", err.Error(), walk.MsgBoxIconError)
-						}
-					}},
-				}},
+				audioDeviceRow(&devices, deviceNames, selectedDevice, refreshAudio, func() {
+					if err := launchSoundInputSettings(shellOpen); err != nil {
+						walk.MsgBox(mw, "音频输入设置", err.Error(), walk.MsgBoxIconError)
+					}
+				}),
 				d.Label{AssignTo: &audioStatus, Text: "正在检查音频设备"},
 				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.Label{Text: "音量倍率（0–3）"}, d.NumberEdit{AssignTo: &gain, Value: cfg.Gain, MinValue: 0, MaxValue: 3, Decimals: 2, Increment: 0.1}}},
-				d.Label{Text: "名称最多 8 个汉字 / 16 个英文字符；热键留空时仅传音。"},
+				horizontalRule(),
+				d.Label{Text: "名称：最多 8 个汉字 / 16 个英文字符。热键：留空仅传音。"},
 				voiceProfileWidgets(func() walk.Form { return mw }, &voiceEditors, cfg.Voice.Profiles),
 				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.Label{Text: "尾音结束延迟 ms"}, d.NumberEdit{AssignTo: &delay, Value: float64(cfg.Voice.StopDelayMS), MinValue: 0, MaxValue: 1000}}},
 			}},
-			{Title: "设置与状态", Layout: d.VBox{}, Children: []d.Widget{d.Label{Text: "HTTP / WSS / UDP 端口（修改后重启连接）"}, d.NumberEdit{AssignTo: &httpPort, Value: float64(cfg.HTTPPort), MinValue: 1024, MaxValue: 65535}, d.NumberEdit{AssignTo: &wssPort, Value: float64(cfg.WSSPort), MinValue: 1024, MaxValue: 65535}, d.NumberEdit{AssignTo: &udpPort, Value: float64(cfg.UDPPort), MinValue: 1024, MaxValue: 65535}, d.Label{Text: "触控板灵敏度：在各 Android 设备触控板左上角设置（0.5–3 倍）"}, d.Label{Text: "手机震动开关：Android 顶部连接图标 → 连接与设备设置"}, d.CheckBox{AssignTo: &natural, Text: "自然滚动", Checked: cfg.NaturalScroll}, d.CheckBox{AssignTo: &autostartBox, Text: "随 Windows 登录自动启动接收端", Checked: autostartEnabled(), OnCheckedChanged: func() {
+			{Title: "设置与状态", Layout: d.VBox{}, Children: []d.Widget{d.Label{Text: "HTTP / WSS / UDP 端口（修改后重启连接）"}, d.NumberEdit{AssignTo: &httpPort, Value: float64(cfg.HTTPPort), MinValue: 1024, MaxValue: 65535}, d.NumberEdit{AssignTo: &wssPort, Value: float64(cfg.WSSPort), MinValue: 1024, MaxValue: 65535}, d.NumberEdit{AssignTo: &udpPort, Value: float64(cfg.UDPPort), MinValue: 1024, MaxValue: 65535}, d.Label{Text: "触控板灵敏度：在各 Android 设备触控板左上角设置（0.5–3 倍）"}, d.Label{Text: "手机震动开关：Android 顶部连接图标 → 连接与设置"}, d.CheckBox{AssignTo: &natural, Text: "自然滚动", Checked: cfg.NaturalScroll}, d.CheckBox{AssignTo: &autostartBox, Text: "随 Windows 登录自动启动接收端", Checked: autostartEnabled(), OnCheckedChanged: func() {
 				on, err := autostart.Set(autostartBox.Checked())
 				if err != nil {
 					walk.MsgBox(mw, "开机自启设置失败", err.Error(), walk.MsgBoxIconError)
@@ -597,7 +586,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 					d.HSpacer{},
 				}},
 			}},
-		}}, d.PushButton{Text: "保存并同步配置", OnClicked: save},
+		}}, d.PushButton{AssignTo: &saveButton, Text: "保存并同步配置", OnClicked: save, Visible: false},
 	}}).Create()
 	if err != nil {
 		return err
@@ -607,6 +596,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 		enabled[i].SetChecked(cfg.Shortcuts[i].Enabled)
 	}
 	natural.SetChecked(cfg.NaturalScroll)
+	updateSaveVisibility(tabs, saveButton)
 	defer mw.Dispose()
 	defer func() {
 		if qrBitmap != nil {
@@ -639,7 +629,16 @@ func window(s *server.Server, dir string, startHidden bool) error {
 	defer tray.Dispose()
 	_ = tray.SetIcon(icon)
 	_ = tray.SetToolTip("TapDeck：点击打开设置")
-	show := func() { mw.Show(); mw.Activate(); checkPrerequisites() }
+	showSettings := func() {
+		if !mw.Visible() {
+			for i := range voiceEditors {
+				voiceEditors[i].setExpanded(voiceEditors[i].enabled.Checked())
+			}
+		}
+		restoreSettingsWindow(mw)
+	}
+	prompts = pairingPrompts{owner: mw, approve: s.Approve, showOwner: showSettings}
+	show := func() { showSettings(); checkPrerequisites() }
 	tray.MouseDown().Attach(func(x, y int, b walk.MouseButton) {
 		if b == walk.LeftButton {
 			show()
@@ -720,13 +719,13 @@ func window(s *server.Server, dir string, startHidden bool) error {
 					applyKeyboardStatus()
 					_ = audioStatus.SetText(fmt.Sprintf("%s · 输入电平 %.0f%%", v.AudioStatus, v.Level*100))
 					_ = stats.SetText(fmt.Sprintf("鼠标包 %d · 音频包 %d · 注入 p95 %.3f ms\n音频缓冲 %d/6 帧 · 历史最大 %d 帧 · 补静音帧 %d", v.MousePackets, v.AudioPackets, v.InjectionP95MS, v.BufferedFrames, v.MaxBufferedFrames, v.Concealed))
-					pendingID = ""
-					if len(v.Pending) > 0 {
-						p := v.Pending[0]
-						pendingID = p.ID
-						_ = pendingLabel.SetText(fmt.Sprintf("%s 请求连接（同时连接上限 %d）\n核对校验码：\n%s", p.Name, server.MaxSessions, p.Code))
-					} else {
-						_ = pendingLabel.SetText(fmt.Sprintf("等待配对请求（最多同时连接 %d 个控制端）", server.MaxSessions))
+					if address.Text() != v.URL {
+						_ = address.SetText(v.URL)
+						refreshQR()
+					}
+					pairingWaiting = len(v.Pending) > 0
+					if !prerequisitePromptActive {
+						prompts.update(v.Pending, time.Now())
 					}
 					checkPrerequisites()
 				})

@@ -175,6 +175,9 @@ func TestPairReconnectAndRevoke(t *testing.T) {
 	}
 	_ = write(ctx4, fourth, Message{Type: "pair_confirm", Code: stringField(challenge, "code")})
 	s.Approve(stringField(challenge, "request_id"), false)
+	if got := stringField(testRead(t, ctx4, fourth), "code"); got != "pairing_rejected" {
+		t.Fatalf("missing rejection reason: %s", got)
+	}
 	if _, _, err := fourth.Read(ctx4); err == nil {
 		t.Fatal("rejected pair remained open")
 	}

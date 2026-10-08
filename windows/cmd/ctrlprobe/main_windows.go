@@ -6,7 +6,7 @@
 //	go run ./cmd/ctrlprobe -port 41443 -name Probe-A -seconds 30
 //
 // 它会：连上接收端 → 发 hello → 打印收到的 pair_challenge（含校验码）→
-// 在 PC 设置窗口点「校验码一致，允许」后打印 ready 与会话编号 → 之后按心跳保活。
+// 在 PC 设置窗口点「允许连接」后打印 ready 与会话编号 → 之后按心跳保活。
 package main
 
 import (
@@ -96,7 +96,7 @@ func main() {
 			}
 			switch m["type"] {
 			case "pair_challenge":
-				fmt.Printf("配对请求：校验码 %v（请在 PC 设置窗口点「校验码一致，允许」）\n", m["code"])
+				fmt.Printf("配对请求：校验码 %v（请在 PC 设置窗口点「允许连接」）\n", m["code"])
 			case "ready":
 				ready = true
 				fmt.Printf("已建立会话：%v（UDP %v）\n", m["session"], m["udp_port"])

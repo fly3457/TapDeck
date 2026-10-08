@@ -69,6 +69,8 @@ type Pending struct {
 	Code     string
 	Expires  time.Time
 	answer   chan bool
+	answered bool
+	ctx      context.Context
 	cancel   context.CancelFunc
 	revoke   func()
 }
@@ -179,6 +181,7 @@ type Server struct {
 	buttonMu     sync.Mutex
 	buttonOwners map[string]map[uint64]bool
 	pending      map[string]*Pending
+	pairTimeout  time.Duration
 	// sessions 是当前已连接的控制端，按会话 id 索引，最多 MaxSessions 个。
 	sessions     map[uint64]*session
 	http         *http.Server
@@ -266,7 +269,7 @@ func New(dir string) (*Server, error) {
 		host = ips[1].String()
 	}
 	name, _ := os.Hostname()
-	s := &Server{cfg: c, dir: dir, host: host, name: name, pin: pin, cert: cert, pairEpoch: map[string]uint64{}, pending: map[string]*Pending{}, sessions: map[uint64]*session{}, Input: input.New(), Audio: audio.New()}
+	s := &Server{cfg: c, dir: dir, host: host, name: name, pin: pin, cert: cert, pairEpoch: map[string]uint64{}, pending: map[string]*Pending{}, pairTimeout: 120 * time.Second, sessions: map[uint64]*session{}, Input: input.New(), Audio: audio.New()}
 	if s.paired, err = loadPaired(dir); err != nil {
 		return nil, err
 	}
@@ -486,11 +489,12 @@ func (s *Server) Snapshot() Snapshot {
 }
 func (s *Server) Approve(id string, allow bool) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	p := s.pending[id]
-	s.mu.Unlock()
-	if p != nil {
+	if p != nil && !p.answered && time.Now().Before(p.Expires) && (p.ctx == nil || p.ctx.Err() == nil) {
 		select {
 		case p.answer <- allow:
+			p.answered = true
 		default:
 		}
 	}
@@ -592,6 +596,9 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := ""
+	// One reader remains active during approval and the established session.
+	// This also observes a phone closing its socket while the PC prompt is open.
+	messages := receiveMessages(ctx, ws, cancel)
 	if !trusted {
 		client, e := base64.RawURLEncoding.DecodeString(hello.ClientNonce)
 		if e != nil || len(client) != 32 {
@@ -599,8 +606,9 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 		}
 		serverNonce := secure.Random(32)
 		id := fmt.Sprintf("%016x", randomID())
-		p := &Pending{ID: id, DeviceID: hello.DeviceID, Name: hello.Name, Code: Code(s.pin, client, serverNonce), Expires: time.Now().Add(120 * time.Second), answer: make(chan bool, 1)}
+		p := &Pending{ID: id, DeviceID: hello.DeviceID, Name: hello.Name, Code: Code(s.pin, client, serverNonce), Expires: time.Now().Add(s.pairTimeout), answer: make(chan bool, 1)}
 		pairCtx, pairCancel := context.WithDeadline(ctx, p.Expires)
+		p.ctx = pairCtx
 		defer pairCancel()
 		p.cancel = pairCancel
 		p.revoke = func() {
@@ -620,14 +628,7 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 		if e = write(pairCtx, ws, map[string]any{"type": "pair_challenge", "request_id": id, "server_nonce": base64.RawURLEncoding.EncodeToString(serverNonce), "code": p.Code, "qr_verified": false}); e != nil {
 			return
 		}
-		// 手机上只需要看到校验码，不再需要点“一致”：这里直接等 PC 端确认。
-		// （老版本 App 仍会发一条 pair_confirm，控制循环会把它当未知消息忽略。）
-		select {
-		case allow := <-p.answer:
-			if !allow {
-				return
-			}
-		case <-pairCtx.Done():
+		if !awaitPairing(ctx, pairCtx, ws, messages, p) {
 			return
 		}
 		s.mu.Lock()
@@ -758,8 +759,8 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	for ctx.Err() == nil {
-		m, e := read(ctx, ws)
-		if e != nil {
+		m, ok := <-messages
+		if !ok || ctx.Err() != nil {
 			return
 		}
 		ss.lastSeen.Store(time.Now().UnixNano())

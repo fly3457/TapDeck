@@ -16,6 +16,19 @@ import (
 const voiceRoutingText = "TapDeck 输出选择 CABLE Input；\n系统音频输入或目标输入法的麦克风选择 CABLE Output。"
 const cableAttributionText = "VB-CABLE 来自 VB-Audio，是 donationware。"
 
+func audioDeviceRow(devices **walk.ComboBox, names []string, selected int, refresh, settings func()) d.Composite {
+	return d.Composite{Layout: d.HBox{MarginsZero: true}, Children: []d.Widget{
+		d.ComboBox{AssignTo: devices, Model: names, CurrentIndex: selected, StretchFactor: 1, MinSize: d.Size{Width: 180}},
+		// Allocate the fixed actions first so Walk gives the readonly selector
+		// all remaining width (its ComboBox is growable but not greedy).
+		d.Composite{Layout: d.HBox{MarginsZero: true}, MinSize: d.Size{Width: 262}, MaxSize: d.Size{Width: 262}, Children: []d.Widget{
+			d.PushButton{Text: "刷新音频设备", OnClicked: refresh, MinSize: d.Size{Width: 115}, MaxSize: d.Size{Width: 115}},
+			d.PushButton{Text: "系统音频输入设置", OnClicked: settings, MinSize: d.Size{Width: 135}, MaxSize: d.Size{Width: 135}},
+			d.HSpacer{},
+		}},
+	}}
+}
+
 func voiceRoutingHint() d.TextLabel {
 	return d.TextLabel{Text: voiceRoutingText, TextColor: walk.RGB(200, 35, 35), MinSize: d.Size{Width: 100}}
 }

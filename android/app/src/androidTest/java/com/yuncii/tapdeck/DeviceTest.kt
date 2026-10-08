@@ -370,7 +370,7 @@ class DeviceTest {
                 tapNode(offToggle)
                 await { !client.inputSettings.value.haptics }
                 instrumentation.sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
-                await { nodes().none { it.text?.toString() == "连接与设备设置" } }
+                await { nodes().none { it.text?.toString() == "连接与设置" } }
                 scenario.onActivity { client.forget() }
                 SystemClock.sleep(100)
                 assertEquals(DeviceInputSettings(1.7, false), kotlinx.coroutines.runBlocking { store.loadInputSettings() })
@@ -811,7 +811,7 @@ class DeviceTest {
             val button = accessibilityNodes(automation.rootInActiveWindow).single { it.contentDescription?.startsWith("连接设置") == true }
             assertTrue(button.performAction(AccessibilityNodeInfo.ACTION_CLICK))
             SystemClock.sleep(250)
-            await { automation.rootInActiveWindow?.let { root -> accessibilityNodes(root).any { it.text?.toString() == "连接与设备设置" } } == true }
+            await { automation.rootInActiveWindow?.let { root -> accessibilityNodes(root).any { it.text?.toString() == "连接与设置" } } == true }
             InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
             scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
             scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
@@ -841,6 +841,32 @@ class DeviceTest {
         try { block(client, socket, state) } finally {
             client.close()
             scope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+        }
+    }
+
+    @Test fun pairingRejectionStopsRetryAndIgnoresStaleFailure() {
+        for (code in listOf("pairing_rejected", "pairing_expired")) withVoiceTestClient { client, _, state ->
+            fun field(name: String) = client.javaClass.getDeclaredField(name).apply { isAccessible = true }
+            field("connected").setBoolean(client, false)
+            field("peer").set(client, Peer("127.0.0.1", 41443, 41080, "a".repeat(64)))
+            state.value = state.value.copy(connected = false, pairing = "ABCD 1234", pairingConfirmed = true)
+            val generation = field("generation").getLong(client)
+            val before = state.value
+            assertFalse(client.finishPairingAttempt(generation, "touchpad_error", "无关错误"))
+            assertTrue(client.finishPairingAttempt(generation - 1, code, "陈旧请求"))
+            assertEquals(before, state.value)
+            assertTrue(client.finishPairingAttempt(generation, code, "请重新点击连接"))
+            assertEquals("", state.value.pairing)
+            assertFalse(state.value.pairingConfirmed)
+            assertEquals("请重新点击连接", state.value.error)
+            assertFalse(field("reconnect").getBoolean(client))
+            assertNull(field("peer").get(client))
+            val after = state.value
+            client.javaClass.getDeclaredMethod("lost", java.lang.Long.TYPE, String::class.java).apply { isAccessible = true }
+                .invoke(client, generation, "旧连接关闭")
+            client.setForeground(false); client.setForeground(true)
+            assertEquals(after, state.value)
+            assertFalse((field("reconnectJob").get(client) as? kotlinx.coroutines.Job)?.isActive == true)
         }
     }
 
@@ -1062,8 +1088,13 @@ class DeviceTest {
         var result = android.app.Instrumentation.ActivityResult(android.app.Activity.RESULT_OK,
             Intent().putExtra(com.google.zxing.client.android.Intents.Scan.RESULT, "http://10.23.45.67:41080/pair"))
         var scans = 0
+        var openedProject = false
         val monitor = object : android.app.Instrumentation.ActivityMonitor() {
             override fun onStartActivity(intent: Intent): android.app.Instrumentation.ActivityResult? {
+                if (intent.action == Intent.ACTION_VIEW && intent.dataString == "https://github.com/fly3457/TapDeck") {
+                    openedProject = true
+                    return android.app.Instrumentation.ActivityResult(android.app.Activity.RESULT_CANCELED, null)
+                }
                 if (intent.component?.className != "com.journeyapps.barcodescanner.CaptureActivity") return null
                 scans++
                 return result
@@ -1077,6 +1108,10 @@ class DeviceTest {
                 fun nodes() = automation.rootInActiveWindow?.let(::accessibilityNodes).orEmpty()
                 await { nodes().any { it.contentDescription?.startsWith("连接设置") == true } }
                 assertTrue(nodes().single { it.contentDescription?.startsWith("连接设置") == true }.performAction(AccessibilityNodeInfo.ACTION_CLICK))
+                await { nodes().any { it.text?.toString() == "github.com/fly3457/TapDeck" } }
+                val link = nodes().single { it.text?.toString() == "github.com/fly3457/TapDeck" }
+                assertTrue(generateSequence(link) { it.parent }.first { it.isClickable }.performAction(AccessibilityNodeInfo.ACTION_CLICK))
+                await { openedProject }
                 fun scan() {
                     var button: AccessibilityNodeInfo? = null
                     await {
@@ -1087,6 +1122,11 @@ class DeviceTest {
                         }
                         button != null
                     }
+                    val heading = nodes().single { it.text?.toString() == "输入PC连接窗口URL" }
+                    val headingBounds = Rect().also { heading.getBoundsInScreen(it) }
+                    val scanBounds = Rect().also { button!!.getBoundsInScreen(it) }
+                    assertTrue("scanner must share the heading row", kotlin.math.abs(headingBounds.centerY() - scanBounds.centerY()) < scanBounds.height()/2)
+                    assertTrue("scanner must follow heading", headingBounds.right <= scanBounds.left)
                     // Accessibility activation is stable while the scroll animation settles.
                     val action = generateSequence(button!!) { it.parent }.first { it.isClickable }
                     assertTrue(action.performAction(AccessibilityNodeInfo.ACTION_CLICK))
@@ -1097,7 +1137,7 @@ class DeviceTest {
                 scan()
                 await { address() == "http://10.23.45.67:41080/pair" }
                 assertEquals("scanning must not start a connection", before, client.state.value)
-                assertTrue(nodes().any { it.text?.toString() == "连接与设备设置" })
+                assertTrue(nodes().any { it.text?.toString() == "连接与设置" })
                 result = android.app.Instrumentation.ActivityResult(android.app.Activity.RESULT_CANCELED, null)
                 scan()
                 await { scans == 2 }
@@ -1126,7 +1166,14 @@ class DeviceTest {
                 saveUiScreenshot("pairing-scan-filled")
                 // Preview the connected action row without opening a real PC connection.
                 scenario.onActivity { activity -> uiState(activity).value = before.copy(connected = true) }
-                await { nodes().any { it.text?.toString() == "忘记当前电脑" } }
+                await {
+                    val visible = nodes().any { it.text?.toString() == "忘记当前电脑" }
+                    if (!visible) {
+                        nodes().firstOrNull { it.isScrollable }?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+                        instrumentation.waitForIdleSync()
+                    }
+                    visible
+                }
                 saveUiScreenshot("pairing-connected-actions")
             }
         } finally {

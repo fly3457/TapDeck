@@ -290,6 +290,7 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
                         "mic_stopped" -> finishMic(m.str("recording"))
                         "error" -> {
                             if (m.str("code") == "pairing_revoked") { revokePair(gen, m.str("reason")); return }
+                            if (finishPairingAttempt(gen, m.str("code"), m.str("reason"))) return
                             if (m.str("code") == "version_mismatch") reconnect = false
                             mutable.update { it.copy(error = m.str("reason")) }
                             if (m.str("code") == "touchpad_error") touchpadNotice(m.str("reason"))
@@ -308,6 +309,18 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
      * （兼容老接收端）并进入「等待电脑允许连接」。保留此方法以便手动重发。
      */
     fun confirmPair() { val code = mutable.value.pairing; if (code.isNotEmpty()) { send(message("pair_confirm", "code" to code.j())); mutable.update { it.copy(pairingConfirmed = true, status = "等待电脑允许连接") } } }
+    internal fun finishPairingAttempt(gen: Long, code: String, reason: String): Boolean {
+        if (code != "pairing_rejected" && code != "pairing_expired") return false
+        synchronized(lock) {
+            if (gen != generation) return true
+            desiredConnection++; reconnect = false; retryAt = 0L; retryCount = 0
+            reconnectJob?.cancel(); peer = null
+        }
+        val status = if (code == "pairing_rejected") "电脑未允许连接" else "配对请求已过期"
+        disconnect(status)
+        mutable.update { it.copy(pairingConfirmed = false, error = reason.ifEmpty { "$status，请重新点击连接" }) }
+        return true
+    }
     private fun revokePair(gen: Long, reason: String) {
         val revoked = synchronized(lock) {
             if (gen != generation) return

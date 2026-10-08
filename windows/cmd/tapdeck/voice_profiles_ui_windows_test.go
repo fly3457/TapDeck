@@ -25,6 +25,7 @@ func TestVoiceProfileEditorUI(t *testing.T) {
 	}
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+	defer useSystemDPIForTest()()
 	if err := os.MkdirAll(out, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -42,17 +43,16 @@ func TestVoiceProfileEditorUI(t *testing.T) {
 				d.Label{Text: "VB-CABLE 可用：CABLE Input / CABLE Output 均已就绪"},
 				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.PushButton{Text: "安装虚拟声卡", Enabled: false}, d.PushButton{Text: "重新检测"}, d.PushButton{Text: "VB-Audio 官网"}, d.PushButton{Text: "原包许可"}}},
 				d.Label{Text: cableAttributionText},
-				d.ComboBox{Model: []string{"自动选择 CABLE Input"}, CurrentIndex: 0},
-				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.PushButton{Text: "刷新音频设备"}, d.PushButton{Text: "系统音频输入设置"}}},
+				audioDeviceRow(nil, []string{"自动选择 CABLE Input"}, 0, func() {}, func() {}),
 				d.Label{Text: "CABLE Input (VB-Audio Virtual Cable) · 输入电平 0%"},
 				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.Label{Text: "音量倍率（0–3）"}, d.NumberEdit{Value: float64(1), MinValue: 0, MaxValue: 3, Decimals: 2}}},
-				d.Label{Text: "名称最多 8 个汉字 / 16 个英文字符；热键留空时仅传音。"}, widget,
+				horizontalRule(), d.Label{Text: "名称：最多 8 个汉字 / 16 个英文字符。热键：留空仅传音。"}, widget,
 				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.Label{Text: "尾音结束延迟 ms"}, d.NumberEdit{Value: float64(200), MinValue: 0, MaxValue: 1000}}},
 			}}}}, d.PushButton{Text: "保存并同步配置"},
 		}}).Create(); err != nil {
 			t.Fatal(err)
 		}
-		mw.SetBounds(walk.Rectangle{X: -12000, Y: -12000, Width: size.Width, Height: size.Height})
+		placeTestWindow(mw, size)
 		mw.Show()
 		var failure error
 		capture := func(label string) {
@@ -92,7 +92,17 @@ func TestVoiceProfileEditorUI(t *testing.T) {
 			time.Sleep(600 * time.Millisecond)
 			mw.Synchronize(func() {
 				capture("top")
+				for i := range editors {
+					if editors[i].body.Visible() != profiles[i].Enabled {
+						failure = fmt.Errorf("default expansion %d", i)
+					}
+				}
 				e := &editors[0]
+				e.setExpanded(false)
+				if e.body.Visible() || !e.enabled.Checked() {
+					failure = fmt.Errorf("collapse changed enable state")
+				}
+				e.setExpanded(true)
 				if e.holdPanel.Visible() || !e.togglePanel.Visible() {
 					failure = fmt.Errorf("incorrect toggle visibility")
 				}
@@ -109,6 +119,21 @@ func TestVoiceProfileEditorUI(t *testing.T) {
 			})
 			time.Sleep(200 * time.Millisecond)
 			mw.Synchronize(func() {
+				for i := range editors {
+					e := &editors[i]
+					if e.body.Visible() {
+						panel := e.holdPanel
+						if e.mode.CurrentIndex() == 1 {
+							panel = e.togglePanel
+						}
+						for j := 0; j < panel.Children().Len(); j++ {
+							row := panel.Children().At(j).(*walk.Composite)
+							if err := checkHorizontalRow(row); err != nil {
+								failure = err
+							}
+						}
+					}
+				}
 				for i := 0; i < 10; i++ {
 					scroll.SendMessage(win.WM_VSCROLL, win.SB_PAGEDOWN, 0)
 				}
@@ -119,11 +144,24 @@ func TestVoiceProfileEditorUI(t *testing.T) {
 				for i := range editors {
 					editors[i].name.SetText("八个汉字名称测试")
 					editors[i].mode.SetCurrentIndex(1)
+					editors[i].setExpanded(true)
 				}
 			})
 			time.Sleep(200 * time.Millisecond)
 			mw.Synchronize(func() {
 				capture("bottom")
+				for i := range editors {
+					editors[i].setExpanded(false)
+				}
+			})
+			time.Sleep(200 * time.Millisecond)
+			mw.Synchronize(func() {
+				capture("collapsed")
+				for i := range editors {
+					if editors[i].title.Text() != "八个汉字名称测试" {
+						failure = fmt.Errorf("collapsed title did not update")
+					}
+				}
 				t.Logf("%dx%d, DPI %d, scroll viewport %+v", size.Width, size.Height, mw.DPI(), scroll.SizePixels())
 				mw.Close()
 			})
@@ -134,4 +172,16 @@ func TestVoiceProfileEditorUI(t *testing.T) {
 			t.Fatal(failure)
 		}
 	}
+}
+
+func checkHorizontalRow(row *walk.Composite) error {
+	end := 0
+	for i := 0; i < row.Children().Len(); i++ {
+		b := row.Children().At(i).BoundsPixels()
+		if b.Width <= 0 || b.X < end || b.X+b.Width > row.ClientBoundsPixels().Width+1 {
+			return fmt.Errorf("horizontal form overflow: child %d %+v in %+v", i, b, row.ClientBoundsPixels())
+		}
+		end = b.X + b.Width
+	}
+	return nil
 }
