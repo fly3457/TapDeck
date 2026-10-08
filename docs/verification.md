@@ -2,6 +2,26 @@
 
 测试日期：2026-10-06 至 2026-10-08。本记录区分已观察到的结果与尚未完成的验收，不把目标数值当作实测结果。
 
+## 0.3.14 虚拟键盘启动检测、默认快捷键与音频输入入口
+
+2026-10-08 增加 FakerInput 启动检测：缺失提示安装，已安装但不可用提示修复，已就绪时不打扰；后台自启、输入忙碌和安装中延后检查，每次运行只提示一次。语音页新增“系统音频输入设置”，优先打开 Windows“声音 → 录制”设备列表；顶部红色提示改为“系统音频输入或目标输入法的麦克风选择 CABLE Output。”，移除固定的欢迎捐赠与重启文案，保留来源、donationware 和原包许可。
+
+PC 与 Android 新默认值统一为：音量- `VolumeDown`、上 `Up`、音量+ `VolumeUp`、退格 `Backspace`、左 `Left`、下 `Down`、右 `Right`、回车 `Return`，八项全部启用。应用升级继续保留已保存配置；按本轮用户明确选择，另外替换当前电脑的八项设置。
+
+| 验证项 | 结果 |
+|---|---|
+| 默认配置与当前电脑 | 独立 Go 校验确认 `Default()`、空目录首次加载、Android 默认声明、八个按键解析及本机保存值逐项一致。当前接收端界面的名称、顺序、热键及启用状态均匹配，执行“保存并同步配置”返回成功；手机当时离线，尚未观察重连后的实机显示 |
+| 本机备份与持久化 | `%LOCALAPPDATA%\TapDeck\config.json` 原始内容先备份为 `config.before-shortcuts-0.3.14-20261008-174325.json.bak`。本机文件只原子替换八项快捷键并将 revision 27 → 28，读取回验通过；其余字段与修改前一致，保留原 schema，未改配对文件或停止当前接收端 |
+| 虚拟键盘 | 新增用例覆盖缺失／未就绪／可用、后台或忙碌延后、检测错误后重试、取消后不重复提示及精确匹配 `root\FakerInput`。本机 `--keyboard-status` 显示 `installation=ready`、实际 HID、FakerInput 0.1.1 / API 1；独立调用 PnP 检测路径（传入 HID 不可用，未禁用真实设备）仍正确识别已安装 |
+| 音频设置入口 | 单元测试验证打开 `control.exe mmsys.cpl,,1`，启动失败回退至 `ms-settings:sound-defaultinputproperties`，均失败时报告错误；正常路径只打开一个窗口，不改默认设备。本轮未在运行中的旧版接收端点击新版入口 |
+| PC 布局 | 独立屏幕外 Walk 编辑器在 740×800 和最小 680×700 逻辑窗口、120 DPI（125%）下通过。检查两张顶部截图，红色提示完整换行，四个驱动／许可按钮与新的音频设置入口可见，三组配置保持纵向滚动；原有字段切换检查通过 |
+| 自动检查与构建 | 官方 `scripts/build-windows.ps1 -OutputDirectory dist/0.3.14` 通过：29 项版本规则检查、54 项 Kotlin JVM 测试（0 失败／错误）、Go 测试、`go vet`、APK 与三个 EXE 构建。继续排除会实际修改本机音量和开机自启注册表的两个测试 |
+| 版本、内嵌及签名 | 两端版本 0.3.14 / Android code 17；三个 EXE 的文件版本、产品版本及数字版本核验通过，正式版与诊断版实际 `--apk-info` 对应同一最新 APK。交付／Gradle／内嵌 APK 哈希一致，`apksigner verify --print-certs` 通过，证书与 0.3.13 相同 |
+
+交付目录 `dist/0.3.14` 包含 `TapDeck-0.3.14.exe`、`TapDeck-debug-0.3.14.exe`、`TapDeck-hidprobe-0.3.14.exe` 和 `TapDeck-0.3.14.apk`；本次 APK 为 11,442,228 字节，SHA-256 为 `a8d08ab9250895e954706201fc01692186207925695dbe04f52aaac564376dde`。版本与校验清单为 `release-manifest.json`、`SHA256SUMS.txt` 及两份 `*.exe.apk-info.json`。构建、布局、默认值／PnP 检查日志分别位于 `.tools/ui-validation/windows-0.3.14-build.log`、`pc-voice-0.3.14-ui.log`、`shortcuts-driver-0.3.14.log`。
+
+代表性截图：[语音页](screenshots/0.3.14/pc-voice-top.png)、[最小窗口](screenshots/0.3.14/pc-voice-minimum.png)。本轮未实际重新安装／修复本机驱动，也未在干净系统验证缺失驱动的完整安装流程；Android 设备 UI 与真实传音链路未重跑。仅生成本地交付包，公开 0.3.6 下载链接保持原值。
+
 ## 0.3.13 版本长期规则与最新控制端内嵌校验
 
 2026-10-08 将每次迭代升版、所有平台产物携带版本、接收端每次打包嵌入最新控制端，以及完成后提交 Git 写入 `AGENTS.md` 和 [版本管理](versioning.md)。新增唯一版本来源 `version.properties`，接收端与 Android 可独立演进；本轮通过递增脚本从 0.3.12 / code 15 升至接收端 0.3.13、Android 0.3.13 / code 16。

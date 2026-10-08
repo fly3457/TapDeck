@@ -38,11 +38,12 @@ func TestVoiceProfileEditorUI(t *testing.T) {
 		if err := (d.MainWindow{AssignTo: &mw, Title: "TapDeck · 语音配置验证", Size: d.Size{Width: size.Width, Height: size.Height}, Font: d.Font{Family: "Microsoft YaHei UI", PointSize: 9}, Layout: d.VBox{}, Children: []d.Widget{
 			d.Label{Text: "已连接：布局验证设备"},
 			d.TabWidget{Pages: []d.TabPage{{Title: "语音", Layout: d.VBox{}, Children: []d.Widget{
-				d.Label{Text: "TapDeck 输出选择 CABLE Input；目标输入法或录音软件的麦克风选择 CABLE Output。"},
+				voiceRoutingHint(),
 				d.Label{Text: "VB-CABLE 可用：CABLE Input / CABLE Output 均已就绪"},
 				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.PushButton{Text: "安装虚拟声卡", Enabled: false}, d.PushButton{Text: "重新检测"}, d.PushButton{Text: "VB-Audio 官网"}, d.PushButton{Text: "原包许可"}}},
-				d.Label{Text: "VB-CABLE 来自 VB-Audio，是 donationware，欢迎捐赠。安装后需重启 Windows。"},
-				d.ComboBox{Model: []string{"自动选择 CABLE Input"}, CurrentIndex: 0}, d.PushButton{Text: "刷新音频设备"},
+				d.Label{Text: cableAttributionText},
+				d.ComboBox{Model: []string{"自动选择 CABLE Input"}, CurrentIndex: 0},
+				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.PushButton{Text: "刷新音频设备"}, d.PushButton{Text: "系统音频输入设置"}}},
 				d.Label{Text: "CABLE Input (VB-Audio Virtual Cable) · 输入电平 0%"},
 				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.Label{Text: "音量倍率（0–3）"}, d.NumberEdit{Value: float64(1), MinValue: 0, MaxValue: 3, Decimals: 2}}},
 				d.Label{Text: "名称最多 8 个汉字 / 16 个英文字符；热键留空时仅传音。"}, widget,

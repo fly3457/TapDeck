@@ -45,8 +45,8 @@ type Config struct {
 
 func Default() Config {
 	return Config{SchemaVersion: SchemaVersion, Revision: 1, HTTPPort: 41080, WSSPort: 41443, UDPPort: 41444,
-		Shortcuts: []Shortcut{{"复制", "Ctrl+C", true}, {"粘贴", "Ctrl+V", true}, {"撤销", "Ctrl+Z", true}, {"说话", "Ctrl+L", true},
-			{"快捷键 5", "Left", true}, {"快捷键 6", "Up", true}, {"快捷键 7", "Down", true}, {"快捷键 8", "Right", true}},
+		Shortcuts: []Shortcut{{"音量-", "VolumeDown", true}, {"上", "Up", true}, {"音量+", "VolumeUp", true}, {"退格", "Backspace", true},
+			{"左", "Left", true}, {"下", "Down", true}, {"右", "Right", true}, {"回车", "Return", true}},
 		Voice: Voice{Profiles: DefaultVoiceProfiles(), HoldKey: "RightAlt", ToggleStartKey: "RightCtrl+L", ToggleStopKey: "RightCtrl+L", StopDelayMS: 200}, Gain: 1, Sensitivity: PointerBaseSensitivity, NaturalScroll: true, KeyboardBackend: "auto"}
 }
 func Directory() string { return filepath.Join(os.Getenv("LOCALAPPDATA"), "TapDeck") }

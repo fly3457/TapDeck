@@ -90,7 +90,17 @@ func main() {
 	}
 	if *keyboardStatus {
 		engine := keyboard.NewEngine("auto")
-		_ = json.NewEncoder(os.Stdout).Encode(engine.Status())
+		status := engine.Status()
+		state, err := driver.Detect(status.Driver != "")
+		detectionError := ""
+		if err != nil {
+			detectionError = err.Error()
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(struct {
+			keyboard.Status
+			Installation   driver.State `json:"installation"`
+			DetectionError string       `json:"detection_error,omitempty"`
+		}{status, state, detectionError})
 		return
 	}
 	if *cableStatus {
@@ -271,6 +281,8 @@ func window(s *server.Server, dir string, startHidden bool) error {
 		}
 	}
 	agent, _ := s.Input.(*keyboard.Agent)
+	keyboardState, keyboardErr := driver.Detect(agent.KeyboardStatus().Driver != "")
+	var driverPrompt keyboardDriverPrompt
 	ds, _ := audio.Devices()
 	deviceNames := []string{"自动选择 CABLE Input"}
 	deviceIDs := []string{""}
@@ -328,6 +340,71 @@ func window(s *server.Server, dir string, startHidden bool) error {
 		_ = devices.SetModel(deviceNames)
 		_ = devices.SetCurrentIndex(index)
 	}
+	applyKeyboardStatus := func() {
+		if installing.Load() {
+			return
+		}
+		kb := agent.KeyboardStatus()
+		text := keyboardState.Text()
+		if keyboardErr != nil {
+			text = "虚拟键盘检测失败：" + keyboardErr.Error()
+		}
+		_ = keyboardLabel.SetText(fmt.Sprintf("%s\n实际发送：%s · 驱动：%s · API %d\n%s", text, kb.Actual, kb.Driver, kb.API, kb.Error))
+		driverButton.SetEnabled(!kb.Busy && keyboardErr == nil)
+	}
+	redetectKeyboard := func() {
+		if installing.Load() {
+			return
+		}
+		go func() {
+			err := agent.ConfigureBackend(s.Config().KeyboardBackend)
+			state, detectionErr := driver.Detect(agent.KeyboardStatus().Driver != "")
+			mw.Synchronize(func() {
+				keyboardState, keyboardErr = state, detectionErr
+				applyKeyboardStatus()
+				if err != nil {
+					walk.MsgBox(mw, "虚拟键盘检测", err.Error(), walk.MsgBoxIconInformation)
+				}
+			})
+		}()
+	}
+	installKeyboard := func() {
+		if agent.KeyboardStatus().Busy || !installing.CompareAndSwap(false, true) {
+			return
+		}
+		driverButton.SetEnabled(false)
+		_ = keyboardLabel.SetText("正在安装原版签名驱动，请处理 Windows 授权提示…")
+		go func() {
+			state, err := driver.Detect(agent.KeyboardStatus().Driver != "")
+			var result driver.InstallResult
+			if err == nil {
+				result, err = driver.Install(filepath.Join(dir, "driver", "0.1.1"), state != driver.Missing)
+			}
+			if err == nil && !result.RestartRequired {
+				err = agent.ConfigureBackend(s.Config().KeyboardBackend)
+			}
+			state, detectionErr := driver.Detect(agent.KeyboardStatus().Driver != "")
+			mw.Synchronize(func() {
+				defer func() {
+					installing.Store(false)
+					applyKeyboardStatus()
+				}()
+				keyboardState, keyboardErr = state, detectionErr
+				switch {
+				case err != nil:
+					walk.MsgBox(mw, "驱动安装", err.Error(), walk.MsgBoxIconInformation)
+				case result.RestartRequired:
+					walk.MsgBox(mw, "需要重启", "驱动安装要求重启 Windows；TapDeck 不会自动重启电脑。", walk.MsgBoxIconInformation)
+				case detectionErr != nil:
+					walk.MsgBox(mw, "检测失败", detectionErr.Error(), walk.MsgBoxIconError)
+				case state != driver.Ready:
+					walk.MsgBox(mw, "虚拟键盘尚未就绪", state.Text()+"。可稍后重新检测。", walk.MsgBoxIconInformation)
+				default:
+					walk.MsgBox(mw, "安装完成", "虚拟键盘已重新检测并可用。", walk.MsgBoxIconInformation)
+				}
+			})
+		}()
+	}
 	applyCableStatus := func() {
 		if cableInstalling.Load() {
 			return
@@ -355,9 +432,11 @@ func window(s *server.Server, dir string, startHidden bool) error {
 			r, err := cableManager.Install(filepath.Join(dir, "vbcable", "Pack45"))
 			v, detectionErr := vbcable.DetectAt(filepath.Join(dir, "vbcable", "Pack45"))
 			mw.Synchronize(func() {
-				cableInstalling.Store(false)
+				defer func() {
+					cableInstalling.Store(false)
+					applyCableStatus()
+				}()
 				cable, cableErr = v, detectionErr
-				applyCableStatus()
 				refreshAudio()
 				switch {
 				case err != nil:
@@ -375,9 +454,23 @@ func window(s *server.Server, dir string, startHidden bool) error {
 			return
 		}
 		cablePrompted = true
-		if cableErr == nil && cable.State == vbcable.Missing && !cable.RestartRequired && walk.MsgBox(mw, "安装虚拟声卡", "语音传输需要 VB-Audio 的 VB-CABLE。TapDeck 已内置完整原包，可离线打开官方安装向导。\n\nVB-CABLE 是 donationware，欢迎向 VB-Audio 捐赠。安装需要管理员授权，完成后需自行重启 Windows。\n\n现在打开安装向导？也可稍后从“语音”页安装。", walk.MsgBoxYesNo|walk.MsgBoxIconQuestion) == walk.DlgCmdYes {
+		if cableErr == nil && cable.State == vbcable.Missing && !cable.RestartRequired && walk.MsgBox(mw, "安装虚拟声卡", "语音传输需要 VB-Audio 的 VB-CABLE。TapDeck 已内置完整原包，可离线打开官方安装向导。\n\nVB-CABLE 是 donationware。安装需要管理员授权。\n\n现在打开安装向导？也可稍后从“语音”页安装。", walk.MsgBoxYesNo|walk.MsgBoxIconQuestion) == walk.DlgCmdYes {
 			installCable()
 		}
+	}
+	var prerequisitePromptActive bool
+	checkPrerequisites := func() {
+		if prerequisitePromptActive || !mw.Visible() || installing.Load() || cableInstalling.Load() || agent.KeyboardStatus().Busy {
+			return
+		}
+		prerequisitePromptActive = true
+		defer func() { prerequisitePromptActive = false }()
+		title, message := driverPrompt.Take(true, false, keyboardState, keyboardErr)
+		if title != "" && walk.MsgBox(mw, title, message, walk.MsgBoxYesNo|walk.MsgBoxIconQuestion) == walk.DlgCmdYes {
+			installKeyboard()
+			return
+		}
+		checkCableOnce()
 	}
 	save := func() {
 		c := s.Config()
@@ -447,38 +540,28 @@ func window(s *server.Server, dir string, startHidden bool) error {
 					}},
 				}},
 			}},
-			{Title: "快捷键", Layout: d.VBox{}, Children: append([]d.Widget{d.Label{Text: "键盘发送方式"}, d.ComboBox{AssignTo: &backend, Model: backendNames, CurrentIndex: selectedBackend}, d.Label{AssignTo: &keyboardLabel, Text: "正在检测虚拟键盘…"}, d.PushButton{AssignTo: &driverButton, Text: "安装 / 修复虚拟键盘", OnClicked: func() {
-				if !installing.CompareAndSwap(false, true) {
-					return
-				}
-				driverButton.SetEnabled(false)
-				_ = keyboardLabel.SetText("正在安装原版签名驱动，请处理 Windows 授权提示…")
-				go func() {
-					repair := agent.KeyboardStatus().Driver != ""
-					r, e := driver.Install(filepath.Join(dir, "driver", "0.1.1"), repair)
-					if e == nil && !r.RestartRequired {
-						e = agent.ConfigureBackend(s.Config().KeyboardBackend)
-					}
-					mw.Synchronize(func() {
-						installing.Store(false)
-						driverButton.SetEnabled(true)
-						if e != nil {
-							walk.MsgBox(mw, "驱动安装", e.Error(), walk.MsgBoxIconError)
-						} else if r.RestartRequired {
-							walk.MsgBox(mw, "需要重启", "驱动安装要求重启 Windows；TapDeck 不会自动重启电脑。", walk.MsgBoxIconInformation)
-						} else {
-							walk.MsgBox(mw, "安装完成", "虚拟键盘已重新检测。", walk.MsgBoxIconInformation)
-						}
-					})
-				}()
-			}}}, append(shortcutRows, d.VSpacer{})...)},
+			{Title: "快捷键", Layout: d.VBox{}, Children: append([]d.Widget{
+				d.Label{Text: "键盘发送方式"}, d.ComboBox{AssignTo: &backend, Model: backendNames, CurrentIndex: selectedBackend},
+				d.Label{AssignTo: &keyboardLabel, Text: "正在检测虚拟键盘…"},
+				d.Composite{Layout: d.HBox{}, Children: []d.Widget{
+					d.PushButton{AssignTo: &driverButton, Text: "安装 / 修复虚拟键盘", OnClicked: installKeyboard},
+					d.PushButton{Text: "重新检测", OnClicked: redetectKeyboard},
+				}},
+			}, append(shortcutRows, d.VSpacer{})...)},
 			{Title: "语音", Layout: d.VBox{}, Children: []d.Widget{
-				d.Label{Text: "TapDeck 输出选择 CABLE Input；目标输入法或录音软件的麦克风选择 CABLE Output。"},
+				voiceRoutingHint(),
 				d.Label{AssignTo: &cableLabel, Text: "正在检测 VB-CABLE…"},
 				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.PushButton{AssignTo: &cableButton, Text: "安装虚拟声卡", OnClicked: installCable}, d.PushButton{Text: "重新检测", OnClicked: redetectCable}, d.PushButton{Text: "VB-Audio 官网", OnClicked: func() { open(vbcable.Website) }}, d.PushButton{Text: "原包许可", OnClicked: func() { open(cableLicense) }}}},
-				d.Label{Text: "VB-CABLE 来自 VB-Audio，是 donationware，欢迎捐赠。安装后需重启 Windows。"},
+				d.Label{Text: cableAttributionText},
 				d.ComboBox{AssignTo: &devices, Model: deviceNames, CurrentIndex: selectedDevice},
-				d.PushButton{Text: "刷新音频设备", OnClicked: refreshAudio},
+				d.Composite{Layout: d.HBox{}, Children: []d.Widget{
+					d.PushButton{Text: "刷新音频设备", OnClicked: refreshAudio},
+					d.PushButton{Text: "系统音频输入设置", OnClicked: func() {
+						if err := launchSoundInputSettings(shellOpen); err != nil {
+							walk.MsgBox(mw, "音频输入设置", err.Error(), walk.MsgBoxIconError)
+						}
+					}},
+				}},
 				d.Label{AssignTo: &audioStatus, Text: "正在检查音频设备"},
 				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.Label{Text: "音量倍率（0–3）"}, d.NumberEdit{AssignTo: &gain, Value: cfg.Gain, MinValue: 0, MaxValue: 3, Decimals: 2, Increment: 0.1}}},
 				d.Label{Text: "名称最多 8 个汉字 / 16 个英文字符；热键留空时仅传音。"},
@@ -532,6 +615,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 	}()
 	refreshQR()
 	applyCableStatus()
+	applyKeyboardStatus()
 	iconImage := image.NewRGBA(image.Rect(0, 0, 32, 32))
 	for y := 0; y < 32; y++ {
 		for x := 0; x < 32; x++ {
@@ -555,7 +639,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 	defer tray.Dispose()
 	_ = tray.SetIcon(icon)
 	_ = tray.SetToolTip("TapDeck：点击打开设置")
-	show := func() { mw.Show(); mw.Activate(); checkCableOnce() }
+	show := func() { mw.Show(); mw.Activate(); checkPrerequisites() }
 	tray.MouseDown().Attach(func(x, y int, b walk.MouseButton) {
 		if b == walk.LeftButton {
 			show()
@@ -580,7 +664,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 		log.Printf("TapDeck %s（已常驻托盘，设置窗口未显示）", s.PairURL())
 	}
 	if !startHidden {
-		mw.Synchronize(checkCableOnce)
+		mw.Synchronize(checkPrerequisites)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -599,8 +683,11 @@ func window(s *server.Server, dir string, startHidden bool) error {
 				var cableUpdate bool
 				var detectedCable vbcable.Status
 				var detectionErr error
+				var detectedKeyboard driver.State
+				var keyboardDetectionErr error
 				if time.Since(lastMetrics) >= 5*time.Second {
 					detectedCable, detectionErr = vbcable.DetectAt(filepath.Join(dir, "vbcable", "Pack45"))
+					detectedKeyboard, keyboardDetectionErr = driver.Detect(kb.Driver != "")
 					cableUpdate = true
 					metrics, _ := json.Marshal(map[string]any{"at": time.Now().Format(time.RFC3339), "connected": v.Device != "", "mouse_packets": v.MousePackets, "audio_packets": v.AudioPackets, "injection_p95_ms": v.InjectionP95MS, "buffered_frames": v.BufferedFrames, "max_buffered_frames": v.MaxBufferedFrames, "concealed_frames": v.Concealed, "audio_ready": v.AudioReady})
 					_ = config.AtomicWrite(filepath.Join(dir, "runtime-stats.json"), metrics)
@@ -617,6 +704,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 					if cableUpdate {
 						cable, cableErr = detectedCable, detectionErr
 						applyCableStatus()
+						keyboardState, keyboardErr = detectedKeyboard, keyboardDetectionErr
 					}
 					text := "接收已停止"
 					if v.Running {
@@ -629,8 +717,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 						text = fmt.Sprintf("已连接 %d 个控制端：%s", len(v.Devices), strings.Join(v.Devices, "、"))
 					}
 					_ = status.SetText(text)
-					_ = keyboardLabel.SetText(fmt.Sprintf("实际发送：%s · 驱动：%s · API %d\n%s", kb.Actual, kb.Driver, kb.API, kb.Error))
-					driverButton.SetEnabled(!kb.Busy && !installing.Load())
+					applyKeyboardStatus()
 					_ = audioStatus.SetText(fmt.Sprintf("%s · 输入电平 %.0f%%", v.AudioStatus, v.Level*100))
 					_ = stats.SetText(fmt.Sprintf("鼠标包 %d · 音频包 %d · 注入 p95 %.3f ms\n音频缓冲 %d/6 帧 · 历史最大 %d 帧 · 补静音帧 %d", v.MousePackets, v.AudioPackets, v.InjectionP95MS, v.BufferedFrames, v.MaxBufferedFrames, v.Concealed))
 					pendingID = ""
@@ -641,6 +728,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 					} else {
 						_ = pendingLabel.SetText(fmt.Sprintf("等待配对请求（最多同时连接 %d 个控制端）", server.MaxSessions))
 					}
+					checkPrerequisites()
 				})
 			}
 		}

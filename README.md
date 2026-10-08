@@ -8,7 +8,7 @@ TapDeck 将手机麦克风的声音传到 Windows，配合电脑上的语音输�
 
 **[下载 Windows EXE](https://github.com/fly3457/TapDeck/releases/download/v0.3.6/TapDeck.exe) · [下载 Android APK](https://github.com/fly3457/TapDeck/releases/download/v0.3.6/TapDeck-debug.apk) · [查看完整发布包](https://github.com/fly3457/TapDeck/releases/tag/v0.3.6)**
 
-以上为 0.3.6 公开下载链接。当前接收端与 Android 源码版本为 0.3.13 / Android code 16：统一版本清单已支持两端独立升版，构建核验包内版本及 EXE 实际内嵌的最新 APK。第三组语音默认名称为“自定义语音输入”，所有热键留空；已有配置继续保留。
+以上为 0.3.6 公开下载链接。当前接收端与 Android 源码版本为 0.3.14 / Android code 17：启动时检测虚拟键盘，缺失时提示安装；默认八项快捷键调整为音量、方向、退格与回车；语音页增加系统音频输入设置入口和红色路由提示。统一版本清单支持两端独立升版，EXE 内嵌本次构建的最新 APK。
 
 ## 为 Vibe Coding 准备的功能
 
@@ -32,14 +32,14 @@ TapDeck 将手机麦克风的声音传到 Windows，配合电脑上的语音输�
 
 | 顺序 | 默认名称 | 按键 |
 |---|---|---|
-| 1 | 复制 | `Ctrl+C` |
-| 2 | 粘贴 | `Ctrl+V` |
-| 3 | 撤销 | `Ctrl+Z` |
-| 4 | 说话 | `Ctrl+L` |
-| 5 | 快捷键 5 | `Left` |
-| 6 | 快捷键 6 | `Up` |
-| 7 | 快捷键 7 | `Down` |
-| 8 | 快捷键 8 | `Right` |
+| 1 | 音量- | `VolumeDown` |
+| 2 | 上 | `Up` |
+| 3 | 音量+ | `VolumeUp` |
+| 4 | 退格 | `Backspace` |
+| 5 | 左 | `Left` |
+| 6 | 下 | `Down` |
+| 7 | 右 | `Right` |
+| 8 | 回车 | `Return` |
 
 ## 界面预览
 
@@ -54,7 +54,7 @@ TapDeck 将手机麦克风的声音传到 Windows，配合电脑上的语音输�
 
 ## 下载与安装
 
-下表公开下载包为 **0.3.6（测试版）**，Android `versionCode=9`；接收端源码及本地构建为 **0.3.13**，内嵌 Android **0.3.13** / code `16`。支持 **Windows 11 x64**、**Android 8 / API 26 及以上**；手机与电脑需要处于可互通的局域网。
+下表公开下载包为 **0.3.6（测试版）**，Android `versionCode=9`；接收端源码及本地构建为 **0.3.14**，内嵌 Android **0.3.14** / code `17`。支持 **Windows 11 x64**、**Android 8 / API 26 及以上**；手机与电脑需要处于可互通的局域网。
 
 | 文件 | 用途 |
 |---|---|
@@ -65,10 +65,10 @@ TapDeck 将手机麦克风的声音传到 Windows，配合电脑上的语音输�
 
 首次使用：
 
-1. **启动电脑端。** 下载并运行 `TapDeck.exe`，允许访问本地网络。窗口关闭后程序留在托盘，从托盘选择“退出”才停止接收；升级时先退出旧版本。
+1. **启动电脑端。** 下载并运行 `TapDeck.exe`，允许访问本地网络。正常打开窗口时检测 FakerInput 虚拟键盘，缺失时提示安装，已安装但不可用时提示修复；也可稍后在“快捷键”页操作。窗口关闭后程序留在托盘，从托盘选择“退出”才停止接收；升级时先退出旧版本。
 2. **安装手机端。** 用手机系统扫码工具扫描 PC“连接”页的“扫码安装 Android 端”二维码，打开网页下载 APK；也可使用上面的直接下载链接。已安装用户在网页点“打开 TapDeck 连接”，或在 App 中输入 PC 显示的网址。
 3. **完成配对。** 在 PC 核对手机上的校验码，点“校验码一致，允许”。配对成功后保存凭据，下次自动重连。
-4. **配置语音链路。** PC“语音”页可安装 VB-CABLE 并重新检测；按官方要求安装后重启。TapDeck 输出选择 **CABLE Input**，电脑语音输入法的麦克风选择 **CABLE Output**。
+4. **配置语音链路。** PC“语音”页可安装 VB-CABLE 并重新检测。按红色提示，TapDeck 输出选择 **CABLE Input**，系统音频输入或目标输入法的麦克风选择 **CABLE Output**；“系统音频输入设置”直接打开 Windows“声音 → 录制”设备列表。
 5. **设置语音配置。** 在 PC“语音”页选择需要的组、名称和类型，填写与输入法一致的热键后保存同步；首次使用手机麦克风时允许录音权限。
 6. **安排常用快捷键。** PC“快捷键”页启用 1–8 项并保存同步，就可以开始操作。
 
@@ -80,7 +80,7 @@ TapDeck 将手机麦克风的声音传到 Windows，配合电脑上的语音输�
 - PC 固定三组，每组可命名、启用和选择长按／单击类型。长按设置一个触发热键；单击分别设置开始／结束热键。空键仅传音；目标输入框需获得焦点。新安装默认启用“单击语音输入”（开始／结束均 `RightCtrl+L`）和“长按语音输入”（`RightAlt`）；第三组“自定义语音输入”默认关闭、类型为长按，所有热键均留空。升级保留已有热键。
 - 全键盘长按空格使用当前组，始终按住开始、松手结束；单击组也会在松手时发送结束热键。全部关闭时空格不触发录音。详细规则见 [三组语音配置](docs/voice-profiles.md)。
 - 左右修饰键分别识别。例如输入法设置为右 Ctrl＋M，应填写 `RightCtrl+M`；`Ctrl+M` 表示左 Ctrl＋M。可使用“录入”或“单键选择”填写。
-- Windows EXE 内嵌 FakerInput 虚拟键盘安装包。需要虚拟键盘的输入法可从 PC“快捷键”页点“安装 / 修复虚拟键盘”，键盘发送方式默认使用“自动”。
+- Windows EXE 内嵌 FakerInput 虚拟键盘安装包。正常启动窗口时自动检测并提示安装／修复，每次运行只提示一次；后台自启延后到打开设置时提示。“快捷键”页可随时重新检测或安装／修复，键盘发送方式默认使用“自动”。
 - VB-CABLE 安装需管理员授权并重启 Windows。TapDeck 提供安装与检测入口，麦克风选择按上面的 CABLE 路由设置，程序不自动更改 Windows 默认麦克风。
 
 豆包输入法的热键配置与历史实测见 [语音热键说明](docs/voice-hotkey.md)，驱动与安装细节见 [安装引导](docs/installation.md) 和 [虚拟键盘说明](docs/virtual-keyboard.md)。
@@ -125,15 +125,15 @@ $releaseVersions = Get-TapDeckVersions (Get-Location).Path
 
 每次新迭代先运行 `scripts/bump-version.ps1`，默认同时递增两端补丁版本和 Android code；可选 `-Target Receiver` 或 `-Target Android`，后者也递增接收端补丁版本以交付最新内嵌包。重复编译不重复升版。根目录 [version.properties](version.properties) 是唯一版本来源，详细的修改位置、强制交付步骤及 iOS 等未来端规划见 [版本管理](docs/versioning.md)。
 
-该入口先运行版本规则测试、构建 Android 并运行 Kotlin 测试，核验 Gradle 元数据和 APK 内部版本，再从本次 Gradle 输出复制 `TapDeck-0.3.13.apk`、核对 SHA-256，然后运行 Go 测试、`go vet` 和 Windows 构建。接收端与 Android 版本可不同。构建后读取两个接收端 EXE 的 `--apk-info`，核对实际内嵌的版本、code、文件名、大小及哈希，生成 `release-manifest.json` 和 `SHA256SUMS.txt`。任何检查失败均终止，不沿用旧 APK。签名密钥不随源码分发；覆盖既有 Android 安装须使用相同签名。
+该入口先运行版本规则测试、构建 Android 并运行 Kotlin 测试，核验 Gradle 元数据和 APK 内部版本，再从本次 Gradle 输出复制 `TapDeck-0.3.14.apk`、核对 SHA-256，然后运行 Go 测试、`go vet` 和 Windows 构建。接收端与 Android 版本可不同。构建后读取两个接收端 EXE 的 `--apk-info`，核对实际内嵌的版本、code、文件名、大小及哈希，生成 `release-manifest.json` 和 `SHA256SUMS.txt`。任何检查失败均终止，不沿用旧 APK。签名密钥不随源码分发；覆盖既有 Android 安装须使用相同签名。
 
-Windows 生成 `TapDeck-0.3.13.exe`、`TapDeck-debug-0.3.13.exe` 和 `TapDeck-hidprobe-0.3.13.exe`；文件名、程序内版本与“属性 → 详细信息”中的文件版本／产品版本均自动取自接收端版本。无版本号的 EXE 及 `TapDeck-debug.apk` 作为兼容副本保留，对外交付使用带版本号文件。
+Windows 生成 `TapDeck-0.3.14.exe`、`TapDeck-debug-0.3.14.exe` 和 `TapDeck-hidprobe-0.3.14.exe`；文件名、程序内版本与“属性 → 详细信息”中的文件版本／产品版本均自动取自接收端版本。无版本号的 EXE 及 `TapDeck-debug.apk` 作为兼容副本保留，对外交付使用带版本号文件。
 
 Android 单独开发可用 [build-android.ps1](scripts/build-android.ps1)，模拟器矩阵可用 [test-android-ui.ps1](scripts/test-android-ui.ps1)。国际依赖连接失败时，先检查 Clash Verge 和 Anycast，Android 构建可加 `-UseLocalProxy` 使用本机 SOCKS5 1080。构建与内嵌规则见 [APK 分发说明](docs/apk-download.md)。
 
 ## 验证与当前范围
 
-0.3.13 已通过 54 项 Kotlin 单元测试和官方流程中的 Go 测试、`go vet`、两端构建；版本规则测试覆盖独立升版、无效版本、失败保留原值及旧包／内嵌包不一致拦截。交付 APK 与两个接收端 EXE 内嵌 APK 的版本和 SHA-256 一致。此轮针对版本与构建流程，没有重跑设备 UI；详细结果、硬件测试排除项和历史真机记录见 [验证记录](docs/verification.md)。
+0.3.14 已通过 54 项 Kotlin 单元测试、29 项版本规则检查、Go 测试、`go vet` 和两端构建；新增验证覆盖虚拟键盘安装提示时机、准确识别驱动及音频设置入口回退。PC 语音页在 740×800、最小 680×700 逻辑窗口和 120 DPI 下通过布局检查；交付 APK 与两个接收端 EXE 内嵌版本和 SHA-256 一致。本轮未重跑 Android 设备 UI 或缺驱动环境的实际安装；详细结果见 [验证记录](docs/verification.md)。
 
 当前 Android 使用竖屏布局，Windows 运行文件为未签名测试构建，APK 使用现有开发签名。用户已确认其手机在关闭系统震动开关后仍可使用 App 震动；其他机型表现、覆盖升级及原配对重连，以及手机语音转换成目标输入框文字的完整链路，按验证记录逐项验收。多设备共享键鼠，语音一次只由一台设备传送。
 

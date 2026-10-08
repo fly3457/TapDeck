@@ -34,8 +34,8 @@ fun encode64(b: ByteArray): String = Base64.getUrlEncoder().withoutPadding().enc
 @Serializable data class Shortcut(val label: String, val chord: String, val enabled: Boolean = false)
 @Serializable data class Voice(val hold_key: String = "", val toggle_start_key: String = "", val toggle_stop_key: String = "", val stop_delay_ms: Int = 200, val profiles: List<VoiceProfile>? = null)
 @Serializable data class PcConfig(val revision: Long = 1, val shortcuts: List<Shortcut> = listOf(
-    Shortcut("复制", "Ctrl+C", true), Shortcut("粘贴", "Ctrl+V", true), Shortcut("撤销", "Ctrl+Z", true), Shortcut("说话", "Ctrl+L", true),
-    Shortcut("快捷键 5", "Left", true), Shortcut("快捷键 6", "Up", true), Shortcut("快捷键 7", "Down", true), Shortcut("快捷键 8", "Right", true)
+    Shortcut("音量-", "VolumeDown", true), Shortcut("上", "Up", true), Shortcut("音量+", "VolumeUp", true), Shortcut("退格", "Backspace", true),
+    Shortcut("左", "Left", true), Shortcut("下", "Down", true), Shortcut("右", "Right", true), Shortcut("回车", "Return", true)
 ), val voice: Voice = Voice(), val sensitivity: Double = 1.5, val natural_scroll: Boolean = true) {
     fun validate(): PcConfig {
         require(shortcuts.size == 8 && shortcuts.any { it.enabled } && shortcuts.filter { it.enabled }.all { it.label.isNotBlank() && it.chord.isNotBlank() }) { "快捷键配置无效" }
