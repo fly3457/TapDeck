@@ -211,7 +211,7 @@ private fun KeyboardKeyCell(
     }
     val description = when (item.kind) {
         Kind.Shift -> "Shift：短按单次大写，长按锁定大写"
-        Kind.VoiceDual -> "空格：短按一次空格，长按等于长按语音输入（按住说话，松手结束）"
+        Kind.VoiceDual -> "空格：短按一次空格，长按使用当前语音配置（按住说话，松手结束）"
         Kind.Hold -> when (item.primary) {
             "Backspace" -> "退格：短按一次，长按连续退格"
             "LeftCtrl" -> "Ctrl：短按一次，长按连续按住，可配合其他键"

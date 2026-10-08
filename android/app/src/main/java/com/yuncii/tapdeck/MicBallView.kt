@@ -47,6 +47,7 @@ class MicBallView(
     /** 顶部模式按钮的命中区域（每帧按实际排版更新）。 */
     private val modeButton = RectF()
     private var modePressed = false
+    private var modeTouch = false
     private val iconLines by lazy { context.getDrawable(R.drawable.ic_lucide_mic_audio_lines) }
     private val iconSignal by lazy { context.getDrawable(R.drawable.ic_lucide_mic_signal) }
     private var dragging = false
@@ -63,6 +64,13 @@ class MicBallView(
         set(v) { if (field != v) { if (!v) cancel(); field = v; invalidate() } }
     var level = 0f
         set(v) { field = v; if (status != "idle") invalidate() }
+    var profileName: String? = null
+        set(v) { if (field != v) { field = v; invalidate() } }
+    var voiceEnabled = true
+        set(v) { if (field != v) { field = v; invalidate() } }
+    var switchAvailable = true
+        set(v) { if (field != v) { field = v; if (!v) modePressed = false; invalidate() } }
+    private val canSwitch get() = switchAvailable && status == "idle"
 
     /** 外部模式开关当前选中的模式；形状、手势与文案都由它决定。 */
     var gestureMode = MODE_HOLD
@@ -164,7 +172,7 @@ class MicBallView(
             "preparing" -> "准备"
             "stopping" -> "结束"
             "transmitting" -> if (mode == MODE_TOGGLE) "单击" else "长按"
-            else -> if (gestureMode == MODE_TOGGLE) "轻点" else "长按"
+            else -> if (!voiceEnabled) "禁用" else if (gestureMode == MODE_TOGGLE) "轻点" else "长按"
         }
         label(c, caption, cx, cy + radius() * 0.17f, captionSize(caption), radius() * 1.7f)
         // One caption and a separate level bar fit inside the 0.045W footer.
@@ -175,6 +183,7 @@ class MicBallView(
         val hint = when {
             status == "transmitting" -> "麦克风电平 ${(level * 100).toInt()}% · 可拖动调整位置"
             available -> "可拖动到区域任意位置"
+            !voiceEnabled -> "请在 PC 语音页启用配置"
             else -> "连接电脑后使用语音输入"
         }
         val footerCaption = TextUtils.ellipsize(hint, hintPaint, (width - g.unit * 0.03f).coerceAtLeast(0f), TextUtils.TruncateAt.END).toString()
@@ -195,12 +204,13 @@ class MicBallView(
      */
     private fun drawModeButton(c: Canvas) {
         val toggle = gestureMode == MODE_TOGGLE
-        val text = if (toggle) "单击语音输入" else "长按语音输入"
+        val text = profileName ?: if (toggle) "单击语音输入" else "长按语音输入"
         val hint = when (status) {
             "preparing" -> "准备中…"
             "stopping" -> "正在结束…"
             "transmitting" -> if (mode == MODE_TOGGLE) "录音中，再点结束" else "录音中，松手结束"
             else -> when {
+                !voiceEnabled -> "请在 PC 语音页启用配置"
                 !available -> "连接电脑后使用语音输入"
                 toggle -> "轻点开始，再点结束"
                 else -> "按住说话，松手结束"
@@ -232,7 +242,7 @@ class MicBallView(
         c.translate(0f, density)
         c.drawRoundRect(modeButton, corner, corner, paint)
         c.restore()
-        paint.color = if (modePressed) ControllerStyle.PRESSED else ControllerStyle.NORMAL
+        paint.color = if (!canSwitch) Color.rgb(227, 230, 234) else if (modePressed) ControllerStyle.PRESSED else ControllerStyle.NORMAL
         c.drawRoundRect(modeButton, corner, corner, paint)
         paint.style = Paint.Style.STROKE
         paint.strokeWidth = 0.5f * density
@@ -244,11 +254,12 @@ class MicBallView(
         val iconLeft = (modeButton.left + padH).toInt()
         val iconTop = (modeButton.centerY() - iconSize / 2f).toInt()
         icon?.setBounds(iconLeft, iconTop, iconLeft + iconSize.toInt(), iconTop + iconSize.toInt())
-        icon?.setTint(if (modePressed) Color.WHITE else ControllerStyle.LABEL)
+        val labelColor = if (!canSwitch) ControllerStyle.SECONDARY else if (modePressed) Color.WHITE else ControllerStyle.LABEL
+        icon?.setTint(labelColor)
         icon?.draw(c)
 
         hintPaint.textSize = textSize
-        hintPaint.color = if (modePressed) Color.WHITE else ControllerStyle.LABEL
+        hintPaint.color = labelColor
         hintPaint.textAlign = Paint.Align.LEFT
         hintPaint.typeface = android.graphics.Typeface.DEFAULT_BOLD
         c.drawText(text, modeButton.left + padH + iconSize + gap, modeButton.centerY() - (hintPaint.descent() + hintPaint.ascent()) / 2f, hintPaint)
@@ -262,7 +273,8 @@ class MicBallView(
 
     /** 点击模式按钮：在长按 / 单击之间切换，并通知外部记录到本地。 */
     private fun toggleMode() {
-        gestureMode = if (gestureMode == MODE_TOGGLE) MODE_HOLD else MODE_TOGGLE
+        if (!canSwitch) return
+        // The owner cycles stable profile IDs, including multiple profiles of the same type.
         saveMode(gestureMode)
         invalidate()
     }
@@ -271,9 +283,10 @@ class MicBallView(
             MotionEvent.ACTION_DOWN -> {
                 // 顶部模式按钮优先：命中就只切换模式，不进入录音 / 拖动手势。
                 if (modeButton.contains(e.x, e.y)) {
-                    onFeedback(KeyFeedback.Press)
-                    pointer = -1; dragging = false; holdStarted = false
-                    modePressed = true; invalidate()
+                    modeTouch = true
+                    modePressed = canSwitch
+                    if (canSwitch) onFeedback(KeyFeedback.Press)
+                    invalidate()
                     return true
                 }
                 val (cx, cy) = ballCenter()
@@ -286,17 +299,18 @@ class MicBallView(
                 invalidate()
             }
             MotionEvent.ACTION_MOVE -> {
-                if (modePressed) return true
+                if (modeTouch) return true
                 val i = e.findPointerIndex(pointer); if (i < 0) return pointer >= 0
                 val dx = e.getX(i) - downX; val dy = e.getY(i) - downY
                 if (!dragging && hypot(dx, dy) > slop) { dragging = true; lastTap = 0; removeCallbacks(hold) }
                 if (dragging) reposition(originX + dx, originY + dy)
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
-                if (modePressed) {
+                if (modeTouch) {
+                    modeTouch = false
                     modePressed = false
-                    if (modeButton.contains(e.x, e.y)) toggleMode() else invalidate()
-                    performClick()
+                    if (canSwitch && modeButton.contains(e.x, e.y)) { toggleMode(); performClick() }
+                    invalidate()
                     return true
                 }
                 if (pointer < 0 || e.getPointerId(e.actionIndex) != pointer) return pointer >= 0
@@ -321,7 +335,7 @@ class MicBallView(
         removeCallbacks(hold)
         if (holdStarted) end(true)
         if (dragging) savePosition(nx, ny)
-        pointer = -1; holdStarted = false; dragging = false; lastTap = 0; modePressed = false; invalidate()
+        pointer = -1; holdStarted = false; dragging = false; lastTap = 0; modePressed = false; modeTouch = false; invalidate()
     }
     override fun onDetachedFromWindow() { cancel(); super.onDetachedFromWindow() }
     override fun performClick(): Boolean { super.performClick(); return true }

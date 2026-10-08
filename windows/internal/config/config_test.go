@@ -56,7 +56,7 @@ func TestLegacyMigrationPreservesBindingsAndBackup(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if c.SchemaVersion != 2 || c.Revision != 7 || len(c.Shortcuts) != 8 || c.Sensitivity != 2 || c.Voice.StopDelayMS != 135 {
+			if c.SchemaVersion != 3 || c.Revision != 7 || len(c.Shortcuts) != 8 || c.Sensitivity != 2 || c.Voice.StopDelayMS != 135 {
 				t.Fatalf("migration lost settings: %+v", c)
 			}
 			for i, k := range c.Shortcuts {

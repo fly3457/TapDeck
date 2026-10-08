@@ -14,6 +14,7 @@ val wireJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 const val CONTROL_VERSION = 2
 const val ZOOM_FEATURE = "touchpad_zoom"
 const val GESTURE_FEATURE = "three_finger"
+const val VOICE_PROFILES_FEATURE = "voice_profiles"
 data class TouchpadCapabilities(val features: Set<String> = emptySet(), val doubleClickMs: Int = 500)
 fun JsonObject.touchpadCapabilities(): TouchpadCapabilities {
     val features = (this["features"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.toSet() ?: emptySet()
@@ -31,10 +32,14 @@ fun decode64(s: String): ByteArray = Base64.getUrlDecoder().decode(s)
 fun encode64(b: ByteArray): String = Base64.getUrlEncoder().withoutPadding().encodeToString(b)
 
 @Serializable data class Shortcut(val label: String, val chord: String, val enabled: Boolean = false)
-@Serializable data class Voice(val hold_key: String = "", val toggle_start_key: String = "", val toggle_stop_key: String = "", val stop_delay_ms: Int = 200)
+@Serializable data class Voice(val hold_key: String = "", val toggle_start_key: String = "", val toggle_stop_key: String = "", val stop_delay_ms: Int = 200, val profiles: List<VoiceProfile>? = null)
 @Serializable data class PcConfig(val revision: Long = 1, val shortcuts: List<Shortcut> = listOf(Shortcut("复制", "Ctrl+C", true), Shortcut("粘贴", "Ctrl+V", true), Shortcut("撤销", "Ctrl+Z", true), Shortcut("回车", "Enter", true)) + (5..8).map { Shortcut("快捷键 $it", "") }, val voice: Voice = Voice(), val sensitivity: Double = 1.5, val natural_scroll: Boolean = true) {
     fun validate(): PcConfig {
         require(shortcuts.size == 8 && shortcuts.any { it.enabled } && shortcuts.filter { it.enabled }.all { it.label.isNotBlank() && it.chord.isNotBlank() }) { "快捷键配置无效" }
+        voice.profiles?.let { profiles ->
+            require(profiles.size == 3 && profiles.withIndex().all { (i, p) -> p.id == "voice-${i + 1}" && p.valid() }) { "语音配置无效" }
+        }
+        require(voice.stop_delay_ms in 0..1000) { "语音结束延迟无效" }
         return this
     }
     fun visibleShortcuts(): List<IndexedValue<Shortcut>> = shortcuts.withIndex().filter { it.value.enabled }

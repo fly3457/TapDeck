@@ -55,6 +55,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import androidx.lifecycle.Lifecycle
@@ -68,26 +69,45 @@ class TapViewModel(app: Application) : AndroidViewModel(app) {
     val client = TapClient(app, viewModelScope)
     private val store = PairStore(app)
     val ballPosition = MutableStateFlow<Pair<Float, Float>?>(null)
-    /** 语音输入方式（长按 / 单击）与全键盘开关：记在本地，重启 App 后沿用。 */
-    val voiceMode = MutableStateFlow(MicBallView.MODE_HOLD)
+    val selectedVoice = MutableStateFlow<VoiceProfile?>(defaultVoiceProfiles().first())
+    private var voiceSelection = VoiceSelection()
+    var voiceSelectionReady = false
+        private set
+    private var savedVoiceId: String? = null
+    private val voiceWrites = Channel<String>(Channel.CONFLATED)
     val keyboardOn = MutableStateFlow(false)
     init {
         viewModelScope.launch { client.restore() }
         viewModelScope.launch { ballPosition.value = store.loadBallPosition() }
+        viewModelScope.launch { for (id in voiceWrites) store.saveVoiceProfile(id) }
         viewModelScope.launch {
-            val (mode, keyboard) = store.loadUiMode()
-            voiceMode.value = mode
+            val (_, keyboard) = store.loadUiMode()
             keyboardOn.value = keyboard
+            voiceSelection = store.loadVoiceSelection()
+            savedVoiceId = voiceSelection.id
+            voiceSelectionReady = true
+            client.state.collect { state ->
+                // Reconcile only when idle and connected; an active recording retains its snapshot.
+                if (state.connected && state.mic == "idle") {
+                    selectedVoice.value = voiceSelection.reconcile(state.voiceProfiles())
+                    persistVoiceSelection()
+                }
+            }
         }
     }
     fun saveBallPosition(x: Float, y: Float) {
         ballPosition.value = x to y
         viewModelScope.launch { store.saveBallPosition(x, y) }
     }
-    fun setVoiceMode(mode: String) {
-        if (voiceMode.value == mode) return
-        voiceMode.value = mode
-        viewModelScope.launch { store.saveVoiceMode(mode) }
+    fun cycleVoiceProfile() {
+        val state = client.state.value
+        if (!voiceSelectionReady || !state.connected || state.mic != "idle" || state.voiceProfiles().count { it.enabled } < 2) return
+        selectedVoice.value = voiceSelection.next(state.voiceProfiles())
+        persistVoiceSelection()
+    }
+    private fun persistVoiceSelection() {
+        val id = selectedVoice.value?.id ?: return
+        if (savedVoiceId != id) { savedVoiceId = id; voiceWrites.trySend(id) }
     }
     fun setKeyboardOn(on: Boolean) {
         if (keyboardOn.value == on) return
@@ -109,8 +129,6 @@ class MainActivity : ComponentActivity() {
     private var pageResumed by mutableStateOf(false)
     private var address by mutableStateOf("http://192.168.1.11:41080/pair")
     private var pairingScanError by mutableStateOf("")
-    /** 语音模式默认长按语音输入；切换入口在语音区的按钮上，状态记在本地。 */
-    private val voiceToggle: Boolean get() = vm.voiceMode.value == MicBallView.MODE_TOGGLE
     /** 快捷键的轻点 / 按住手势。 */
     private val shortcutHold by lazy { ShortcutHold({ slot, token -> vm.client.shortcutHoldStart(slot, token) }, { token -> vm.client.shortcutHoldStop(token) }) }
     /** 全键盘的按键状态。 */
@@ -211,16 +229,16 @@ class MainActivity : ComponentActivity() {
                     scale = dimensions.value.scale,
                     stopRecording = {
                         // 单击语音输入录音中：按下快捷键先结束录音，这一次不再发送按键。
-                        val active = microphone?.gestureMode == MicBallView.MODE_TOGGLE && vm.client.state.value.mic in listOf("preparing", "transmitting")
+                        val active = vm.client.state.value.micMode == MicBallView.MODE_TOGGLE && vm.client.state.value.mic in listOf("preparing", "transmitting", "stopping")
                         if (active) vm.client.stopMic()
                         active
                     },
                 )
             }.apply { id = R.id.shortcut_region }
-            val voiceRegion = MicBallView(context, ::beginMic, vm.client::stopMic, vm::saveBallPosition, vm::setVoiceMode).also { view ->
+            val voiceRegion = MicBallView(context, ::beginMic, vm.client::stopMic, vm::saveBallPosition, { vm.cycleVoiceProfile() }).also { view ->
                 microphone = view
                 view.onFeedback = { view.keyFeedback(it, feedbackController) }
-                view.gestureMode = if (voiceToggle) MicBallView.MODE_TOGGLE else MicBallView.MODE_HOLD
+                view.gestureMode = vm.selectedVoice.value?.mode ?: MicBallView.MODE_TOGGLE
             }
             val ordinaryPanel = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
@@ -327,13 +345,16 @@ class MainActivity : ComponentActivity() {
                 launch {
                     vm.keyboardOn.collect { modeViews?.invoke() }
                 }
-                launch {
-                    vm.voiceMode.collect { mode -> microphone?.let { if (it.gestureMode != mode) it.gestureMode = mode } }
-                }
-                combine(vm.client.state, vm.ballPosition) { state, position -> state to position }.collect { (state, position) ->
+                combine(vm.client.state, vm.ballPosition, vm.selectedVoice) { state, position, selected -> Triple(state, position, selected) }.collect { (state, position, selected) ->
                     touchpad?.connected = state.connected
                     microphone?.apply {
-                        available = state.connected; mode = state.micMode; status = state.mic; level = state.level
+                        val profile = state.activeVoiceProfile ?: selected?.takeIf { selection -> state.voiceProfiles().any { it.enabled && it.id == selection.id } }
+                        mode = state.micMode; status = state.mic; level = state.level
+                        profileName = profile?.name ?: "语音未启用"
+                        voiceEnabled = profile != null
+                        switchAvailable = state.connected && state.mic == "idle" && state.voiceProfiles().count { it.enabled } > 1
+                        if (profile != null) gestureMode = profile.mode
+                        available = state.connected && (profile != null || state.mic != "idle")
                         // 单击语音输入开始录音时，撤销可能仍在按住的快捷键。
                         if (state.mic == "preparing" || state.mic == "transmitting") shortcutHold.cancelAll()
                         position?.let { restorePosition(it.first, it.second) }
@@ -381,12 +402,15 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= 37 && applicationInfo.targetSdkVersion >= 37 && checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) { deferredLink = link; lanPermission.launch(permission) } else vm.client.enter(link)
     }
     private fun beginMic(mode: String): Boolean {
+        if (!vm.voiceSelectionReady) return false
+        val profile = vm.selectedVoice.value ?: return false
+        if (!vm.client.state.value.voiceProfiles().any { it.id == profile.id && it.enabled }) return false
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             android.util.Log.i("TapDeck", "beginMic $mode：未授予麦克风权限")
             microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
             return false
         }
-        val started = vm.client.startMic(mode)
+        val started = vm.client.startMic(mode, profile.id)
         if (!started) android.util.Log.i("TapDeck", "beginMic $mode 未开始：${vm.client.state.value.mic}/${vm.client.state.value.error}")
         return started
     }

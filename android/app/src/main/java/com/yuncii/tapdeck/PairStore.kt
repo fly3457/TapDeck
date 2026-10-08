@@ -21,6 +21,7 @@ class PairStore(private val context: Context) {
     private val ballX = floatPreferencesKey("voice_ball_x")
     private val ballY = floatPreferencesKey("voice_ball_y")
     private val voiceModeKey = stringPreferencesKey("voice_mode")
+    private val voiceProfileKey = stringPreferencesKey("voice_profile_id")
     private val keyboardKey = booleanPreferencesKey("keyboard_mode")
     private val sensitivityKey = doublePreferencesKey("touchpad_sensitivity_multiplier")
     private val hapticsKey = booleanPreferencesKey("key_haptics")
@@ -53,6 +54,15 @@ class PairStore(private val context: Context) {
 
     suspend fun saveVoiceMode(mode: String) {
         context.dataStore.edit { it[voiceModeKey] = if (mode == MicBallView.MODE_TOGGLE) MicBallView.MODE_TOGGLE else MicBallView.MODE_HOLD }
+    }
+
+    suspend fun loadVoiceSelection(): VoiceSelection {
+        val p = context.dataStore.data.first()
+        return VoiceSelection(p[voiceProfileKey], p[voiceModeKey])
+    }
+
+    suspend fun saveVoiceProfile(id: String) {
+        context.dataStore.edit { it[voiceProfileKey] = id }
     }
 
     suspend fun saveKeyboardMode(on: Boolean) {

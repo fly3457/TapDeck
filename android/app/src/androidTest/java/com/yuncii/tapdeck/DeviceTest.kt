@@ -578,7 +578,7 @@ class DeviceTest {
                 scenario.onActivity { activity ->
                     val vm = ViewModelProvider(activity)[TapViewModel::class.java]
                     vm.keyboardOn.value = false
-                    vm.voiceMode.value = if (count == 8) MicBallView.MODE_TOGGLE else MicBallView.MODE_HOLD
+                    vm.selectedVoice.value = defaultVoiceProfiles()[if (count == 8) 0 else 1]
                     val slots = if (count == 5) setOf(0, 1, 2, 3, 7) else (0 until count).toSet()
                     uiState(activity).value = ClientState(peerName = "PC-77", connected = true, status = "已连接", rttMs = 5,
                         config = PcConfig(shortcuts = (0..7).map { Shortcut(if (it == 7) "很长的快捷键名称用于验证省略" else "快捷键 ${it + 1}", "Ctrl+F${it + 1}", it in slots) }))
@@ -890,6 +890,131 @@ class DeviceTest {
         }
     }
 
+    @Test fun voiceProfilesWireSnapshotAndSpaceGesture() {
+        withVoiceTestClient { client, socket, state ->
+            val profiles = defaultVoiceProfiles().map { it.copy(enabled = true) }
+            state.value = state.value.copy(voiceProfilesSupported = true, config = PcConfig(revision = 17, voice = Voice(profiles = profiles)))
+            // A held space uses the toggle profile's keys but remains a momentary phone gesture.
+            assertTrue(client.startMic("hold", "voice-1"))
+            val start = socket.messages.last()
+            val id = start.str("recording")
+            assertEquals("voice-1", start.str("profile_id")); assertEquals(17L, start.long("revision"))
+            assertEquals("toggle", start.str("mode")); assertEquals("hold", state.value.micMode)
+            socket.messages.clear()
+            client.click("left")
+            assertEquals(listOf("mouse_button", "mouse_button"), socket.messages.map { it.str("type") })
+            state.value = state.value.copy(config = PcConfig(revision = 18, voice = Voice(profiles = profiles.map { it.copy(enabled = false, name = "改名", mode = "hold") })))
+            assertEquals(profiles[0], state.value.activeVoiceProfile)
+            client.stopMic()
+            assertEquals("mic_stop", socket.messages.last().str("type"))
+            assertEquals(id, socket.messages.last().str("recording"))
+            assertFalse(client.startMic("hold", "voice-3"))
+            client.finishMic("old-id")
+            assertEquals("stopping", state.value.mic)
+            client.finishMic(id)
+            assertNull(state.value.activeVoiceProfile)
+            assertFalse(client.startMic("hold", "voice-1"))
+            state.value = state.value.copy(config = PcConfig(revision = 19, voice = Voice(profiles = profiles)))
+            assertTrue(client.startMic("hold", "voice-3"))
+            assertEquals("voice-3", socket.messages.last().str("profile_id"))
+            client.finishMic(socket.messages.last().str("recording"), "语音配置已更新，请重试")
+            assertEquals("idle", state.value.mic)
+            // Older PC receives its original mode-only request.
+            state.value = state.value.copy(voiceProfilesSupported = false, config = PcConfig())
+            assertTrue(client.startMic("hold", "voice-1"))
+            assertEquals("toggle", socket.messages.last().str("mode"))
+            assertFalse(socket.messages.last().containsKey("profile_id"))
+            assertFalse(socket.messages.last().containsKey("revision"))
+            client.finishMic(socket.messages.last().str("recording"))
+        }
+    }
+
+    @Test fun voiceProfileButtonsCycleDisableAndFreeze() {
+        val feedback = mutableListOf<KeyFeedback>()
+        DeviceActivity().use { scenario ->
+            SystemClock.sleep(500)
+            lateinit var vm: TapViewModel
+            lateinit var mic: MicBallView
+            val all = defaultVoiceProfiles().map { it.copy(enabled = true) }
+            scenario.onActivity { activity ->
+                vm = ViewModelProvider(activity)[TapViewModel::class.java]
+                vm.keyboardOn.value = false
+                uiState(activity).value = ClientState(connected = true, status = "已连接", voiceProfilesSupported = true, config = PcConfig(voice = Voice(profiles = all)))
+                mic = views(activity.window.decorView).filterIsInstance<MicBallView>().single()
+                mic.onFeedback = { feedback.add(it) }
+            }
+            SystemClock.sleep(200)
+            fun tapSwitch() = scenario.onActivity {
+                val button = mic.javaClass.getDeclaredField("modeButton").apply { isAccessible = true }.get(mic) as android.graphics.RectF
+                val time = SystemClock.uptimeMillis()
+                for (action in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
+                    val event = MotionEvent.obtain(time, time + 20, action, button.centerX(), button.centerY(), 0)
+                    mic.dispatchTouchEvent(event); event.recycle()
+                }
+            }
+            val first = vm.selectedVoice.value!!.id
+            val order = all.map { it.id }
+            repeat(3) { index ->
+                tapSwitch(); SystemClock.sleep(80)
+                assertEquals(order[(order.indexOf(first) + index + 1) % 3], vm.selectedVoice.value!!.id)
+            }
+            assertEquals(3, feedback.size)
+            scenario.onActivity { activity ->
+                uiState(activity).value = uiState(activity).value.copy(config = PcConfig(voice = Voice(profiles = all.map { it.copy(enabled = it.id != "voice-3") })))
+            }
+            SystemClock.sleep(100)
+            val twoGroupStart = vm.selectedVoice.value!!.id
+            repeat(2) { tapSwitch(); SystemClock.sleep(80) }
+            assertEquals(twoGroupStart, vm.selectedVoice.value!!.id)
+            assertEquals(5, feedback.size)
+            for (phase in listOf("preparing", "transmitting", "stopping")) {
+                scenario.onActivity { activity ->
+                    val current = uiState(activity).value
+                    uiState(activity).value = current.copy(mic = phase, micMode = "toggle", activeVoiceProfile = all[0], config = current.config.copy(voice = Voice(profiles = all.map { it.copy(enabled = false) })))
+                }
+                SystemClock.sleep(80)
+                assertEquals("单击语音输入", mic.profileName)
+                assertEquals("toggle", mic.gestureMode)
+                assertTrue(mic.available)
+                assertFalse(mic.switchAvailable)
+                tapSwitch(); assertEquals(5, feedback.size)
+            }
+            scenario.onActivity { activity -> uiState(activity).value = uiState(activity).value.copy(mic = "idle", activeVoiceProfile = null) }
+            SystemClock.sleep(120)
+            assertEquals("语音未启用", mic.profileName)
+            assertFalse(mic.available); assertFalse(mic.switchAvailable)
+            tapSwitch(); assertEquals(5, feedback.size)
+            saveUiScreenshot("voice-disabled")
+            scenario.onActivity { activity ->
+                uiState(activity).value = uiState(activity).value.copy(config = PcConfig(voice = Voice(profiles = all.map { it.copy(enabled = it.id == "voice-3", name = "WWWWWWWWWWWWWWWW") })))
+            }
+            SystemClock.sleep(120)
+            assertEquals("voice-3", vm.selectedVoice.value!!.id)
+            assertTrue(mic.available); assertFalse(mic.switchAvailable)
+            tapSwitch(); assertEquals(5, feedback.size)
+            scenario.onActivity { activity ->
+                val button = mic.javaClass.getDeclaredField("modeButton").apply { isAccessible = true }.get(mic) as android.graphics.RectF
+                assertTrue(button.left >= 0 && button.right <= mic.width)
+            }
+            saveUiScreenshot("voice-single-long-name")
+            scenario.onActivity { activity ->
+                uiState(activity).value = uiState(activity).value.copy(config = PcConfig(voice = Voice(profiles = all.map { it.copy(name = "中".repeat(8)) })))
+            }
+            SystemClock.sleep(120)
+            assertTrue(mic.switchAvailable)
+            saveUiScreenshot("voice-three-long-name")
+            await { kotlinx.coroutines.runBlocking { PairStore(InstrumentationRegistry.getInstrumentation().targetContext).loadVoiceSelection().id } == "voice-3" }
+        }
+        DeviceActivity().use { scenario ->
+            SystemClock.sleep(300)
+            scenario.onActivity { activity ->
+                uiState(activity).value = ClientState(connected = true, voiceProfilesSupported = true, config = PcConfig(voice = Voice(profiles = defaultVoiceProfiles().map { it.copy(enabled = true) })))
+            }
+            SystemClock.sleep(150)
+            scenario.onActivity { activity -> assertEquals("voice-3", ViewModelProvider(activity)[TapViewModel::class.java].selectedVoice.value?.id) }
+        }
+    }
+
     @Test fun pcVoiceStopReleasesRecorderAndIgnoresStaleReplies() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         instrumentation.uiAutomation.grantRuntimePermission(instrumentation.targetContext.packageName, android.Manifest.permission.RECORD_AUDIO)
@@ -1125,7 +1250,9 @@ class DeviceTest {
                 val padParams = originalPad.layoutParams; val micParams = originalMic.layoutParams
                 viewport.removeView(originalPad); micParent.removeView(originalMic)
                 pad = TouchpadView(activity, sink).apply { connected = true; verticalScale = originalPad.verticalScale }
-                mic = MicBallView(activity, { began.incrementAndGet(); mic.post { mic.status = "transmitting" }; true }, { ended.incrementAndGet(); mic.status = "idle" })
+                mic = MicBallView(activity, { began.incrementAndGet(); mic.post { mic.status = "transmitting" }; true }, { ended.incrementAndGet(); mic.status = "idle" }, saveMode = {
+                    mic.gestureMode = if (mic.gestureMode == MicBallView.MODE_HOLD) MicBallView.MODE_TOGGLE else MicBallView.MODE_HOLD
+                })
                     .apply { available = true; verticalScale = originalMic.verticalScale; onFeedback = { feedback.add(it) } }
                 viewport.addView(pad, 1, padParams); micParent.addView(mic, micParams)
             }

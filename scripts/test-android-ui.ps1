@@ -12,7 +12,7 @@ function Invoke-TapDeckDevice([string[]]$Arguments) {
 if ((Invoke-TapDeckDevice -Arguments @('shell', 'getprop', 'ro.kernel.qemu') | Out-String).Trim() -ne '1') {
     throw 'This matrix changes display settings and must run on an Android emulator.'
 }
-if (-not $OutputDirectory) { $OutputDirectory = Join-Path $taskProjectRoot 'dist\0.3.8\screenshots' }
+if (-not $OutputDirectory) { $OutputDirectory = Join-Path $taskProjectRoot 'dist\0.3.9\screenshots' }
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 if (-not $SkipBuild) {
@@ -48,8 +48,8 @@ try {
         Invoke-TapDeckDevice -Arguments @('shell', 'wm', 'size', $taskVariant.Size) | Out-Null
         Invoke-TapDeckDevice -Arguments @('shell', 'wm', 'density', $taskVariant.Density) | Out-Null
         Invoke-TapDeckDevice -Arguments @('shell', 'settings', 'put', 'system', 'font_scale', $taskVariant.Font) | Out-Null
-        $taskCases = @('controllerModesAndShortcutVariants', 'connectionIconReminderAndSettings', 'deviceSensitivitySliderPersistsAndKeepsPcConfigIndependent')
-        if ($taskVariant.Full) { $taskCases += @('percentageLayoutAndCameraOptional', 'touchpadSettingsIconCancelsPendingClickAndDoesNotMoveMouse', 'keyFeedbackUsesVibratorServiceWithSystemTouchFeedbackOff', 'launcherIconUsesPcColorsAndSafeAdaptiveLayers', 'toggleVoiceStopsAndConsumesTouchpadClick', 'pcVoiceStopReleasesRecorderAndIgnoresStaleReplies') }
+        $taskCases = @('controllerModesAndShortcutVariants', 'connectionIconReminderAndSettings', 'deviceSensitivitySliderPersistsAndKeepsPcConfigIndependent', 'voiceProfileButtonsCycleDisableAndFreeze')
+        if ($taskVariant.Full) { $taskCases += @('percentageLayoutAndCameraOptional', 'touchpadSettingsIconCancelsPendingClickAndDoesNotMoveMouse', 'keyFeedbackUsesVibratorServiceWithSystemTouchFeedbackOff', 'launcherIconUsesPcColorsAndSafeAdaptiveLayers', 'toggleVoiceStopsAndConsumesTouchpadClick', 'pcVoiceStopReleasesRecorderAndIgnoresStaleReplies', 'voiceProfilesWireSnapshotAndSpaceGesture') }
         if ($taskVariant.Full -or $taskVariant.Gestures) { $taskCases += @('gesturesMoveClickScrollDragAndCancel', 'multiFingerZoomSwipeAndPointerIds', 'keyboardShortLongVoiceAndDisposalRelease', 'compactVoiceAndTouchpadPointersStayIndependent', 'shortcutFeedbackOncePerPressAndDisabledDoesNotTrigger') }
         $taskClassList = ($taskCases | ForEach-Object { 'com.yuncii.tapdeck.DeviceTest#' + $_ }) -join ','
         $taskArgs = @('shell', 'am', 'instrument', '-w', '-e', 'uiLabel', $taskVariant.Name, '-e', 'class', $taskClassList)

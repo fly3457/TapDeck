@@ -56,6 +56,7 @@ type Message struct {
 	Text        string `json:"text,omitempty"`
 	Recording   string `json:"recording,omitempty"`
 	Mode        string `json:"mode,omitempty"`
+	ProfileID   string `json:"profile_id,omitempty"`
 	Tick        int64  `json:"tick,omitempty"`
 	Reason      string `json:"reason,omitempty"`
 	Steps       int    `json:"steps,omitempty"`
@@ -130,18 +131,36 @@ type AudioEngine interface {
 }
 type recordingVoice struct {
 	Mode, Start, Stop string
+	ProfileID, Name   string
 	StopDelayMS       int
 }
 
-func voiceFor(c config.Voice, mode string) (recordingVoice, error) {
-	switch mode {
-	case "hold":
-		return recordingVoice{Mode: mode, Start: c.HoldKey, StopDelayMS: c.StopDelayMS}, nil
-	case "toggle":
-		return recordingVoice{Mode: mode, Start: c.ToggleStartKey, Stop: c.ToggleStopKey, StopDelayMS: c.StopDelayMS}, nil
-	default:
-		return recordingVoice{}, fmt.Errorf("无效语音模式")
+func voiceFor(c config.Config, m Message) (recordingVoice, error) {
+	var p config.VoiceProfile
+	var found bool
+	if m.ProfileID != "" {
+		if m.Revision != c.Revision {
+			return recordingVoice{}, fmt.Errorf("语音配置已更新，请重试")
+		}
+		for _, candidate := range c.Voice.Profiles {
+			if candidate.ID == m.ProfileID && candidate.Enabled {
+				p, found = candidate, true
+				break
+			}
+		}
+	} else {
+		p, found = c.Voice.FirstEnabled(m.Mode)
 	}
+	if !found {
+		return recordingVoice{}, fmt.Errorf("该语音配置未启用或已失效")
+	}
+	v := recordingVoice{ProfileID: p.ID, Name: p.Name, Mode: p.Mode, StopDelayMS: c.Voice.StopDelayMS}
+	if p.Mode == "hold" {
+		v.Start = p.HoldKey
+	} else {
+		v.Start, v.Stop = p.ToggleStartKey, p.ToggleStopKey
+	}
+	return v, nil
 }
 
 type Server struct {
@@ -260,10 +279,12 @@ func (s *Server) Config() config.Config {
 	c := s.cfg
 	c.Sensitivity = config.PointerBaseSensitivity
 	c.Shortcuts = append([]config.Shortcut(nil), c.Shortcuts...)
+	c.Voice = c.Voice.Normalized()
 	return c
 }
 func (s *Server) Update(c config.Config) error {
 	c.Sensitivity = config.PointerBaseSensitivity
+	c.Voice = c.Voice.Normalized()
 	if err := c.Validate(); err != nil {
 		return err
 	}
@@ -275,11 +296,6 @@ func (s *Server) Update(c config.Config) error {
 			return e
 		}
 	}
-	for _, k := range []string{c.Voice.HoldKey, c.Voice.ToggleStartKey, c.Voice.ToggleStopKey} {
-		if _, e := input.ParseChord(k); e != nil {
-			return e
-		}
-	}
 	for _, k := range c.Shortcuts {
 		if k.Enabled {
 			if e := keyboard.Validate(k.Chord, c.KeyboardBackend); e != nil {
@@ -287,9 +303,17 @@ func (s *Server) Update(c config.Config) error {
 			}
 		}
 	}
-	for _, k := range []string{c.Voice.HoldKey, c.Voice.ToggleStartKey, c.Voice.ToggleStopKey} {
-		if e := keyboard.Validate(k, c.KeyboardBackend); e != nil {
-			return e
+	for _, p := range c.Voice.Profiles {
+		if !p.Enabled {
+			continue
+		}
+		for _, k := range p.Keys() {
+			if _, e := input.ParseChord(k); e != nil {
+				return fmt.Errorf("%s: %w", p.Name, e)
+			}
+			if e := keyboard.Validate(k, c.KeyboardBackend); e != nil {
+				return fmt.Errorf("%s: %w", p.Name, e)
+			}
 		}
 	}
 	s.mu.Lock()
@@ -689,7 +713,7 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 			ss.close("连接结束")
 		}
 	}()
-	if e = ss.send(map[string]any{"type": "ready", "session": fmt.Sprintf("%016x", ss.id), "token": token, "config": cfg, "udp_port": cfg.UDPPort, "mouse_key": base64.RawURLEncoding.EncodeToString(mouseKey), "audio_key": base64.RawURLEncoding.EncodeToString(audioKey), "mouse_prefix": base64.RawURLEncoding.EncodeToString(mp[:]), "audio_prefix": base64.RawURLEncoding.EncodeToString(ap[:]), "features": ss.touchpadFeatures(), "double_click_ms": input.DoubleClickTime()}); e != nil {
+	if e = ss.send(map[string]any{"type": "ready", "session": fmt.Sprintf("%016x", ss.id), "token": token, "config": cfg, "udp_port": cfg.UDPPort, "mouse_key": base64.RawURLEncoding.EncodeToString(mouseKey), "audio_key": base64.RawURLEncoding.EncodeToString(audioKey), "mouse_prefix": base64.RawURLEncoding.EncodeToString(mp[:]), "audio_prefix": base64.RawURLEncoding.EncodeToString(ap[:]), "features": append(ss.touchpadFeatures(), "voice_profiles"), "double_click_ms": input.DoubleClickTime()}); e != nil {
 		return
 	}
 	go func() {
@@ -946,9 +970,13 @@ func (ss *session) handle(m Message) error {
 		if ss.recording != 0 {
 			return fmt.Errorf("上一轮语音尚未结束")
 		}
-		voice, e := voiceFor(ss.s.Config().Voice, m.Mode)
+		cfg := ss.s.Config()
+		voice, e := voiceFor(cfg, m)
 		if e != nil {
-			return e
+			if err := ss.send(map[string]any{"type": "mic_error", "reason": e.Error(), "recording": m.Recording}); err != nil {
+				return err
+			}
+			return ss.send(map[string]any{"type": "config", "config": cfg})
 		}
 		audioID := randomID()
 		if e = ss.s.Audio.Begin(audioID); e != nil {

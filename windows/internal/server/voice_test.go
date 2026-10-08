@@ -75,7 +75,7 @@ func TestVoiceModesSnapshotAndIdempotentStop(t *testing.T) {
 			fake, engine := &voiceInput{}, &manualAudio{}
 			s, client := testReceiver(t, func(s *Server) {
 				s.Input, s.Audio = fake, engine
-				s.cfg.Voice = config.Voice{HoldKey: "RightAlt", ToggleStartKey: "F9", ToggleStopKey: "F10"}
+				s.cfg.Voice.Profiles[0].ToggleStartKey, s.cfg.Voice.Profiles[0].ToggleStopKey = "F9", "F10"
 			})
 			conn, ctx := testSocket(t, s, client, "")
 			testPair(t, s, conn, ctx)
@@ -84,7 +84,12 @@ func TestVoiceModesSnapshotAndIdempotentStop(t *testing.T) {
 				t.Fatal("recording not ready")
 			}
 			c := s.Config()
-			c.Voice = config.Voice{HoldKey: "LeftCtrl", ToggleStartKey: "F11", ToggleStopKey: "F12"}
+			c.Voice.Profiles[0].ToggleStartKey, c.Voice.Profiles[0].ToggleStopKey = "F11", "F12"
+			c.Voice.Profiles[1].HoldKey = "LeftCtrl"
+			for i := range c.Voice.Profiles {
+				c.Voice.Profiles[i].Enabled = false
+				c.Voice.Profiles[i].Name = "录音中改名"
+			}
 			if err := s.Update(c); err != nil {
 				t.Fatal(err)
 			}
@@ -124,7 +129,7 @@ func TestAbortDuringDrainAndCloseOnlyEndsOnce(t *testing.T) {
 	fake, engine := &voiceInput{}, &manualAudio{}
 	s, client := testReceiver(t, func(s *Server) {
 		s.Input, s.Audio = fake, engine
-		s.cfg.Voice = config.Voice{ToggleStartKey: "RightAlt", ToggleStopKey: "RightAlt"}
+		s.cfg.Voice.Profiles[0].ToggleStartKey, s.cfg.Voice.Profiles[0].ToggleStopKey = "RightAlt", "RightAlt"
 	})
 	conn, ctx := testSocket(t, s, client, "")
 	testPair(t, s, conn, ctx)
@@ -168,5 +173,83 @@ func TestShortcutDisabledAndStableSlot(t *testing.T) {
 	testRead(t, ctx, conn)
 	if fake.chords.Load() != 1 {
 		t.Fatal("stale shortcut executed")
+	}
+}
+
+func TestProfileIdentityRevisionAndLegacyRouting(t *testing.T) {
+	fake, engine := &voiceInput{}, &manualAudio{}
+	s, client := testReceiver(t, func(s *Server) {
+		s.Input, s.Audio = fake, engine
+		s.cfg.Voice.Profiles[2].Enabled = true
+	})
+	conn, ctx := testSocket(t, s, client, "")
+	testPair(t, s, conn, ctx)
+	// Two hold profiles must resolve by ID, irrespective of the supplied legacy mode.
+	for i, id := range []string{"voice-3", "voice-2"} {
+		recording := fmt.Sprintf("%x", i+1)
+		_ = write(ctx, conn, Message{Type: "mic_start", Recording: recording, ProfileID: id, Mode: "toggle", Revision: s.Config().Revision})
+		if stringField(testRead(t, ctx, conn), "type") != "mic_ready" {
+			t.Fatal("profile not ready")
+		}
+		_ = write(ctx, conn, Message{Type: "mic_abort", Recording: recording})
+		if stringField(testRead(t, ctx, conn), "type") != "mic_stopped" {
+			t.Fatal("profile not stopped")
+		}
+	}
+	if got := fake.result(); got != "hold:Ctrl+Shift+M:true,hold:Ctrl+Shift+M:false,hold:RightAlt:true,hold:RightAlt:false" {
+		t.Fatal(got)
+	}
+	c := s.Config()
+	c.Voice.Profiles[1].Enabled = false
+	if err := s.Update(c); err != nil {
+		t.Fatal(err)
+	}
+	testRead(t, ctx, conn)
+	if s.Config().Voice.HoldKey != "Ctrl+Shift+M" {
+		t.Fatal("legacy projection must use first enabled matching type")
+	}
+	before := fake.result()
+	for _, m := range []Message{
+		{ProfileID: "voice-3", Revision: c.Revision},
+		{ProfileID: "voice-2", Revision: s.Config().Revision},
+		{ProfileID: "missing", Revision: s.Config().Revision},
+		{Mode: "invalid"},
+	} {
+		m.Type, m.Recording = "mic_start", "3"
+		_ = write(ctx, conn, m)
+		err := testRead(t, ctx, conn)
+		if stringField(err, "type") != "mic_error" || stringField(err, "recording") != "3" {
+			t.Fatal(err)
+		}
+		if stringField(testRead(t, ctx, conn), "type") != "config" {
+			t.Fatal("missing recovery config")
+		}
+	}
+	if fake.result() != before {
+		t.Fatal("invalid request triggered a hotkey")
+	}
+	_ = write(ctx, conn, Message{Type: "mic_start", Recording: "4", Mode: "hold"})
+	if stringField(testRead(t, ctx, conn), "type") != "mic_ready" {
+		t.Fatal("legacy routing failed")
+	}
+	_ = write(ctx, conn, Message{Type: "mic_abort", Recording: "4"})
+	testRead(t, ctx, conn)
+	if !strings.HasSuffix(fake.result(), "hold:Ctrl+Shift+M:true,hold:Ctrl+Shift+M:false") {
+		t.Fatal(fake.result())
+	}
+	c = s.Config()
+	for i := range c.Voice.Profiles {
+		c.Voice.Profiles[i].Enabled = false
+	}
+	if err := s.Update(c); err != nil {
+		t.Fatal(err)
+	}
+	testRead(t, ctx, conn)
+	for _, mode := range []string{"hold", "toggle"} {
+		_ = write(ctx, conn, Message{Type: "mic_start", Recording: "5", Mode: mode})
+		if stringField(testRead(t, ctx, conn), "type") != "mic_error" {
+			t.Fatal("disabled legacy type accepted")
+		}
+		testRead(t, ctx, conn)
 	}
 }

@@ -26,7 +26,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.serialization.json.*
 import okhttp3.*
 
-data class ClientState(val status: String = "未连接", val peerName: String = "TapDeck", val connected: Boolean = false, val pairing: String = "", val pairingConfirmed: Boolean = false, val config: PcConfig = PcConfig(), val mic: String = "idle", val micMode: String = "", val level: Float = 0f, val error: String = "", val rttMs: Long = 0, val touchpad: TouchpadCapabilities = TouchpadCapabilities())
+data class ClientState(val status: String = "未连接", val peerName: String = "TapDeck", val connected: Boolean = false, val pairing: String = "", val pairingConfirmed: Boolean = false, val config: PcConfig = PcConfig(), val mic: String = "idle", val micMode: String = "", val activeVoiceProfile: VoiceProfile? = null, val voiceProfilesSupported: Boolean = false, val level: Float = 0f, val error: String = "", val rttMs: Long = 0, val touchpad: TouchpadCapabilities = TouchpadCapabilities()) {
+    fun voiceProfiles() = config.voiceProfiles(voiceProfilesSupported)
+}
 class TapClient(private val app: Application, private val scope: CoroutineScope) : TouchSink {
     private companion object {
         /** 自动重连的退避间隔（毫秒），最后一次会一直沿用。 */
@@ -253,6 +255,8 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
                         "ready" -> {
                             val saved = p.copy(token = m.str("token").ifEmpty { p.token })
                             val config = wireJson.decodeFromJsonElement<PcConfig>(m["config"]!!).validate()
+                            val profilesSupported = VOICE_PROFILES_FEATURE in m.touchpadCapabilities().features
+                            config.voiceProfiles(profilesSupported)
                             synchronized(lock) {
                                 if (gen != generation || attempt != desiredConnection) return
                                 revokedCredential = null
@@ -265,7 +269,7 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
                                 updateWifiLock()
                             }
                             scope.launch(Dispatchers.IO) { pairingPersistence.withLock { if (synchronized(lock) { gen == generation && attempt == desiredConnection }) store.save(saved) } }
-                            mutable.update { it.copy(status = "已连接", peerName = p.name, connected = true, pairing = "", pairingConfirmed = false, config = config, error = "", touchpad = m.touchpadCapabilities()) }
+                            mutable.update { it.copy(status = "已连接", peerName = p.name, connected = true, pairing = "", pairingConfirmed = false, config = config, error = "", touchpad = m.touchpadCapabilities(), voiceProfilesSupported = profilesSupported) }
                             heartbeat?.cancel(); heartbeat = scope.launch(Dispatchers.IO) {
                                 while (isActive && synchronized(lock) { gen == generation && connected }) {
                                     if (SystemClock.elapsedRealtime() - lastResponse >= 1000) {
@@ -275,7 +279,7 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
                                 }
                             }
                         }
-                        "config" -> { val c = wireJson.decodeFromJsonElement<PcConfig>(m["config"]!!).validate(); mutable.update { it.copy(config = c) } }
+                        "config" -> { val c = wireJson.decodeFromJsonElement<PcConfig>(m["config"]!!).validate(); c.voiceProfiles(mutable.value.voiceProfilesSupported); mutable.update { it.copy(config = c) } }
                         "heartbeat" -> mutable.update { it.copy(rttMs = (SystemClock.elapsedRealtime() - m.long("tick")).coerceAtLeast(0)) }
                         "mic_ready" -> synchronized(lock) {
                             if (m.str("recording") == recording && recordingRequested && foreground) {
@@ -320,7 +324,7 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
     private fun lost(gen: Long, reason: String) {
         synchronized(lock) { if (gen != generation) return; generation++; connected = false; updateWifiLock(); recordingRequested = false; recording = ""; socket?.cancel(); socket = null; udp?.close(); udp = null }
         recorder.stop(); heartbeat?.cancel()
-        mutable.update { it.copy(connected = false, mic = "idle", micMode = "", level = 0f, status = "连接已断开", error = reason, pairing = "", touchpad = TouchpadCapabilities()) }
+        mutable.update { it.copy(connected = false, mic = "idle", micMode = "", activeVoiceProfile = null, level = 0f, status = "连接已断开", error = reason, pairing = "", touchpad = TouchpadCapabilities()) }
         synchronized(lock) {
             // 只要还有保存的配对就继续自动重连，不要求已经拿到 token。
             if (reconnect && peer != null) { retryAt = 0; scheduleReconnect() }
@@ -328,7 +332,7 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
     }
     fun disconnect(reason: String = "未连接") {
         stopMic(true); synchronized(lock) { generation++; connected = false; recordingRequested = false; recording = ""; voiceMouseButtons.clear(); updateWifiLock(); socket?.cancel(); socket = null; udp?.close(); udp = null }
-        heartbeat?.cancel(); mutable.update { it.copy(connected = false, mic = "idle", micMode = "", level = 0f, pairing = "", status = reason, touchpad = TouchpadCapabilities()) }
+        heartbeat?.cancel(); mutable.update { it.copy(connected = false, mic = "idle", micMode = "", activeVoiceProfile = null, level = 0f, pairing = "", status = reason, touchpad = TouchpadCapabilities()) }
     }
     fun forget() { synchronized(lock) { desiredConnection++; reconnect = false; retryAt = 0L; retryCount = 0; reconnectJob?.cancel(); peer = null }; disconnect(); scope.launch { pairingPersistence.withLock { store.clear() } } }
     private fun sendOn(ws: WebSocket, m: JsonObject) = ws.send(m.toString())
@@ -420,18 +424,24 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
         if (!current.connected || chord.isEmpty()) return false
         return send(message(type, "text" to chord.j(), "revision" to current.config.revision.j()))
     }
-    fun startMic(mode: String = "hold"): Boolean = synchronized(lock) {
+    // mode describes the phone gesture; the selected profile owns the PC hotkey type.
+    fun startMic(mode: String = "hold", profileId: String? = null): Boolean = synchronized(lock) {
         if (!connected || !foreground || recordingRequested || recording.isNotEmpty() || mutable.value.mic != "idle" || mode !in listOf("hold", "toggle")) {
             Log.i("TapDeck", "startMic refused: connected=$connected foreground=$foreground requested=$recordingRequested recording=${recording.isNotEmpty()} mic=${mutable.value.mic} mode=$mode")
             return@synchronized false
         }
+        val current = mutable.value
+        val profiles = current.voiceProfiles()
+        val profile = profiles.firstOrNull { it.enabled && if (profileId != null) it.id == profileId else it.mode == mode } ?: return@synchronized false
         var id: ULong
         do { id = ByteBuffer.wrap(ByteArray(8).also { SecureRandom().nextBytes(it) }).long.toULong() } while (id == 0uL)
         recording = id.toString(16).padStart(16, '0'); recordingRequested = true
-        mutable.update { it.copy(mic = "preparing", micMode = mode, error = "") }
-        if (!send(message("mic_start", "recording" to recording.j(), "mode" to mode.j()))) {
+        mutable.update { it.copy(mic = "preparing", micMode = mode, activeVoiceProfile = profile, error = "") }
+        val fields = mutableListOf("recording" to recording.j(), "mode" to profile.mode.j())
+        if (current.voiceProfilesSupported) { fields += "profile_id" to profile.id.j(); fields += "revision" to current.config.revision.j() }
+        if (!send(message("mic_start", *fields.toTypedArray()))) {
             recordingRequested = false; recording = ""
-            mutable.update { it.copy(mic = "idle", micMode = "", error = "控制连接不可用") }
+            mutable.update { it.copy(mic = "idle", micMode = "", activeVoiceProfile = null, error = "控制连接不可用") }
             return@synchronized false
         }
         true
@@ -447,7 +457,7 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
         synchronized(lock) {
             if (recording != id) return
             recording = ""
-            mutable.update { it.copy(mic = "idle", micMode = "", level = 0f, error = reason ?: it.error) }
+            mutable.update { it.copy(mic = "idle", micMode = "", activeVoiceProfile = null, level = 0f, error = reason ?: it.error) }
         }
     }
     fun stopMic(abort: Boolean = false) {

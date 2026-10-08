@@ -7,7 +7,7 @@
 1. PC 上正常启动 `dist/TapDeck.exe`（`--headless` 也一样）。
 2. 手机浏览器打开配对网址 `http://<PC 地址>:41080/pair`（PC 设置窗口里的网址，或二维码）。
 3. 网页「下载 Android 端」区块显示 APK 下载按钮、下载二维码、版本、文件名与大小、下载地址和完整 SHA-256。
-4. 手机扫码（或点按钮）下载带版本号的安装包，例如 `TapDeck-0.3.8.apk`，按系统提示允许「安装未知应用」后安装。装好后再用同一个页面完成配对。
+4. 手机扫码（或点按钮）下载带版本号的安装包，例如 `TapDeck-0.3.9.apk`，按系统提示允许「安装未知应用」后安装。装好后再用同一个页面完成配对。
 
 ## 实现
 
@@ -22,7 +22,7 @@
 
 | 路由 | 说明 |
 |---|---|
-| `GET /apk` | 下载内置 APK：`Content-Type: application/vnd.android.package-archive`、`Content-Disposition: attachment; filename="TapDeck-0.3.8.apk"`（文件名随版本变化）、带 `Content-Length`，用 `http.ServeContent` 因此支持 Range 断点续传。未内置时返回 404 + 提示去 GitHub Release 下载。 |
+| `GET /apk` | 下载内置 APK：`Content-Type: application/vnd.android.package-archive`、`Content-Disposition: attachment; filename="TapDeck-0.3.9.apk"`（文件名随版本变化）、带 `Content-Length`，用 `http.ServeContent` 因此支持 Range 断点续传。未内置时返回 404 + 提示去 GitHub Release 下载。 |
 | `GET /apk/qr.png` | 下载地址的二维码 PNG（`go-qrcode`，512 px，纠错等级 M）。二维码内容取请求的 `Host`，所以手机从哪个地址打开配对页，二维码就指向哪个地址（IP 或主机名都行）。 |
 
 PC“连接”页的二维码始终打开 `/pair` 网页，不含 secret。网页下载区块显示版本和完整 SHA-256，安装后点击“打开 TapDeck 连接”；每次首次配对都由 PC 核对并允许。网页中的 `/apk/qr.png` 是可选的下载直链二维码。页面 CSP 保持 `default-src 'self'`。

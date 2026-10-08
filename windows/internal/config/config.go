@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,7 +9,7 @@ import (
 	"strings"
 )
 
-const SchemaVersion = 2
+const SchemaVersion = 3
 const ShortcutCount = 8
 
 // The former PC sensitivity of 2 is now the Android device's 1x baseline.
@@ -21,10 +22,11 @@ type Shortcut struct {
 	Enabled bool   `json:"enabled"`
 }
 type Voice struct {
-	HoldKey        string `json:"hold_key"`
-	ToggleStartKey string `json:"toggle_start_key"`
-	ToggleStopKey  string `json:"toggle_stop_key"`
-	StopDelayMS    int    `json:"stop_delay_ms"`
+	Profiles       []VoiceProfile `json:"profiles"`
+	HoldKey        string         `json:"hold_key"`
+	ToggleStartKey string         `json:"toggle_start_key"`
+	ToggleStopKey  string         `json:"toggle_stop_key"`
+	StopDelayMS    int            `json:"stop_delay_ms"`
 }
 type Config struct {
 	SchemaVersion   int        `json:"schema_version"`
@@ -45,7 +47,7 @@ func Default() Config {
 	return Config{SchemaVersion: SchemaVersion, Revision: 1, HTTPPort: 41080, WSSPort: 41443, UDPPort: 41444,
 		Shortcuts: []Shortcut{{"复制", "Ctrl+C", true}, {"粘贴", "Ctrl+V", true}, {"撤销", "Ctrl+Z", true}, {"回车", "Enter", true},
 			{"快捷键 5", "", false}, {"快捷键 6", "", false}, {"快捷键 7", "", false}, {"快捷键 8", "", false}},
-		Voice: Voice{StopDelayMS: 200}, Gain: 1, Sensitivity: PointerBaseSensitivity, NaturalScroll: true, KeyboardBackend: "auto"}
+		Voice: Voice{Profiles: DefaultVoiceProfiles(), HoldKey: "RightAlt", ToggleStartKey: "RightCtrl+L", ToggleStopKey: "RightCtrl+L", StopDelayMS: 200}, Gain: 1, Sensitivity: PointerBaseSensitivity, NaturalScroll: true, KeyboardBackend: "auto"}
 }
 func Directory() string { return filepath.Join(os.Getenv("LOCALAPPDATA"), "TapDeck") }
 func Load(dir string) (Config, error) {
@@ -57,6 +59,8 @@ func Load(dir string) (Config, error) {
 	if e != nil {
 		return c, e
 	}
+	// Missing profile data must not silently inherit new-install defaults.
+	c.Voice = Voice{StopDelayMS: 200}
 	if e = json.Unmarshal(b, &c); e != nil {
 		return c, e
 	}
@@ -69,46 +73,82 @@ func Load(dir string) (Config, error) {
 		return c, e
 	}
 	if old.SchemaVersion == SchemaVersion {
+		c.Voice = c.Voice.Normalized()
 		return c, c.Validate()
 	}
 	if old.SchemaVersion < 0 || old.SchemaVersion > SchemaVersion {
 		return c, fmt.Errorf("不支持配置版本 %d", old.SchemaVersion)
 	}
-	if len(c.Shortcuts) != 4 {
-		return c, fmt.Errorf("旧配置必须包含四个快捷键")
+	if old.SchemaVersion < 2 {
+		if len(c.Shortcuts) != 4 {
+			return c, fmt.Errorf("旧配置必须包含四个快捷键")
+		}
+		for i := range c.Shortcuts {
+			c.Shortcuts[i].Enabled = true
+		}
+		c.Shortcuts = append(c.Shortcuts, Default().Shortcuts[4:]...)
+		switch old.Voice.Mode {
+		case "", "mic":
+		case "hold":
+			c.Voice.HoldKey = old.Voice.Start
+		case "toggle":
+			c.Voice.ToggleStartKey, c.Voice.ToggleStopKey = old.Voice.Start, old.Voice.Stop
+		default:
+			return c, fmt.Errorf("无效旧语音模式")
+		}
 	}
-	for i := range c.Shortcuts {
-		c.Shortcuts[i].Enabled = true
-	}
-	c.Shortcuts = append(c.Shortcuts, Default().Shortcuts[4:]...)
-	switch old.Voice.Mode {
-	case "", "mic":
-	case "hold":
-		c.Voice.HoldKey = old.Voice.Start
-	case "toggle":
-		c.Voice.ToggleStartKey, c.Voice.ToggleStopKey = old.Voice.Start, old.Voice.Stop
-	default:
-		return c, fmt.Errorf("无效旧语音模式")
-	}
+	c.Voice.Profiles = DefaultVoiceProfiles()
+	c.Voice.Profiles[0].ToggleStartKey, c.Voice.Profiles[0].ToggleStopKey = c.Voice.ToggleStartKey, c.Voice.ToggleStopKey
+	c.Voice.Profiles[1].HoldKey = c.Voice.HoldKey
+	c.Voice = c.Voice.Normalized()
 	c.SchemaVersion = SchemaVersion
 	if e = c.Validate(); e != nil {
 		return c, e
 	}
-	backup, e := os.OpenFile(filepath.Join(dir, "config.v1.bak"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if e != nil && !os.IsExist(e) {
+	backupVersion := old.SchemaVersion
+	if backupVersion < 1 {
+		backupVersion = 1
+	}
+	if e = backupOriginal(dir, backupVersion, b); e != nil {
 		return c, e
 	}
-	if e == nil {
-		_, e = backup.Write(b)
-		closeErr := backup.Close()
-		if e != nil {
-			return c, e
-		}
-		if closeErr != nil {
-			return c, closeErr
-		}
-	}
 	return c, Save(dir, c)
+}
+
+func backupOriginal(dir string, version int, b []byte) error {
+	for suffix := 0; ; suffix++ {
+		name := fmt.Sprintf("config.v%d.bak", version)
+		if suffix > 0 {
+			name += fmt.Sprintf(".%d", suffix)
+		}
+		path := filepath.Join(dir, name)
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if os.IsExist(err) {
+			old, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return readErr
+			}
+			if bytes.Equal(old, b) {
+				return nil
+			}
+			continue // Keep any earlier backup and retain this original as well.
+		}
+		if err != nil {
+			return err
+		}
+		_, err = f.Write(b)
+		if err == nil {
+			err = f.Sync()
+		}
+		closeErr := f.Close()
+		if err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			_ = os.Remove(path)
+		}
+		return err
+	}
 }
 func (c Config) Validate() error {
 	if c.KeyboardBackend != "" && c.KeyboardBackend != "auto" && c.KeyboardBackend != "hid" && c.KeyboardBackend != "sendinput" {
@@ -146,10 +186,11 @@ func (c Config) Validate() error {
 	if c.Voice.StopDelayMS < 0 || c.Voice.StopDelayMS > 1000 {
 		return fmt.Errorf("结束延迟必须在 0–1000 ms")
 	}
-	return nil
+	return c.Voice.Validate()
 }
 func Save(dir string, c Config) error {
 	c.Sensitivity = PointerBaseSensitivity
+	c.Voice = c.Voice.Normalized()
 	if e := c.Validate(); e != nil {
 		return e
 	}

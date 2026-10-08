@@ -240,7 +240,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 	var keyboardLabel *walk.Label
 	var driverButton *walk.PushButton
 	var installing atomic.Bool
-	var holdKey, toggleStartKey, toggleStopKey *walk.LineEdit
+	var voiceEditors [config.VoiceProfileCount]voiceProfileEditor
 	var gain, delay, httpPort, wssPort, udpPort *walk.NumberEdit
 	var natural *walk.CheckBox
 	var autostartBox *walk.CheckBox
@@ -392,9 +392,9 @@ func window(s *server.Server, dir string, startHidden bool) error {
 		c.NaturalScroll = natural.Checked()
 		c.KeyboardBackend = backendIDs[max(0, backend.CurrentIndex())]
 		c.AudioDevice = deviceIDs[max(0, devices.CurrentIndex())]
-		c.Voice.HoldKey = strings.TrimSpace(holdKey.Text())
-		c.Voice.ToggleStartKey = strings.TrimSpace(toggleStartKey.Text())
-		c.Voice.ToggleStopKey = strings.TrimSpace(toggleStopKey.Text())
+		for i := range voiceEditors {
+			c.Voice.Profiles[i] = voiceEditors[i].value(c.Voice.Profiles[i].ID)
+		}
 		c.Voice.StopDelayMS = int(delay.Value())
 		if e := s.Update(c); e != nil {
 			walk.MsgBox(mw, "设置未保存", e.Error(), walk.MsgBoxIconError)
@@ -481,11 +481,9 @@ func window(s *server.Server, dir string, startHidden bool) error {
 				d.PushButton{Text: "刷新音频设备", OnClicked: refreshAudio},
 				d.Label{AssignTo: &audioStatus, Text: "正在检查音频设备"},
 				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.Label{Text: "音量倍率（0–3）"}, d.NumberEdit{AssignTo: &gain, Value: cfg.Gain, MinValue: 0, MaxValue: 3, Decimals: 2, Increment: 0.1}}},
-				d.Label{Text: "两种手势同时可用；热键留空时仅传音。"},
-				d.Label{Text: "长按热键（圆球按住 300 ms，松手释放）"}, d.Composite{Layout: d.HBox{}, Children: keyWidgets(func() walk.Form { return mw }, &holdKey, cfg.Voice.HoldKey)},
-				d.Label{Text: "免按开始热键（单击圆球开始）"}, d.Composite{Layout: d.HBox{}, Children: keyWidgets(func() walk.Form { return mw }, &toggleStartKey, cfg.Voice.ToggleStartKey)},
-				d.Label{Text: "免按结束热键（再单击圆球停止）"}, d.Composite{Layout: d.HBox{}, Children: keyWidgets(func() walk.Form { return mw }, &toggleStopKey, cfg.Voice.ToggleStopKey)},
-				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.Label{Text: "尾音结束延迟 ms"}, d.NumberEdit{AssignTo: &delay, Value: float64(cfg.Voice.StopDelayMS), MinValue: 0, MaxValue: 1000}}}, d.VSpacer{},
+				d.Label{Text: "名称最多 8 个汉字 / 16 个英文字符；热键留空时仅传音。"},
+				voiceProfileWidgets(func() walk.Form { return mw }, &voiceEditors, cfg.Voice.Profiles),
+				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.Label{Text: "尾音结束延迟 ms"}, d.NumberEdit{AssignTo: &delay, Value: float64(cfg.Voice.StopDelayMS), MinValue: 0, MaxValue: 1000}}},
 			}},
 			{Title: "设置与状态", Layout: d.VBox{}, Children: []d.Widget{d.Label{Text: "HTTP / WSS / UDP 端口（修改后重启连接）"}, d.NumberEdit{AssignTo: &httpPort, Value: float64(cfg.HTTPPort), MinValue: 1024, MaxValue: 65535}, d.NumberEdit{AssignTo: &wssPort, Value: float64(cfg.WSSPort), MinValue: 1024, MaxValue: 65535}, d.NumberEdit{AssignTo: &udpPort, Value: float64(cfg.UDPPort), MinValue: 1024, MaxValue: 65535}, d.Label{Text: "触控板灵敏度：在各 Android 设备触控板左上角设置（0.5–3 倍）"}, d.Label{Text: "手机震动开关：Android 顶部连接图标 → 连接与设备设置"}, d.CheckBox{AssignTo: &natural, Text: "自然滚动", Checked: cfg.NaturalScroll}, d.CheckBox{AssignTo: &autostartBox, Text: "随 Windows 登录自动启动接收端", Checked: autostartEnabled(), OnCheckedChanged: func() {
 				on, err := autostart.Set(autostartBox.Checked())
