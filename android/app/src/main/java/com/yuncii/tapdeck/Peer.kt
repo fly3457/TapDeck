@@ -4,6 +4,7 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class Peer(val host: String, val wssPort: Int, val httpPort: Int, val pin: String, val name: String = "电脑", val token: String = "") {
+    val id: String get() = pin.lowercase(java.util.Locale.ROOT)
     // TLS identity owns the credential, so a LAN address or port change can
     // still reconnect to the same computer after validating its certificate.
     fun withCredentialFrom(saved: Peer?): Peer =

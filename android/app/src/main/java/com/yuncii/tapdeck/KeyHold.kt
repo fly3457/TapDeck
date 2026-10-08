@@ -27,6 +27,9 @@ class KeyHold(
 
     /** 真实长按中的键值（长按键）。 */
     private val held = mutableStateMapOf<String, Boolean>()
+    /** Cancels delayed gestures even before Compose observes a new connection. */
+    var generation: Long = 0
+        private set
 
     private val shiftOnState = mutableStateOf(false)
     private val shiftLockedState = mutableStateOf(false)
@@ -119,6 +122,7 @@ class KeyHold(
 
     /** 切换界面、退出全键盘或断开连接时释放所有按键与修饰键。 */
     fun releaseAll() {
+        generation++
         held.keys.toList().asReversed().forEach { up(it) }
         held.clear()
         if (shiftOnState.value) up(SHIFT)

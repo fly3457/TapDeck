@@ -8,11 +8,11 @@
 
 | 字段 | 当前值 | 用途 |
 |---|---|---|
-| `receiver.version` | `0.3.15` | Windows 接收端及随包诊断工具版本 |
-| `controller.android.version` | `0.3.15` | Android 用户可见版本、APK 文件名 |
-| `controller.android.versionCode` | `18` | Android 覆盖安装时的单调递增序号 |
+| `receiver.version` | `0.3.16` | Windows 接收端及随包诊断工具版本 |
+| `controller.android.version` | `0.3.16` | Android 用户可见版本、APK 文件名 |
+| `controller.android.versionCode` | `19` | Android 覆盖安装时的单调递增序号 |
 
-接收端与控制端已经可以使用不同版本，例如下一轮只改接收端时，可由接收端 `0.3.16` 嵌入 Android `0.3.15 / code 18`。控制端自身未变化时，不必仅为了与接收端同号而重发 Android；但每次接收端打包仍必须重新执行当前 Android 构建与校验。每次控制端更新必须同时递增接收端补丁版本并重新交付 EXE，因为内嵌内容已经发生变化。
+接收端与控制端已经可以使用不同版本，例如下一轮只改接收端时，可由接收端 `0.3.17` 嵌入 Android `0.3.16 / code 19`。控制端自身未变化时，不必仅为了与接收端同号而重发 Android；但每次接收端打包仍必须重新执行当前 Android 构建与校验。每次控制端更新必须同时递增接收端补丁版本并重新交付 EXE，因为内嵌内容已经发生变化。
 
 应用版本采用三段数字 `major.minor.patch`。普通迭代默认递增 patch，明确的里程碑可选择 minor 或 major；递增 minor/major 会将后面的段归零。当前工具将每段限制为 0–65535，以适配 Windows 数字版本资源。控制协议当前为 v2，配置 schema 当前为 3，它们只随对应协议／数据格式变更递增，不跟随应用版本递增；第三方驱动版本、SDK 版本和 Windows 清单内的公共组件标识也不属于本应用版本。
 

@@ -17,6 +17,7 @@ import kotlinx.serialization.encodeToString
 private val Context.dataStore by preferencesDataStore("tapdeck")
 class PairStore(private val context: Context) {
     private val peerKey = stringPreferencesKey("protected_peer")
+    private val catalogKey = stringPreferencesKey("protected_peers_v1")
     private val idKey = stringPreferencesKey("device_id")
     private val ballX = floatPreferencesKey("voice_ball_x")
     private val ballY = floatPreferencesKey("voice_ball_y")
@@ -32,10 +33,42 @@ class PairStore(private val context: Context) {
             init(KeyGenParameterSpec.Builder("tapdeck-pair", KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT).setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build())
         }.generateKey()
     }
-    suspend fun deviceId(): String { val p = context.dataStore.data.first(); p[idKey]?.let { return it }; val id = UUID.randomUUID().toString(); context.dataStore.edit { it[idKey] = id }; return id }
-    suspend fun load(): Peer? { val raw = context.dataStore.data.first()[peerKey] ?: return null; return runCatching { val b = decode64(raw); val cipher = Cipher.getInstance("AES/GCM/NoPadding"); cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, b.copyOfRange(0, 12))); wireJson.decodeFromString<Peer>(String(cipher.doFinal(b.copyOfRange(12, b.size)))) }.getOrNull() }
-    suspend fun save(peer: Peer) { val c = Cipher.getInstance("AES/GCM/NoPadding"); c.init(Cipher.ENCRYPT_MODE, key()); val b = c.iv + c.doFinal(wireJson.encodeToString(peer).toByteArray()); context.dataStore.edit { it[peerKey] = encode64(b) } }
-    suspend fun clear() { context.dataStore.edit { it.remove(peerKey) } }
+    suspend fun deviceId(): String {
+        val saved = context.dataStore.edit { if (it[idKey] == null) it[idKey] = UUID.randomUUID().toString() }
+        return requireNotNull(saved[idKey])
+    }
+    private fun decrypt(raw: String): String {
+        val b = decode64(raw)
+        require(b.size >= 28) { "配对数据损坏" }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, b.copyOfRange(0, 12)))
+        return cipher.doFinal(b.copyOfRange(12, b.size)).toString(Charsets.UTF_8)
+    }
+    private fun encrypt(text: String): String {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, key())
+        return encode64(cipher.iv + cipher.doFinal(text.toByteArray(Charsets.UTF_8)))
+    }
+    /** Read/migrate/write in ONE DataStore transaction, including across PairStore instances.
+     * Decode, encryption or disk failure leaves the original data untouched. */
+    suspend fun updateCatalog(change: (PeerCatalog) -> PeerCatalog): PeerCatalog {
+        var result = PeerCatalog()
+        context.dataStore.edit { prefs ->
+            val raw = prefs[catalogKey]
+            val current = if (raw != null) wireJson.decodeFromString<PeerCatalog>(decrypt(raw)).validated() else
+                PeerCatalog.migrate(prefs[peerKey]?.let { wireJson.decodeFromString<Peer>(decrypt(it)) }, prefs[voiceProfileKey], prefs[voiceModeKey])
+            result = change(current).validated()
+            if (raw == null || result != current) prefs[catalogKey] = encrypt(wireJson.encodeToString(result))
+            prefs.remove(peerKey)
+            prefs.remove(voiceProfileKey)
+            prefs.remove(voiceModeKey)
+        }
+        return result
+    }
+    suspend fun loadCatalog() = updateCatalog { it }
+    suspend fun load(): Peer? = loadCatalog().selected?.peer
+    suspend fun save(peer: Peer) { updateCatalog { it.upsert(peer).select(peer.id) } }
+    suspend fun clear() { updateCatalog { catalog -> catalog.selectedId?.let(catalog::remove) ?: catalog } }
     suspend fun loadBallPosition(): Pair<Float, Float> {
         val p = context.dataStore.data.first()
         fun safe(v: Float?) = v?.takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 0.5f
@@ -57,12 +90,12 @@ class PairStore(private val context: Context) {
     }
 
     suspend fun loadVoiceSelection(): VoiceSelection {
-        val p = context.dataStore.data.first()
-        return VoiceSelection(p[voiceProfileKey], p[voiceModeKey])
+        val selected = loadCatalog().selected
+        return VoiceSelection(selected?.voiceProfileId, selected?.legacyVoiceMode)
     }
 
     suspend fun saveVoiceProfile(id: String) {
-        context.dataStore.edit { it[voiceProfileKey] = id }
+        updateCatalog { catalog -> catalog.selectedId?.let { catalog.voice(it, id) } ?: catalog }
     }
 
     suspend fun saveKeyboardMode(on: Boolean) {

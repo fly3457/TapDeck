@@ -55,7 +55,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import androidx.lifecycle.Lifecycle
@@ -69,28 +68,34 @@ class TapViewModel(app: Application) : AndroidViewModel(app) {
     val client = TapClient(app, viewModelScope)
     private val store = PairStore(app)
     val ballPosition = MutableStateFlow<Pair<Float, Float>?>(null)
-    val selectedVoice = MutableStateFlow<VoiceProfile?>(defaultVoiceProfiles().first())
+    val selectedVoice = MutableStateFlow<VoiceProfile?>(null)
     private var voiceSelection = VoiceSelection()
+    private var voiceOwner: String? = null
+    private var voiceEpoch = -1L
     var voiceSelectionReady = false
         private set
     private var savedVoiceId: String? = null
-    private val voiceWrites = Channel<String>(Channel.CONFLATED)
     val keyboardOn = MutableStateFlow(false)
     init {
         viewModelScope.launch { client.restore() }
         viewModelScope.launch { ballPosition.value = store.loadBallPosition() }
-        viewModelScope.launch { for (id in voiceWrites) store.saveVoiceProfile(id) }
         viewModelScope.launch {
             val (_, keyboard) = store.loadUiMode()
             keyboardOn.value = keyboard
-            voiceSelection = store.loadVoiceSelection()
-            savedVoiceId = voiceSelection.id
             voiceSelectionReady = true
-            client.state.collect { state ->
+            combine(client.state, client.peers) { state, catalog -> state to catalog }.collect { (state, catalog) ->
+                if (!state.connected) selectedVoice.value = null
                 // Reconcile only when idle and connected; an active recording retains its snapshot.
                 if (state.connected && state.mic == "idle") {
+                    if (voiceOwner != state.selectedPeerId || voiceEpoch != state.connectionEpoch) {
+                        val saved = catalog.find(state.selectedPeerId)
+                        voiceOwner = state.selectedPeerId
+                        voiceEpoch = state.connectionEpoch
+                        voiceSelection = VoiceSelection(saved?.voiceProfileId, saved?.legacyVoiceMode)
+                        savedVoiceId = voiceSelection.id
+                    }
                     selectedVoice.value = voiceSelection.reconcile(state.voiceProfiles())
-                    persistVoiceSelection()
+                    persistVoiceSelection(state)
                 }
             }
         }
@@ -101,13 +106,15 @@ class TapViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun cycleVoiceProfile() {
         val state = client.state.value
-        if (!voiceSelectionReady || !state.connected || state.mic != "idle" || state.voiceProfiles().count { it.enabled } < 2) return
+        if (!voiceSelectionMatches(state) || !state.connected || state.mic != "idle" || state.voiceProfiles().count { it.enabled } < 2) return
         selectedVoice.value = voiceSelection.next(state.voiceProfiles())
-        persistVoiceSelection()
+        persistVoiceSelection(state)
     }
-    private fun persistVoiceSelection() {
+    fun voiceSelectionMatches(state: ClientState) = voiceSelectionReady && voiceOwner == state.selectedPeerId && voiceEpoch == state.connectionEpoch
+    private fun persistVoiceSelection(state: ClientState) {
         val id = selectedVoice.value?.id ?: return
-        if (savedVoiceId != id) { savedVoiceId = id; voiceWrites.trySend(id) }
+        val pc = state.selectedPeerId ?: return
+        if (savedVoiceId != id) { savedVoiceId = id; client.rememberVoice(pc, state.connectionEpoch, id) }
     }
     fun setKeyboardOn(on: Boolean) {
         if (keyboardOn.value == on) return
@@ -121,7 +128,11 @@ class MainActivity : ComponentActivity() {
     private var touchpad: TouchpadView? = null
     private var microphone: MicBallView? = null
     private var deferredLink: String? = null
+    private var deferredPeerId: String? = null
     private var settings by mutableStateOf(false)
+    private var pickerOpen by mutableStateOf(false)
+    private var managingPeers by mutableStateOf(false)
+    private var awaitingNewPeer = false
     private var sensitivitySettings by mutableStateOf(false)
     private val feedbackController by lazy { KeyFeedbackController({ vm.client.inputSettings.value.haptics }, AndroidFeedbackBackend(applicationContext)) }
     private var feedbackAvailability by mutableStateOf(FeedbackResult.Requested)
@@ -130,15 +141,21 @@ class MainActivity : ComponentActivity() {
     private var address by mutableStateOf("http://192.168.1.11:41080/pair")
     private var pairingScanError by mutableStateOf("")
     /** 快捷键的轻点 / 按住手势。 */
-    private val shortcutHold by lazy { ShortcutHold({ slot, token -> vm.client.shortcutHoldStart(slot, token) }, { token -> vm.client.shortcutHoldStop(token) }) }
+    private var shortcutHold = ShortcutHold({ _, _ -> }, {})
     /** 全键盘的按键状态。 */
-    private val keyHold by lazy { KeyHold({ chord -> vm.client.keyDown(chord) }, { chord -> vm.client.keyUp(chord) }) }
+    private var keyHold = KeyHold({}, {})
     /** 切换全键盘 / 快捷键+语音两种下半区布局。 */
     private var modeViews: (() -> Unit)? = null
     private val microphonePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (!granted) android.widget.Toast.makeText(this, "麦克风权限未授予，键鼠仍可使用", android.widget.Toast.LENGTH_LONG).show() }
-    private val lanPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) deferredLink?.let { vm.client.enter(it); deferredLink = null } else android.widget.Toast.makeText(this, "需要局域网权限才能连接电脑", android.widget.Toast.LENGTH_LONG).show() }
+    private val lanPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val link = deferredLink; val id = deferredPeerId
+        deferredLink = null; deferredPeerId = null
+        if (granted) { if (link != null) enter(link) else if (id != null) selectPeer(id) }
+        else android.widget.Toast.makeText(this, "需要局域网权限才能连接电脑", android.widget.Toast.LENGTH_LONG).show()
+    }
     private val pairingScanner = registerForActivityResult(ScanContract()) { result ->
         settings = true
+        if (result.contents != null && !vm.client.allowTargetChange()) return@registerForActivityResult
         result.contents?.let { contents ->
             val scannedAddress = pairingAddressFromQr(contents)
             if (scannedAddress != null) {
@@ -155,6 +172,7 @@ class MainActivity : ComponentActivity() {
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState); fullscreen()
+        vm.client.beforeConnectionChange = ::cancelInputs
         if (savedInstanceState != null) {
             settings = savedInstanceState.getBoolean("connection_settings")
             address = savedInstanceState.getString("pairing_address", address)
@@ -197,12 +215,19 @@ class MainActivity : ComponentActivity() {
             setBackgroundColor(android.graphics.Color.WHITE)
             headerView = compose {
                 val state by vm.client.state.collectAsStateWithLifecycle()
+                val peers by vm.client.peers.collectAsStateWithLifecycle()
                 val keyboardOn by vm.keyboardOn.collectAsStateWithLifecycle()
                 ConnectionHeader(
                     state,
                     keyboardOn,
                     scale = dimensions.value.scale,
-                    reminderEnabled = pageResumed && !settings && !sensitivitySettings && state.pairing.isEmpty() && !state.connected,
+                    reminderEnabled = pageResumed && !settings && !pickerOpen && !managingPeers && !sensitivitySettings && state.pairing.isEmpty() && !state.connected,
+                    peers = peers,
+                    pickerOpen = pickerOpen,
+                    onPicker = { touchpad?.cancel(); pickerOpen = it },
+                    onSelectPeer = ::selectPeer,
+                    onAddPeer = { pickerOpen = false; settings = true },
+                    onManagePeers = { pickerOpen = false; managingPeers = true },
                     onKeyboardToggle = { on ->
                         touchpad?.cancel()
                         vm.setKeyboardOn(on)
@@ -223,14 +248,21 @@ class MainActivity : ComponentActivity() {
                 LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
             val shortcutsRegion = compose {
                 val state by vm.client.state.collectAsStateWithLifecycle()
+                val epoch = state.connectionEpoch
+                val sessionHold = remember(epoch) { ShortcutHold(
+                    { slot, token -> vm.client.inputInSession(epoch) { vm.client.shortcutHoldStart(slot, token) } },
+                    { token -> vm.client.inputInSession(epoch) { vm.client.shortcutHoldStop(token) } },
+                ) }
+                SideEffect { shortcutHold = sessionHold }
+                DisposableEffect(sessionHold) { onDispose { sessionHold.cancelAll() } }
                 ShortcutButtons(
                     state,
-                    shortcutHold,
+                    sessionHold,
                     scale = dimensions.value.scale,
                     stopRecording = {
                         // 单击语音输入录音中：按下快捷键先结束录音，这一次不再发送按键。
                         val active = vm.client.state.value.micMode == MicBallView.MODE_TOGGLE && vm.client.state.value.mic in listOf("preparing", "transmitting", "stopping")
-                        if (active) vm.client.stopMic()
+                        if (active) vm.client.inputInSession(epoch) { vm.client.stopMic() }
                         active
                     },
                 )
@@ -249,14 +281,20 @@ class MainActivity : ComponentActivity() {
             val keyboardRegion = compose {
                 val state by vm.client.state.collectAsStateWithLifecycle()
                 val keyboardOn by vm.keyboardOn.collectAsStateWithLifecycle()
-                if (keyboardOn) KeyboardView(
+                val epoch = state.connectionEpoch
+                val sessionHold = remember(epoch) { KeyHold(
+                    { chord -> vm.client.inputInSession(epoch) { vm.client.keyDown(chord) } },
+                    { chord -> vm.client.inputInSession(epoch) { vm.client.keyUp(chord) } },
+                ) }
+                SideEffect { keyHold = sessionHold }
+                if (keyboardOn) key(state.connectionEpoch) { KeyboardView(
                     connected = state.connected,
                     voiceActive = state.mic == "preparing" || state.mic == "transmitting",
                     scale = dimensions.value.scale,
-                    hold = keyHold,
-                    beginVoice = ::beginMic,
-                    stopVoice = { vm.client.stopMic() },
-                )
+                    hold = sessionHold,
+                    beginVoice = { mode -> var started = false; vm.client.inputInSession(epoch) { started = beginMic(mode) }; started },
+                    stopVoice = { vm.client.inputInSession(epoch) { vm.client.stopMic() } },
+                ) }
             }.apply { id = R.id.keyboard_region }
             panelView = FrameLayout(context).apply {
                 id = R.id.control_panel
@@ -276,7 +314,9 @@ class MainActivity : ComponentActivity() {
         }
         val dialogs = compose(compact = false) {
             val state by vm.client.state.collectAsStateWithLifecycle()
+            val peers by vm.client.peers.collectAsStateWithLifecycle()
             val inputSettings by vm.client.inputSettings.collectAsStateWithLifecycle()
+            if (managingPeers) PeerManager(peers, state, vm.client::renamePeer, vm.client::forgetPeer) { managingPeers = false }
             if (sensitivitySettings) SensitivitySettings(inputSettings, vm.client::setSensitivity) { sensitivitySettings = false }
             if (settings) AlertDialog(onDismissRequest = { settings = false }, title = {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -317,9 +357,10 @@ class MainActivity : ComponentActivity() {
                     }
                     // Together with the column's 8dp spacing, leave 16dp on each side.
                     HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                    TextButton(onClick = { settings = false; managingPeers = true }) { Text("管理电脑（${peers.peers.size}）") }
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text("输入PC连接窗口URL", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                        IconButton(onClick = ::scanPairingAddress) {
+                        IconButton(enabled = state.canSwitch, onClick = ::scanPairingAddress) {
                             Icon(painterResource(R.drawable.ic_lucide_scan_line), contentDescription = "扫码填写 PC 配对网址")
                         }
                     }
@@ -327,10 +368,10 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxWidth(), label = { Text("PC 配对网址") }, singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
                     if (pairingScanError.isNotEmpty()) Text(pairingScanError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                    if (state.connected) TextButton(onClick = { vm.client.forget() }) { Text("忘记当前电脑") }
+                    if (!state.canSwitch) Text("请先结束语音输入", color = MaterialTheme.colorScheme.error)
                 }
-            }, confirmButton = { TextButton(onClick = { enter(address); settings = false }) { Text("连接") } }, dismissButton = { TextButton(onClick = { settings = false }) { Text("关闭") } })
-            if (state.pairing.isNotEmpty()) AlertDialog(onDismissRequest = { vm.client.forget() }, title = { Text("等待电脑允许连接") }, text = { Column { Text("核对电脑弹窗中的校验码，一致后在电脑上点“允许连接”。"); Spacer(Modifier.height(12.dp)); Text(state.pairing, fontSize = 19.sp); Spacer(Modifier.height(12.dp)); Text("电脑允许后会自动连接。") } }, confirmButton = {}, dismissButton = { TextButton(onClick = vm.client::forget) { Text("取消") } })
+            }, confirmButton = { TextButton(enabled = state.canSwitch, onClick = { enter(address); settings = false }) { Text("连接") } }, dismissButton = { TextButton(onClick = { settings = false }) { Text("关闭") } })
+            if (state.pairing.isNotEmpty()) AlertDialog(onDismissRequest = ::cancelPairing, title = { Text("等待电脑允许连接") }, text = { Column { Text("核对电脑弹窗中的校验码，一致后在电脑上点“允许连接”。"); Spacer(Modifier.height(12.dp)); Text(state.pairing, fontSize = 19.sp); Spacer(Modifier.height(12.dp)); Text("电脑允许后会自动连接。") } }, confirmButton = {}, dismissButton = { TextButton(onClick = ::cancelPairing) { Text("取消") } })
         }
         val root = FrameLayout(this).apply {
             isMotionEventSplittingEnabled = true
@@ -354,6 +395,11 @@ class MainActivity : ComponentActivity() {
                     vm.keyboardOn.collect { modeViews?.invoke() }
                 }
                 combine(vm.client.state, vm.ballPosition, vm.selectedVoice) { state, position, selected -> Triple(state, position, selected) }.collect { (state, position, selected) ->
+                    if (awaitingNewPeer && state.phase == ConnectionPhase.Disconnected && state.error.isNotEmpty() && state.selectedPeerId == null) {
+                        awaitingNewPeer = false
+                        pickerOpen = true
+                    }
+                    if (state.connected) awaitingNewPeer = false
                     touchpad?.connected = state.connected
                     microphone?.apply {
                         val profile = state.activeVoiceProfile ?: selected?.takeIf { selection -> state.voiceProfiles().any { it.enabled && it.id == selection.id } }
@@ -370,7 +416,8 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        intent?.data?.let { enter(it.toString()) }
+        // A restored task can carry the original system Intent after process death.
+        if (savedInstanceState == null) consumePairingIntent(intent) else intent?.data = null
     }
     private fun fullscreen() {
         // 保留系统状态栏（电池、时间等），只把布局延伸到状态栏后面，并按安全区留白。
@@ -383,6 +430,7 @@ class MainActivity : ComponentActivity() {
         }
     }
     private fun scanPairingAddress() {
+        if (!vm.client.allowTargetChange()) return
         pairingScanError = ""
         if (!packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) {
             pairingScanError = "这台设备没有相机，请手动输入配对网址"
@@ -393,6 +441,7 @@ class MainActivity : ComponentActivity() {
         }
     }
     private fun launchPairingScanner() {
+        if (!vm.client.allowTargetChange()) return
         pairingScanner.launch(ScanOptions()
             .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
             .setPrompt("扫描 PC 设置窗口中的配对二维码")
@@ -406,11 +455,33 @@ class MainActivity : ComponentActivity() {
         super.onSaveInstanceState(outState)
     }
     private fun enter(link: String) {
+        if (!vm.client.allowTargetChange()) return
         val permission = "android.permission.ACCESS_LOCAL_NETWORK"
-        if (Build.VERSION.SDK_INT >= 37 && applicationInfo.targetSdkVersion >= 37 && checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) { deferredLink = link; lanPermission.launch(permission) } else vm.client.enter(link)
+        if (Build.VERSION.SDK_INT >= 37 && applicationInfo.targetSdkVersion >= 37 && checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) { deferredLink = link; deferredPeerId = null; lanPermission.launch(permission) }
+        else { awaitingNewPeer = true; vm.client.enter(link) }
+    }
+    private fun selectPeer(id: String) {
+        if (!vm.client.allowTargetChange()) return
+        pickerOpen = false
+        awaitingNewPeer = false
+        val permission = "android.permission.ACCESS_LOCAL_NETWORK"
+        if (Build.VERSION.SDK_INT >= 37 && applicationInfo.targetSdkVersion >= 37 && checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
+            deferredPeerId = id; deferredLink = null; lanPermission.launch(permission)
+        } else vm.client.selectPeer(id)
+    }
+    private fun cancelPairing() {
+        awaitingNewPeer = false
+        vm.client.cancelPairing()
+        pickerOpen = true
+    }
+    private fun cancelInputs() {
+        touchpad?.cancel()
+        shortcutHold.cancelAll()
+        keyHold.releaseAll()
+        microphone?.cancel()
     }
     private fun beginMic(mode: String): Boolean {
-        if (!vm.voiceSelectionReady) return false
+        if (!vm.voiceSelectionMatches(vm.client.state.value)) return false
         val profile = vm.selectedVoice.value ?: return false
         if (!vm.client.state.value.voiceProfiles().any { it.id == profile.id && it.enabled }) return false
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -422,7 +493,13 @@ class MainActivity : ComponentActivity() {
         if (!started) android.util.Log.i("TapDeck", "beginMic $mode 未开始：${vm.client.state.value.mic}/${vm.client.state.value.error}")
         return started
     }
-    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); intent.data?.let { enter(it.toString()) } }
+    private fun consumePairingIntent(intent: Intent?) {
+        val link = intent?.dataString ?: return
+        // Consume even a refused link: recreation must never replay it after recording ends.
+        intent.data = null
+        enter(link)
+    }
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); consumePairingIntent(intent) }
     override fun onResume() {
         super.onResume(); pageResumed = true; fullscreen(); modeViews?.invoke()
         if (settings) { feedbackAvailability = feedbackController.availability(); feedbackTestMessage = "" }
@@ -430,6 +507,7 @@ class MainActivity : ComponentActivity() {
     override fun onPause() { pageResumed = false; super.onPause() }
     override fun onStart() { super.onStart(); vm.client.setForeground(true) }
     override fun onStop() { touchpad?.cancel(); microphone?.cancel(); vm.client.stopMic(true); vm.client.setForeground(false); super.onStop() }
+    override fun onDestroy() { vm.client.beforeConnectionChange = null; super.onDestroy() }
 }
 
 @Composable private fun SensitivitySettings(settings: DeviceInputSettings, change: (Double) -> Unit, close: () -> Unit) {
@@ -453,6 +531,12 @@ class MainActivity : ComponentActivity() {
     keyboardOn: Boolean,
     scale: Float,
     reminderEnabled: Boolean,
+    peers: PeerCatalog,
+    pickerOpen: Boolean,
+    onPicker: (Boolean) -> Unit,
+    onSelectPeer: (String) -> Unit,
+    onAddPeer: () -> Unit,
+    onManagePeers: () -> Unit,
     onKeyboardToggle: (Boolean) -> Unit,
     onSettings: () -> Unit,
 ) {
@@ -477,14 +561,41 @@ class MainActivity : ComponentActivity() {
             Modifier.fillMaxSize().background(Color.White).padding(start = width * 0.02f, end = width * 0.01f),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = if (state.error.isNotEmpty()) "${state.peerName} · ${state.error}"
-                else if (state.connected) "${state.peerName} · ${state.status} · RTT ${state.rttMs} ms"
-                else "${state.peerName} · ${state.status}",
-                modifier = Modifier.weight(1f),
-                color = Color(ControllerStyle.LABEL),
-                fontSize = titleSize, lineHeight = titleSize * 1.2f, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            )
+            Box(Modifier.weight(1f).fillMaxHeight().clickable(role = Role.Button) { onPicker(true) }
+                .semantics { contentDescription = "切换电脑，当前${state.peerName}，${state.status}" }) {
+                Text(
+                    text = "${state.peerName} ▾ · " + if (state.error.isNotEmpty()) state.error
+                        else if (state.connected) "${state.status} · RTT ${state.rttMs} ms" else state.status,
+                    modifier = Modifier.fillMaxWidth().align(Alignment.CenterStart),
+                    color = Color(ControllerStyle.LABEL),
+                    fontSize = titleSize, lineHeight = titleSize * 1.2f, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+                DropdownMenu(expanded = pickerOpen, onDismissRequest = { onPicker(false) },
+                    modifier = Modifier.heightIn(max = 420.dp).widthIn(min = 240.dp, max = 360.dp)) {
+                    if (!state.canSwitch) Text("请先结束语音输入", Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error)
+                    if (peers.peers.isEmpty()) Text(if (state.catalogReady) "还没有已配对电脑" else "正在读取电脑列表", Modifier.padding(16.dp))
+                    peers.peers.sortedBy { if (it.id == state.selectedPeerId) 0 else 1 }.forEach { pc ->
+                        DropdownMenuItem(
+                            enabled = state.canSwitch && state.catalogReady,
+                            onClick = { onSelectPeer(pc.id) },
+                            text = {
+                                Column {
+                                    Text((if (pc.id == state.selectedPeerId) "✓ " else "") + pc.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(pc.address + " · " + when {
+                                        pc.id == state.selectedPeerId -> state.status
+                                        pc.needsPairing -> "需重新配对"
+                                        else -> "已配对"
+                                    }, style = MaterialTheme.typography.bodySmall)
+                                }
+                            },
+                            modifier = Modifier.semantics { contentDescription = "选择电脑 ${pc.displayName}，${pc.address}" },
+                        )
+                    }
+                    HorizontalDivider()
+                    DropdownMenuItem(text = { Text("添加电脑") }, enabled = state.canSwitch, onClick = onAddPeer)
+                    DropdownMenuItem(text = { Text("管理电脑") }, onClick = onManagePeers)
+                }
+            }
             // Explicit click bounds avoid Material's minimum size enlarging a 0.10W header.
             Box(
                 Modifier.width(width * 0.10f).fillMaxHeight()
@@ -600,6 +711,8 @@ class ShortcutHold(
     private val stop: (String) -> Unit,
 ) {
     private val active = mutableMapOf<Int, String>()
+    var generation: Long = 0
+        private set
 
     fun press(slot: Int, recordingActive: Boolean) {
         if (active.containsKey(slot)) return
@@ -616,6 +729,7 @@ class ShortcutHold(
 
     /** 开始录音时撤销仍按住的键，避免残留按下状态。 */
     fun cancelAll() {
+        generation++
         val pending = active.values.toList()
         active.clear()
         pending.forEach { stop(it) }
@@ -633,6 +747,7 @@ private fun Modifier.shortcutPress(
     awaitEachGesture {
         awaitFirstDown(requireUnconsumed = false)
         if (!connected) return@awaitEachGesture
+        val generation = hold.generation
         try {
             feedback(KeyFeedback.Press)
             val wasRecording = stopRecording()
@@ -640,7 +755,7 @@ private fun Modifier.shortcutPress(
             hold.press(slot, wasRecording)
             waitForUpOrCancellation()
         } finally {
-            hold.release(slot)
+            if (generation == hold.generation) hold.release(slot)
             onPressed(false)
         }
     }

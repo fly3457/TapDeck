@@ -315,6 +315,7 @@ private fun Modifier.keyGesture(
     awaitEachGesture {
         // 父布局会先消费按下事件，所以这里不要求未消费。
         awaitFirstDown(requireUnconsumed = false)
+        val generation = hold.generation
         feedback(KeyFeedback.Press)
         onPressed(true)
         var timer: Job? = null
@@ -328,30 +329,35 @@ private fun Modifier.keyGesture(
                     var long = false
                     timer = scope.launch {
                         delay(KeyHold.LONG_PRESS_MS)
+                        if (generation != hold.generation) return@launch
                         long = true
                         hold.dualLong(item.secondary)
                         feedback(KeyFeedback.LongPress)
                     }
                     val up = waitForUpOrCancellation()
                     timer?.cancel()
-                    if (!long && up != null) hold.dualShort(item.primary)
+                    if (generation == hold.generation && !long && up != null) hold.dualShort(item.primary)
                 }
                 // 空格：短按一次空格；长按开始传音并保持 PC 长按热键，松手结束。
                 Kind.VoiceDual -> {
                     timer = scope.launch {
                         delay(KeyHold.LONG_PRESS_MS)
+                        if (generation != hold.generation) return@launch
                         talking = beginVoice(MicBallView.MODE_HOLD)
                         if (talking) feedback(KeyFeedback.LongPress)
                     }
                     val up = waitForUpOrCancellation()
                     timer?.cancel()
-                    if (talking) { stopVoice(); talking = false } else if (up != null) hold.dualShort(item.primary)
+                    if (generation == hold.generation) {
+                        if (talking) { stopVoice(); talking = false } else if (up != null) hold.dualShort(item.primary)
+                    }
                 }
                 // 长按键：短按一次，长按真按住（由 Windows 连续触发）。
                 Kind.Hold -> {
                     var long = false
                     timer = scope.launch {
                         delay(KeyHold.LONG_PRESS_MS)
+                        if (generation != hold.generation) return@launch
                         long = true
                         held = true
                         hold.holdDown(item.primary)
@@ -359,26 +365,31 @@ private fun Modifier.keyGesture(
                     }
                     val up = waitForUpOrCancellation()
                     timer?.cancel()
-                    if (long) { hold.holdUp(item.primary); held = false } else if (up != null) hold.tap(item.primary)
+                    if (generation == hold.generation) {
+                        if (long) { hold.holdUp(item.primary); held = false } else if (up != null) hold.tap(item.primary)
+                    }
                 }
                 // Shift：短按单次大写，长按锁定大写。
                 Kind.Shift -> {
                     var locked = false
                     timer = scope.launch {
                         delay(KeyHold.LONG_PRESS_MS)
+                        if (generation != hold.generation) return@launch
                         locked = true
                         hold.lockShift()
                         feedback(KeyFeedback.LongPress)
                     }
                     val up = waitForUpOrCancellation()
                     timer?.cancel()
-                    if (!locked && up != null) hold.tapShift()
+                    if (generation == hold.generation && !locked && up != null) hold.tapShift()
                 }
             }
         } finally {
             timer?.cancel()
-            if (held) hold.holdUp(item.primary)
-            if (talking) stopVoice()
+            if (generation == hold.generation) {
+                if (held) hold.holdUp(item.primary)
+                if (talking) stopVoice()
+            }
             onPressed(false)
         }
     }

@@ -51,16 +51,18 @@ try {
         Invoke-TapDeckDevice -Arguments @('shell', 'wm', 'density', $taskVariant.Density) | Out-Null
         Invoke-TapDeckDevice -Arguments @('shell', 'settings', 'put', 'system', 'font_scale', $taskVariant.Font) | Out-Null
         $taskCases = @('controllerModesAndShortcutVariants', 'connectionIconReminderAndSettings', 'deviceSensitivitySliderPersistsAndKeepsPcConfigIndependent', 'voiceProfileButtonsCycleDisableAndFreeze')
-        if ($taskVariant.Full) { $taskCases += @('percentageLayoutAndCameraOptional', 'touchpadSettingsIconCancelsPendingClickAndDoesNotMoveMouse', 'keyFeedbackUsesVibratorServiceWithSystemTouchFeedbackOff', 'launcherIconUsesPcColorsAndSafeAdaptiveLayers', 'toggleVoiceStopsAndConsumesTouchpadClick', 'pcVoiceStopReleasesRecorderAndIgnoresStaleReplies', 'voiceProfilesWireSnapshotAndSpaceGesture') }
+        if ($taskVariant.Full) { $taskCases += @('percentageLayoutAndCameraOptional', 'touchpadSettingsIconCancelsPendingClickAndDoesNotMoveMouse', 'keyFeedbackUsesVibratorServiceWithSystemTouchFeedbackOff', 'launcherIconUsesPcColorsAndSafeAdaptiveLayers', 'toggleVoiceStopsAndConsumesTouchpadClick', 'pcVoiceStopReleasesRecorderAndIgnoresStaleReplies', 'voiceProfilesWireSnapshotAndSpaceGesture', 'pairingRejectionStopsRetryAndIgnoresStaleFailure') }
         if ($taskVariant.Full -or $taskVariant.Gestures) { $taskCases += @('gesturesMoveClickScrollDragAndCancel', 'multiFingerZoomSwipeAndPointerIds', 'keyboardShortLongVoiceAndDisposalRelease', 'compactVoiceAndTouchpadPointersStayIndependent', 'shortcutFeedbackOncePerPressAndDisabledDoesNotTrigger') }
         $taskClassList = ($taskCases | ForEach-Object { 'com.yuncii.tapdeck.DeviceTest#' + $_ }) -join ','
+        $taskClassList += ',com.yuncii.tapdeck.MultiPcTest#pickerManagementAndRecordingRestrictions'
+        if ($taskVariant.Full) { $taskClassList += ',com.yuncii.tapdeck.DeviceTest#microphoneFramesRetainTheirOriginalSessionAndRecording' }
         $taskArgs = @('shell', 'am', 'instrument', '-w', '-e', 'uiLabel', $taskVariant.Name, '-e', 'class', $taskClassList)
         if ($taskVariant.Height) { $taskArgs += @('-e', 'uiHeight', $taskVariant.Height) }
         $taskArgs += 'com.yuncii.tapdeck.test/androidx.test.runner.AndroidJUnitRunner'
         $taskResult = Invoke-TapDeckDevice -Arguments $taskArgs | Out-String
         [IO.File]::WriteAllText((Join-Path $OutputDirectory ($taskVariant.Name + '.log')), $taskResult, [Text.UTF8Encoding]::new($false))
         if ($taskResult -notmatch '(?m)^OK \(\d+ tests?\)\s*$') { throw ($taskVariant.Name + ': ' + $taskResult) }
-        Write-Host ($taskVariant.Name + ': passed ' + $taskCases.Count + ' tests')
+        Write-Host ($taskVariant.Name + ': passed ' + ($taskCases.Count + 1 + [int]$taskVariant.Full) + ' tests')
     }
     Invoke-TapDeckDevice -Arguments @('pull', '/sdcard/Android/data/com.yuncii.tapdeck/files/ui-validation/.', $OutputDirectory)
 } finally {

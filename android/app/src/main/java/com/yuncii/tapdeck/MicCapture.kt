@@ -13,7 +13,11 @@ class MicCapture(private val frame: (ByteArray, Long, Float) -> Unit, private va
     @Volatile private var active: AtomicBoolean? = null
     @Volatile private var record: AudioRecord? = null
     @Volatile private var thread: Thread? = null
-    @SuppressLint("MissingPermission") @Synchronized fun start() {
+    /** Snapshot callbacks per capture thread, so a delayed old frame/error keeps its owner. */
+    @SuppressLint("MissingPermission") @Synchronized fun start(
+        frame: (ByteArray, Long, Float) -> Unit = this.frame,
+        onError: (String) -> Unit = this.onError,
+    ) {
         if (running.get()) return
         val minimum = AudioRecord.getMinBufferSize(48000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         check(minimum > 0) { "设备不支持 48 kHz 单声道录音" }

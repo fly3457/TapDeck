@@ -269,7 +269,7 @@ class DeviceTest {
         val automation = instrumentation.uiAutomation
         val store = PairStore(instrumentation.targetContext)
         val original = kotlinx.coroutines.runBlocking { store.loadInputSettings() }
-        val originalPeer = kotlinx.coroutines.runBlocking { store.load() }
+        val originalCatalog = kotlinx.coroutines.runBlocking { store.loadCatalog() }
         fun tapNode(node: AccessibilityNodeInfo) {
             val bounds = Rect().also(node::getBoundsInScreen)
             val down = SystemClock.uptimeMillis()
@@ -377,7 +377,7 @@ class DeviceTest {
             }
         } finally { kotlinx.coroutines.runBlocking {
             store.saveInputSettings(original)
-            if (originalPeer != null) store.save(originalPeer) else store.clear()
+            store.updateCatalog { originalCatalog }
         } }
     }
 
@@ -916,6 +916,22 @@ class DeviceTest {
         }
     }
 
+    @Test fun microphoneFramesRetainTheirOriginalSessionAndRecording() {
+        withVoiceTestClient { client, socket, state ->
+            assertTrue(client.startMic("hold"))
+            val id = socket.messages.last().str("recording")
+            val generation = client.javaClass.getDeclaredField("generation").apply { isAccessible = true }.getLong(client)
+            client.microphoneFrame(generation - 1, id, ByteArray(960), 0, 0.8f)
+            client.microphoneFrame(generation, "0000000000000001", ByteArray(960), 0, 0.8f)
+            assertEquals(0f, state.value.level)
+            client.microphoneFrame(generation, id, ByteArray(960), 0, 0.4f)
+            assertEquals(0.4f, state.value.level)
+            client.finishMic(id)
+            client.microphoneFrame(generation, id, ByteArray(960), 0, 0.8f)
+            assertEquals(0f, state.value.level)
+        }
+    }
+
     @Test fun voiceProfilesWireSnapshotAndSpaceGesture() {
         withVoiceTestClient { client, socket, state ->
             val profiles = defaultVoiceProfiles().map { it.copy(enabled = true) }
@@ -956,6 +972,11 @@ class DeviceTest {
     }
 
     @Test fun voiceProfileButtonsCycleDisableAndFreeze() {
+        val store = PairStore(InstrumentationRegistry.getInstrumentation().targetContext)
+        val originalCatalog = kotlinx.coroutines.runBlocking { store.loadCatalog() }
+        val voicePeer = Peer("127.0.0.1", 41443, 41080, "ee".repeat(32), "语音测试电脑")
+        kotlinx.coroutines.runBlocking { store.updateCatalog { it.upsert(voicePeer).select(voicePeer.id) } }
+        try {
         val feedback = mutableListOf<KeyFeedback>()
         DeviceActivity().use { scenario ->
             SystemClock.sleep(500)
@@ -965,7 +986,7 @@ class DeviceTest {
             scenario.onActivity { activity ->
                 vm = ViewModelProvider(activity)[TapViewModel::class.java]
                 vm.keyboardOn.value = false
-                uiState(activity).value = ClientState(connected = true, status = "已连接", voiceProfilesSupported = true, config = PcConfig(voice = Voice(profiles = all)))
+                uiState(activity).value = ClientState(connected = true, selectedPeerId = voicePeer.id, status = "已连接", voiceProfilesSupported = true, config = PcConfig(voice = Voice(profiles = all)))
                 mic = views(activity.window.decorView).filterIsInstance<MicBallView>().single()
                 mic.onFeedback = { feedback.add(it) }
             }
@@ -1036,11 +1057,12 @@ class DeviceTest {
         DeviceActivity().use { scenario ->
             SystemClock.sleep(300)
             scenario.onActivity { activity ->
-                uiState(activity).value = ClientState(connected = true, voiceProfilesSupported = true, config = PcConfig(voice = Voice(profiles = defaultVoiceProfiles().map { it.copy(enabled = true) })))
+                uiState(activity).value = ClientState(connected = true, selectedPeerId = voicePeer.id, voiceProfilesSupported = true, config = PcConfig(voice = Voice(profiles = defaultVoiceProfiles().map { it.copy(enabled = true) })))
             }
             SystemClock.sleep(150)
             scenario.onActivity { activity -> assertEquals("voice-3", ViewModelProvider(activity)[TapViewModel::class.java].selectedVoice.value?.id) }
         }
+        } finally { kotlinx.coroutines.runBlocking { store.updateCatalog { originalCatalog } } }
     }
 
     @Test fun pcVoiceStopReleasesRecorderAndIgnoresStaleReplies() {
@@ -1083,7 +1105,7 @@ class DeviceTest {
         assumeTrue(context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_CAMERA_ANY))
         automation.grantRuntimePermission(context.packageName, android.Manifest.permission.CAMERA)
         val store = PairStore(context)
-        val originalPeer = kotlinx.coroutines.runBlocking { store.load() }
+        val originalCatalog = kotlinx.coroutines.runBlocking { store.loadCatalog() }
         kotlinx.coroutines.runBlocking { store.clear() }
         var result = android.app.Instrumentation.ActivityResult(android.app.Activity.RESULT_OK,
             Intent().putExtra(com.google.zxing.client.android.Intents.Scan.RESULT, "http://10.23.45.67:41080/pair"))
@@ -1164,12 +1186,12 @@ class DeviceTest {
                 assertFalse(nodes().any { it.text?.startsWith("未识别到 PC 配对网址") == true })
                 assertEquals(before, client.state.value)
                 saveUiScreenshot("pairing-scan-filled")
-                // Preview the connected action row without opening a real PC connection.
+                // The management entry replaces the old single-computer forget action.
                 scenario.onActivity { activity -> uiState(activity).value = before.copy(connected = true) }
                 await {
-                    val visible = nodes().any { it.text?.toString() == "忘记当前电脑" }
+                    val visible = nodes().any { it.text?.toString()?.startsWith("管理电脑（") == true }
                     if (!visible) {
-                        nodes().firstOrNull { it.isScrollable }?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+                        nodes().firstOrNull { it.isScrollable }?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
                         instrumentation.waitForIdleSync()
                     }
                     visible
@@ -1178,7 +1200,7 @@ class DeviceTest {
             }
         } finally {
             instrumentation.removeMonitor(monitor)
-            kotlinx.coroutines.runBlocking { if (originalPeer != null) store.save(originalPeer) else store.clear() }
+            kotlinx.coroutines.runBlocking { store.updateCatalog { originalCatalog } }
         }
     }
 

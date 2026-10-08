@@ -10,6 +10,8 @@ PC“连接”页二维码内容是 `http://<PC 地址>:<HTTP 端口>/pair`。�
 
 App 内扫码使用 [ZXing Android Embedded](https://github.com/journeyapps/zxing-android-embedded)，仅在点击扫码时请求相机权限；相机硬件可选，无相机或拒绝权限时仍可手动输入。扫码只回填 PC 配对网址，取消或扫到非配对二维码时保留原值，不自动发起连接。所有首次配对都显示校验码，由 PC 核对并允许。旧链接的 `secret` 字段不会产生授权。控制协议仍为 v2，现有凭据和旧客户端的 `pair_confirm` 保持兼容。
 
+Android 0.3.16 可分别配对多台 PC。点击应用顶部电脑名称切换，管理页可设置备注名及单独忘记。每次只连接一台；目标离线时只重试该电脑，录音结束后才能切换。覆盖安装自动迁移旧配对和语音选择，手机标识、灵敏度和震动设置保持。详细步骤见 [多 PC 配对与切换](multi-pc.md)。
+
 ## 发布构建
 
 发布统一使用根目录的 `scripts/build-windows.ps1`，默认产物位于 `dist`。可传 `-OutputDirectory` 输出到独立目录，方便在已有接收端运行时验证新版本。
@@ -20,11 +22,11 @@ App 内扫码使用 [ZXing Android Embedded](https://github.com/journeyapps/zxin
 4. 从接收端版本生成 Windows 清单与 VERSIONINFO 资源，运行 Go 测试、`go vet`，构建带版本号的 EXE，并校验文件版本及产品版本。
 5. 从两个接收端 EXE 读取 `--apk-info`，核对实际内嵌 APK 版本、code、名称、大小与哈希，生成 `release-manifest.json` 和 `SHA256SUMS.txt`。APK 缺失、Android 失败、哈希或版本信息不一致均终止交付。
 
-当前接收端为 `0.3.15`，Android `versionName=0.3.15`、`versionCode=18`，均来自根目录 `version.properties`，两端版本允许不同。保留 `com.yuncii.tapdeck` 及本机原有开发签名。APK 文件名为 `TapDeck-0.3.15.apk`；独立 Android 构建、Windows 交付目录和内嵌下载均使用 Android 版本命名，另保留 `TapDeck-debug.apk` 兼容副本。手机“连接与设置”标题下显示安装版本，网页和 PC 显示内嵌版本及完整 SHA-256。`TapDeck-debug.exe --version` 输出接收端版本，`--apk-info` 可分别核对两端版本、下载文件名和内嵌哈希。每次迭代的修改位置和固定步骤见 [版本管理](versioning.md)。
+当前接收端为 `0.3.16`，Android `versionName=0.3.16`、`versionCode=19`，均来自根目录 `version.properties`，两端版本允许不同。保留 `com.yuncii.tapdeck` 及本机原有开发签名。APK 文件名为 `TapDeck-0.3.16.apk`；独立 Android 构建、Windows 交付目录和内嵌下载均使用 Android 版本命名，另保留 `TapDeck-debug.apk` 兼容副本。手机“连接与设置”标题下显示安装版本，网页和 PC 显示内嵌版本及完整 SHA-256。`TapDeck-debug.exe --version` 输出接收端版本，`--apk-info` 可分别核对两端版本、下载文件名和内嵌哈希。每次迭代的修改位置和固定步骤见 [版本管理](versioning.md)。
 
-换构建机时必须保留相同签名密钥，才能覆盖已有安装。主界面说明见 [android-ui.md](android-ui.md)，本次单 EXE 输出至 `dist/0.3.15`。更新时退出旧托盘程序后启动新版 EXE，再覆盖安装 Android APK。连接不支持双指缩放和三指窗口操作的旧电脑端时，App 会提示新手势需要升级。
+换构建机时必须保留相同签名密钥，才能覆盖已有安装。主界面说明见 [android-ui.md](android-ui.md)，本次单 EXE 输出至 `dist/0.3.16`。更新时退出旧托盘程序后启动新版 EXE，再覆盖安装 Android APK。连接不支持双指缩放和三指窗口操作的旧电脑端时，App 会提示新手势需要升级。
 
-Windows 主程序为 `TapDeck-0.3.15.exe`，控制台诊断版为 `TapDeck-debug-0.3.15.exe`，HID 工具为 `TapDeck-hidprobe-0.3.15.exe`。三者的文件版本与产品版本均显示 `0.3.15`，Windows 数字版本为 `0.3.15.0`。构建仍保留 `TapDeck.exe`、`TapDeck-debug.exe` 和 `TapDeck-hidprobe.exe`，分别与带版本号的文件完全相同。资源生成器保留原有 Common Controls、DPI 和管理员权限清单。
+Windows 主程序为 `TapDeck-0.3.16.exe`，控制台诊断版为 `TapDeck-debug-0.3.16.exe`，HID 工具为 `TapDeck-hidprobe-0.3.16.exe`。三者的文件版本与产品版本均显示 `0.3.16`，Windows 数字版本为 `0.3.16.0`。构建仍保留 `TapDeck.exe`、`TapDeck-debug.exe` 和 `TapDeck-hidprobe.exe`，分别与带版本号的文件完全相同。资源生成器保留原有 Common Controls、DPI 和管理员权限清单。
 
 ## 虚拟键盘启动检测
 
@@ -72,6 +74,6 @@ VB-CABLE 来自 [VB-Audio / Vincent Burel](https://vb-audio.com/Cable/)，是 do
 
 自动测试覆盖旧格式迁移及备份失败、保存失败保留授权、同名离线设备、在线单设备解绑、待处理请求取消、并发重连、旧 secret 不能自动授权、已有凭据重连、按会话键盘队列清理、鼠标共享持有、另一台设备录音隔离，以及模拟安装结果和完整原包解出后的签名验证。APK 验证包含内嵌／HTTP 内容哈希、版本及 Range 下载。Kotlin 测试覆盖凭据继承、地址变化、不同电脑身份隔离及旧凭据撤销匹配。
 
-Windows 官方构建完成 Go／Kotlin 单元测试和 `go vet`。默认自动构建跳过会实际修改本机音量、开机自启注册表的两项测试，其余测试执行。0.3.15 新增配对弹窗、拒绝／过期原因、断开清理和请求隔离用例；默认与最小窗口、120 DPI 的连接和语音布局检查通过。本轮未重复运行驱动安装向导。
+0.3.16 官方 Windows 构建完成 59 项 Kotlin 单元测试、29 项版本检查、Go 测试和 `go vet`，两个接收端内嵌的 APK 与独立交付包哈希相同。默认自动构建跳过会实际修改本机音量、开机自启注册表的两项测试。API 34 隔离模拟器通过五种尺寸／字体配置共 49 项回归、2 项扫码回归及 3 项多电脑专项测试；三个独立身份的临时接收端验证快速切换、输入释放、离线重试、凭据重连和撤销重配对。本轮未重复运行 PC 原生界面和驱动安装向导。
 
-仍需在干净 Windows 11 x64 环境人工验证离线安装、UAC 取消、重启后端点可用，以及新版手机传音进入 CABLE Output。本机无可用干净虚拟机，新版 APK 真机覆盖升级、凭据保留与系统扫码／网页唤起由用户实机验收；构建继续使用相同包名和签名，versionCode 递增。0.3.15 在 API 34 隔离模拟器普通屏、小屏 130% 字体下完成共 10 项设备回归，覆盖连接与设置、扫码回填和拒绝后停止重试；这些结果不代表实体手机端到端验收。详情见 [verification.md](verification.md)。
+仍需在干净 Windows 11 x64 环境人工验证离线安装、UAC 取消、重启后端点可用，以及新版手机传音进入 CABLE Output。本机无可用干净虚拟机和已连接实体手机，新版 APK 真机覆盖升级、凭据保留、系统扫码／网页唤起，以及一部手机与两台真实 PC 的反复切换和录音限制仍待验收。构建继续使用相同包名和签名，versionCode 递增；模拟器结果不代表实体手机端到端验收。详情见 [verification.md](verification.md)。

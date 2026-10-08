@@ -26,8 +26,11 @@ import kotlinx.coroutines.flow.update
 import kotlinx.serialization.json.*
 import okhttp3.*
 
-data class ClientState(val status: String = "未连接", val peerName: String = "TapDeck", val connected: Boolean = false, val pairing: String = "", val pairingConfirmed: Boolean = false, val config: PcConfig = PcConfig(), val mic: String = "idle", val micMode: String = "", val activeVoiceProfile: VoiceProfile? = null, val voiceProfilesSupported: Boolean = false, val level: Float = 0f, val error: String = "", val rttMs: Long = 0, val touchpad: TouchpadCapabilities = TouchpadCapabilities()) {
+enum class ConnectionPhase { Disconnected, Connecting, Pairing, Connected, NeedsPairing }
+
+data class ClientState(val status: String = "未连接", val peerName: String = "TapDeck", val connected: Boolean = false, val pairing: String = "", val pairingConfirmed: Boolean = false, val config: PcConfig = PcConfig(), val mic: String = "idle", val micMode: String = "", val activeVoiceProfile: VoiceProfile? = null, val voiceProfilesSupported: Boolean = false, val level: Float = 0f, val error: String = "", val rttMs: Long = 0, val touchpad: TouchpadCapabilities = TouchpadCapabilities(), val selectedPeerId: String? = null, val connectionEpoch: Long = 0, val phase: ConnectionPhase = ConnectionPhase.Disconnected, val catalogReady: Boolean = false) {
     fun voiceProfiles() = config.voiceProfiles(voiceProfilesSupported)
+    val canSwitch: Boolean get() = mic == "idle"
 }
 class TapClient(private val app: Application, private val scope: CoroutineScope) : TouchSink {
     private companion object {
@@ -38,7 +41,11 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
     }
     private val store = PairStore(app)
     private val pairingPersistence = Mutex()
-    private var revokedCredential: Peer? = null
+    private val revokedCredentials = mutableMapOf<String, Peer>()
+    private val directory = MutableStateFlow(PeerCatalog())
+    val peers = directory.asStateFlow()
+    /** Called on the main thread BEFORE invalidating the old connection. */
+    var beforeConnectionChange: (() -> Unit)? = null
     private val mutable = MutableStateFlow(ClientState())
     val state = mutable.asStateFlow()
     private val inputPreferences = DeviceInputPreferences(store::loadInputSettings, store::saveInputSettings) { error ->
@@ -53,7 +60,7 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
     private val lock = Any()
     private var socket: WebSocket? = null
     private var udp: DatagramSocket? = null
-    private var peer: Peer? = null
+    @Volatile private var peer: Peer? = null
     private var target: InetAddress? = null
     private var udpPort = 0
     private var mouseCodec: UdpCodec? = null
@@ -76,36 +83,54 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
         foreground = value
         updateWifiLock()
         // 回到前台仍未连接时立即重试，不必等退避计时。
-        if (becameForeground && reconnect && peer != null && !connected) { retryAt = 0; scheduleReconnect() }
+        if (becameForeground && reconnect && peer != null && !connected && state.value.phase == ConnectionPhase.Disconnected) { retryAt = 0; scheduleReconnect() }
     }
     @Volatile private var lastResponse = 0L
     @Volatile private var reconnect = true
     private var heartbeat: Job? = null
     private var reconnectJob: Job? = null
+    private var connectionJob: Job? = null
+    private var bootstrapCall: Call? = null
+    private var readyPending = -1L
+    private var closed = false
     // 自动重连的退避状态：开机顺序、Wi-Fi 尚未就绪或电脑接收端未启动时都要继续尝试。
     private var retryCount = 0
     private var retryAt = 0L
     private var retryNotice = ""
     private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
     private val movement = Channel<Pair<Long, Movement>>(Channel.CONFLATED)
-    private val audio = Channel<ByteArray>(6)
+    private val audio = Channel<Pair<Long, ByteArray>>(6)
     private var recording = ""
     private var recordingRequested = false
     private val voiceMouseButtons = mutableSetOf<String>()
-    private val recorder = MicCapture(frame = { pcm, pos, level ->
-        val id = synchronized(lock) { if (!recordingRequested || !connected) return@MicCapture; recording }
-        if (id.isEmpty()) return@MicCapture
-        val body = ByteBuffer.allocate(976).order(ByteOrder.LITTLE_ENDIAN).putLong(id.toULong(16).toLong()).putLong(pos).put(pcm).array()
+    private val recorder = MicCapture(frame = { _, _, _ -> })
+    internal fun microphoneFrame(gen: Long, id: String, pcm: ByteArray, pos: Long, level: Float) {
         synchronized(lock) {
-            if (!recordingRequested || recording != id) return@MicCapture
-            audio.trySend(body)
+            if (gen != generation || !connected || !recordingRequested || id.isEmpty() || id != recording) return
+            val body = ByteBuffer.allocate(976).order(ByteOrder.LITTLE_ENDIAN)
+                .putLong(id.toULong(16).toLong()).putLong(pos).put(pcm).array()
+            audio.trySend(gen to body)
             if (pos % 4800L == 0L) mutable.update { it.copy(level = level) }
         }
-    }, onError = { reason -> stopMic(true); mutable.update { it.copy(error = reason) } })
+    }
+    private fun startRecorder(attempt: Long, gen: Long) {
+        val id = recording
+        recorder.start(
+            frame = { pcm, pos, level -> microphoneFrame(gen, id, pcm, pos, level) },
+            onError = { reason ->
+                scope.launch(Dispatchers.Main.immediate) {
+                    if (current(attempt, gen) && recording == id) {
+                        stopMic(true)
+                        mutable.update { it.copy(error = reason) }
+                    }
+                }
+            },
+        )
+    }
     private val http = OkHttpClient.Builder().connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS).readTimeout(5, java.util.concurrent.TimeUnit.SECONDS).followRedirects(false).followSslRedirects(false).build()
     init {
         scope.launch(Dispatchers.IO) { for ((gen, m) in movement) synchronized(lock) { if (connected && gen == generation) runCatching { val bytes = mouseCodec!!.seal(m.bytes()); udp!!.send(DatagramPacket(bytes, bytes.size, target, udpPort)) }.onFailure { Log.w("TapDeck", "mouse UDP failed", it) } } }
-        scope.launch(Dispatchers.IO) { for (body in audio) synchronized(lock) { if (connected && recordingRequested && recording.isNotEmpty() && ByteBuffer.wrap(body).order(ByteOrder.LITTLE_ENDIAN).long == recording.toULong(16).toLong()) runCatching { val bytes = audioCodec!!.seal(body); udp!!.send(DatagramPacket(bytes, bytes.size, target, udpPort)) }.onFailure { Log.w("TapDeck", "audio UDP failed", it) } } }
+        scope.launch(Dispatchers.IO) { for ((gen, body) in audio) synchronized(lock) { if (connected && gen == generation && recordingRequested && recording.isNotEmpty() && ByteBuffer.wrap(body).order(ByteOrder.LITTLE_ENDIAN).long == recording.toULong(16).toLong()) runCatching { val bytes = audioCodec!!.seal(body); udp!!.send(DatagramPacket(bytes, bytes.size, target, udpPort)) }.onFailure { Log.w("TapDeck", "audio UDP failed", it) } } }
         registerNetworkCallback()
     }
     private fun registerNetworkCallback() {
@@ -120,7 +145,7 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
     /** Wi-Fi 状态变化时立即重试，不必等下一次退避。 */
     private fun wakeForReconnect(reason: String) {
         synchronized(lock) {
-            if (!reconnect || peer == null || connected) return
+            if (!reconnect || peer == null || connected || state.value.phase != ConnectionPhase.Disconnected) return
             retryAt = 0
             retryCount = 0
             retryNotice = reason
@@ -133,19 +158,20 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
      * it short. Must be called with [lock] held.
      */
     private fun scheduleReconnect() {
-        val saved = peer ?: return
-        if (!reconnect) return
+        if (!reconnect || peer?.token.isNullOrEmpty() || closed) return
         val timer = reconnectJob?.isActive == true
         if (timer && retryAt != 0L) return
         if (retryAt == 0L) retryAt = SystemClock.elapsedRealtime() + backoffDelay()
         val attempt = desiredConnection
-        reconnectJob = scope.launch(Dispatchers.IO) {
+        reconnectJob?.cancel()
+        reconnectJob = scope.launch(Dispatchers.Main) {
             while (isActive) {
                 val wait = synchronized(lock) { (retryAt - SystemClock.elapsedRealtime()).coerceAtLeast(0) }
                 if (wait > 0) { delay(wait); continue }
                 val current = synchronized(lock) { if (!reconnect || attempt != desiredConnection || connected) null else peer }
                 if (current == null) return@launch
-                connect(current, attempt)
+                reconnectJob = null
+                connectionJob = scope.launch { connectSafely(current, attempt) }
                 return@launch
             }
         }
@@ -156,71 +182,219 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
         retryCount++
         return delay
     }
-    suspend fun restore() {
+    private fun current(attempt: Long, gen: Long? = null) = synchronized(lock) {
+        !closed && attempt == desiredConnection && (gen == null || gen == generation)
+    }
+    private suspend fun editPeers(attempt: Long? = null, change: (PeerCatalog) -> PeerCatalog): PeerCatalog =
+        pairingPersistence.withLock {
+            val next = withContext(Dispatchers.IO) {
+                store.updateCatalog { old -> if (attempt != null && !current(attempt)) old else change(old) }
+            }
+            withContext(Dispatchers.Main.immediate) {
+                directory.value = next
+                mutable.update { state -> state.copy(catalogReady = true, peerName = next.find(state.selectedPeerId)?.displayName ?: state.peerName) }
+            }
+            next
+        }
+    private fun storageError(error: Exception) {
+        Log.w("TapDeck", "Pairing directory could not be saved/loaded", error)
+        mutable.update { it.copy(error = "电脑列表读写失败，原配对已保留，请重试") }
+    }
+    fun allowTargetChange(): Boolean {
+        if (state.value.canSwitch) return true
+        Toast.makeText(app, "请先结束语音输入", Toast.LENGTH_SHORT).show()
+        return false
+    }
+    /** All target changes first clear the old input owners on the main thread. */
+    private fun beginTargetChange(name: String = "TapDeck", id: String? = null): Long {
+        connectionJob?.cancel()
+        synchronized(lock) {
+            desiredConnection++; reconnect = false; retryAt = 0L; retryCount = 0; reconnectJob?.cancel()
+        }
+        disconnect()
+        peer = null
+        mutable.update { it.copy(peerName = name, selectedPeerId = id, error = "") }
+        return synchronized(lock) { desiredConnection }
+    }
+    suspend fun restore() = withContext(Dispatchers.Main.immediate) {
         val attempt = synchronized(lock) { desiredConnection }
-        store.load()?.let {
-            if (Build.VERSION.SDK_INT >= 37 && app.applicationInfo.targetSdkVersion >= 37 && app.checkSelfPermission("android.permission.ACCESS_LOCAL_NETWORK") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                mutable.update { it.copy(status = "请打开连接页授予局域网权限") }; return
-            }
-            synchronized(lock) { if (attempt != desiredConnection) return; peer = it; reconnect = true }
-            connect(it, attempt)
-            // 首次恢复失败（电脑还没开机、Wi-Fi 尚未就绪等）时继续按退避重试。
-            synchronized(lock) { if (reconnect && !connected && peer != null) scheduleReconnect() }
-        }
-    }
-    fun enter(raw: String) {
-        val attempt = synchronized(lock) { ++desiredConnection }
-        reconnectJob?.cancel(); reconnect = false; disconnect("正在连接")
-        scope.launch(Dispatchers.IO) {
-            try {
-                val text = raw.trim()
-                val p: Peer
-                if (text.startsWith("tapdeck://")) {
-                    val u = android.net.Uri.parse(text)
-                    require(u.host == "pair") { "无效配对链接" }
-                    require(u.getQueryParameter("v")?.toIntOrNull() == CONTROL_VERSION) { "协议版本不匹配，请同时升级 PC 和 Android 至 TapDeck 0.2" }
-                    val host = u.getQueryParameter("host") ?: error("缺少地址")
-                    p = Peer(host, u.getQueryParameter("wss")?.toIntOrNull() ?: 41443, u.getQueryParameter("http")?.toIntOrNull() ?: 41080, u.getQueryParameter("pin") ?: error("缺少服务器指纹"))
-                } else {
-                    val u = URI(if (text.contains("://")) text else "http://$text")
-                    require(u.scheme == "http" && u.host != null && u.userInfo == null) { "请输入 PC 的 http 配对网址" }
-                    val host = u.host
-                    validateHost(host)
-                    val port = if (u.port == -1) 41080 else u.port
-                    val response = http.newCall(Request.Builder().url("http://$host:$port/api/pair-info").build()).execute()
-                    val m = response.use { require(it.isSuccessful) { "电脑返回 ${it.code}" }; wireJson.parseToJsonElement(it.body!!.string()).jsonObject }
-                    require(m.long("version") == CONTROL_VERSION.toLong()) { "协议版本不匹配，请同时升级 PC 和 Android 至 TapDeck 0.2" }
-                    p = Peer(host, m.long("wss_port").toInt(), port, m.str("pin"), m.str("name", "电脑"))
-                }
-                validateHost(p.host); require(p.pin.matches(Regex("[0-9a-fA-F]{64}"))) { "服务器指纹无效" }; require(p.wssPort in 1024..65535 && p.httpPort in 1024..65535) { "端口无效" }
-                val existing = pairingPersistence.withLock { store.load() }
-                val usable = synchronized(lock) { existing?.takeUnless { saved -> revokedCredential?.sameCredential(saved) == true } }
-                val target = p.withCredentialFrom(usable)
-                synchronized(lock) { if (attempt != desiredConnection) return@launch; reconnect = true; retryCount = 0; retryAt = 0L; peer = target }
-                connect(target, attempt)
-            } catch (e: Exception) { mutable.update { it.copy(status = "连接失败", error = e.message ?: "连接失败") } }
-        }
-    }
-    private fun validateHost(host: String) { val a = InetAddress.getByName(host); require(a is java.net.Inet4Address && (a.isSiteLocalAddress || a.isLoopbackAddress)) { "原型仅支持局域网 IPv4 地址" } }
-    private suspend fun connect(p: Peer, attempt: Long) {
-        val gen = synchronized(lock) { if (attempt != desiredConnection) return; generation++; generation }
-        mutable.update { it.copy(status = "正在连接 ${p.host}", pairing = "", pairingConfirmed = false, error = "") }
-        // Check restored peers too: older receivers reject hello silently.
         try {
-            val version = withContext(Dispatchers.IO) {
-                http.newCall(Request.Builder().url("http://${p.host}:${p.httpPort}/api/pair-info").build()).execute().use {
-                    require(it.isSuccessful) { "电脑返回 ${it.code}" }
-                    wireJson.parseToJsonElement(it.body!!.string()).jsonObject.long("version")
-                }
+            val saved = editPeers { it }.selected
+            if (!current(attempt) || connected || saved == null) return@withContext
+            mutable.update { it.copy(selectedPeerId = saved.id, peerName = saved.displayName) }
+            if (saved.needsPairing) {
+                mutable.update { it.copy(status = "需重新配对", phase = ConnectionPhase.NeedsPairing) }
+                return@withContext
             }
-            if (synchronized(lock) { gen != generation || attempt != desiredConnection }) return
-            if (version != CONTROL_VERSION.toLong()) {
+            if (Build.VERSION.SDK_INT >= 37 && app.applicationInfo.targetSdkVersion >= 37 &&
+                app.checkSelfPermission("android.permission.ACCESS_LOCAL_NETWORK") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                mutable.update { it.copy(status = "请打开连接页授予局域网权限") }
+                return@withContext
+            }
+            peer = usablePeer(saved.peer)
+            reconnect = peer?.token?.isNotEmpty() == true
+            if (reconnect) connectionJob = scope.launch { connectSafely(requireNotNull(peer), attempt) }
+        } catch (e: CancellationException) { throw e } catch (e: Exception) { storageError(e) }
+    }
+    private fun usablePeer(value: Peer): Peer =
+        if (revokedCredentials[value.id]?.sameCredential(value) == true) value.copy(token = "") else value
+
+    fun selectPeer(id: String) {
+        if (!allowTargetChange()) return
+        val saved = directory.value.find(id) ?: return
+        if (state.value.selectedPeerId == id && connected) return
+        val attempt = beginTargetChange(saved.displayName, saved.id)
+        val target = usablePeer(saved.peer)
+        peer = target
+        connectionJob = scope.launch(Dispatchers.Main.immediate) {
+            try {
+                editPeers(attempt) { it.select(id) }
+                if (!current(attempt)) return@launch
+                reconnect = target.token.isNotEmpty()
+                connectSafely(target, attempt)
+            } catch (e: CancellationException) { throw e } catch (e: Exception) {
+                if (current(attempt)) { reconnect = false; storageError(e) }
+            }
+        }
+    }
+    fun renamePeer(id: String, alias: String) {
+        scope.launch(Dispatchers.Main.immediate) {
+            try { editPeers { it.rename(id, alias) } }
+            catch (e: CancellationException) { throw e } catch (e: Exception) { storageError(e) }
+        }
+    }
+    fun rememberVoice(id: String, epoch: Long, profileId: String) {
+        if (state.value.selectedPeerId != id || state.value.connectionEpoch != epoch) return
+        val credential = directory.value.find(id)?.peer ?: return
+        scope.launch(Dispatchers.Main.immediate) {
+            try {
+                editPeers { catalog ->
+                    if (catalog.find(id)?.peer?.sameCredential(credential) == true) catalog.voice(id, profileId) else catalog
+                }
+            } catch (e: CancellationException) { throw e } catch (e: Exception) { storageError(e) }
+        }
+    }
+    fun forgetPeer(id: String) {
+        val active = state.value.selectedPeerId == id || peer?.id == id
+        if (active && !allowTargetChange()) return
+        if (active) beginTargetChange()
+        scope.launch(Dispatchers.Main.immediate) {
+            try { editPeers { it.remove(id) } }
+            catch (e: CancellationException) { throw e } catch (e: Exception) { storageError(e) }
+        }
+    }
+    fun cancelPairing() {
+        if (!allowTargetChange()) return
+        val attempt = beginTargetChange()
+        scope.launch(Dispatchers.Main.immediate) {
+            try { editPeers(attempt) { it.select(null) } }
+            catch (e: CancellationException) { throw e } catch (e: Exception) { storageError(e) }
+        }
+    }
+    /** Compatibility for diagnostics: never clears other saved computers. */
+    fun forget() { state.value.selectedPeerId?.let(::forgetPeer) ?: cancelPairing() }
+
+    fun enter(raw: String) {
+        if (!allowTargetChange()) return
+        val attempt = beginTargetChange()
+        mutable.update { it.copy(status = "正在读取电脑信息", phase = ConnectionPhase.Connecting) }
+        connectionJob = scope.launch(Dispatchers.Main.immediate) {
+            try {
+                // Unfinished new pairings are deliberately not restored on startup.
+                editPeers(attempt) { it.select(null) }
+                if (!current(attempt)) return@launch
+                val text = raw.trim()
+                val target = withContext(Dispatchers.IO) {
+                    val p = if (text.startsWith("tapdeck://")) {
+                        val u = android.net.Uri.parse(text)
+                        require(u.host == "pair") { "无效配对链接" }
+                        require(u.getQueryParameter("v")?.toIntOrNull() == CONTROL_VERSION) { "协议版本不匹配，请升级 TapDeck" }
+                        Peer(u.getQueryParameter("host") ?: error("缺少地址"),
+                            u.getQueryParameter("wss")?.toIntOrNull() ?: 41443,
+                            u.getQueryParameter("http")?.toIntOrNull() ?: 41080,
+                            u.getQueryParameter("pin") ?: error("缺少服务器指纹"))
+                    } else {
+                        val u = URI(if (text.contains("://")) text else "http://$text")
+                        require(u.scheme == "http" && u.host != null && u.userInfo == null) { "请输入 PC 的 http 配对网址" }
+                        validateHost(u.host)
+                        val port = if (u.port == -1) 41080 else u.port
+                        require(port in 1024..65535) { "端口无效" }
+                        val m = pairInfo(u.host, port, attempt)
+                        require(m.long("version") == CONTROL_VERSION.toLong()) { "协议版本不匹配，请升级 TapDeck" }
+                        Peer(u.host, m.long("wss_port").toInt(), port, m.str("pin"), m.str("name", "电脑"))
+                    }
+                    validateHost(p.host)
+                    require(p.pin.matches(Regex("[0-9a-fA-F]{64}"))) { "服务器指纹无效" }
+                    require(p.wssPort in 1024..65535 && p.httpPort in 1024..65535) { "端口无效" }
+                    p
+                }
+                if (!current(attempt)) return@launch
+                val existing = directory.value.find(target.id)
+                val candidate = usablePeer(target.withCredentialFrom(existing?.peer))
+                peer = candidate
+                if (existing != null) {
+                    editPeers(attempt) { it.select(existing.id) }
+                    if (!current(attempt)) return@launch
+                }
+                mutable.update { it.copy(selectedPeerId = existing?.id, peerName = existing?.displayName ?: candidate.name) }
+                reconnect = candidate.token.isNotEmpty()
+                connectSafely(candidate, attempt)
+            } catch (e: CancellationException) { throw e } catch (e: Exception) {
+                if (current(attempt)) stopAttempt("连接失败", e.message ?: "连接失败")
+            }
+        }
+    }
+    private fun validateHost(host: String) {
+        val a = InetAddress.getByName(host)
+        require(a is java.net.Inet4Address && (a.isSiteLocalAddress || a.isLoopbackAddress)) { "仅支持局域网 IPv4 地址" }
+    }
+    private fun pairInfo(host: String, port: Int, attempt: Long): JsonObject {
+        val call = http.newCall(Request.Builder().url("http://$host:$port/api/pair-info").build())
+        synchronized(lock) {
+            if (!current(attempt)) throw CancellationException("Target changed")
+            bootstrapCall = call
+        }
+        return try {
+            call.execute().use {
+                require(it.isSuccessful) { "电脑返回 " + it.code }
+                wireJson.parseToJsonElement(requireNotNull(it.body).string()).jsonObject
+            }
+        } finally { synchronized(lock) { if (bootstrapCall === call) bootstrapCall = null } }
+    }
+    private suspend fun connectSafely(p: Peer, attempt: Long) {
+        try { connect(p, attempt) }
+        catch (e: CancellationException) { throw e }
+        catch (e: Exception) {
+            if (current(attempt)) {
                 reconnect = false
-                mutable.update { it.copy(status = "版本不匹配", error = "请同时升级 PC 和 Android 至 TapDeck 0.2") }
+                disconnect("连接失败")
+                mutable.update { it.copy(error = e.message ?: "无法建立连接，请重试") }
+            }
+        }
+    }
+    private suspend fun connect(p: Peer, attempt: Long) {
+        val gen = synchronized(lock) { if (!current(attempt)) return; generation++; generation }
+        mutable.update { it.copy(status = "正在连接", phase = ConnectionPhase.Connecting, connectionEpoch = gen, pairing = "", pairingConfirmed = false, error = "") }
+        val metadata: JsonObject
+        try {
+            metadata = withContext(Dispatchers.IO) { validateHost(p.host); pairInfo(p.host, p.httpPort, attempt) }
+            if (!current(attempt, gen)) return
+            if (metadata.long("version") != CONTROL_VERSION.toLong()) {
+                reconnect = false
+                mutable.update { it.copy(status = "版本不匹配", phase = ConnectionPhase.Disconnected, error = "请升级 TapDeck 至兼容协议版本") }
+                return
+            }
+            // HTTP discovery may refresh a name, but never replaces a trusted identity.
+            if (!metadata.str("pin").equals(p.pin, true)) {
+                reconnect = false
+                mutable.update { it.copy(status = "电脑身份已变化", phase = ConnectionPhase.NeedsPairing, error = "请重新扫描该电脑配对网址并核对校验码") }
                 return
             }
         } catch (e: CancellationException) { throw e } catch (e: Exception) { lost(gen, e.message ?: "连接失败"); return }
-        val id = store.deviceId(); val clientNonce = ByteArray(32).also { SecureRandom().nextBytes(it) }
+        val candidate = p.copy(name = metadata.str("name").ifBlank { p.name })
+        val id = withContext(Dispatchers.IO) { store.deviceId() }
+        if (!current(attempt, gen)) return
+        val clientNonce = ByteArray(32).also { SecureRandom().nextBytes(it) }
         val manager = object : X509TrustManager {
             override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
             override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) { throw java.security.cert.CertificateException("server only") }
@@ -233,123 +407,176 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
         }
         val tls = SSLContext.getInstance("TLS").apply { init(null, arrayOf(manager), SecureRandom()) }
         val client = http.newBuilder().sslSocketFactory(tls.socketFactory, manager).readTimeout(0, java.util.concurrent.TimeUnit.SECONDS).build()
-        val ws = client.newWebSocket(Request.Builder().url("wss://${p.host}:${p.wssPort}/ws").build(), object : WebSocketListener() {
-            override fun onOpen(ws: WebSocket, response: Response) {
-                if (synchronized(lock) { gen != generation }) { ws.cancel(); return }
-                sendOn(ws, message("hello", "version" to CONTROL_VERSION.j(), "device_id" to id.j(), "name" to "${Build.MANUFACTURER} ${Build.MODEL}".j(), "token" to p.token.j(), "client_nonce" to encode64(clientNonce).j()))
+        val ws = client.newWebSocket(Request.Builder().url("wss://" + p.host + ":" + p.wssPort + "/ws").build(), object : WebSocketListener() {
+            private fun dispatch(action: () -> Unit) {
+                scope.launch(Dispatchers.Main.immediate) { if (current(attempt, gen)) action() }
             }
-            override fun onMessage(ws: WebSocket, text: String) {
-                if (synchronized(lock) { gen != generation }) return
+            override fun onOpen(ws: WebSocket, response: Response) {
+                dispatch {
+                    sendOn(ws, message("hello", "version" to CONTROL_VERSION.j(), "device_id" to id.j(),
+                        "name" to (Build.MANUFACTURER + " " + Build.MODEL).j(), "token" to p.token.j(), "client_nonce" to encode64(clientNonce).j()))
+                }
+                if (!current(attempt, gen)) ws.cancel()
+            }
+            override fun onMessage(ws: WebSocket, text: String) = dispatch {
                 lastResponse = SystemClock.elapsedRealtime()
                 runCatching {
                     val m = wireJson.parseToJsonElement(text).jsonObject
                     when (m.str("type")) {
                         "pair_challenge" -> {
-                            val code = comparisonCode(p.pin.lowercase(), clientNonce, decode64(m.str("server_nonce")))
+                            val code = comparisonCode(p.id, clientNonce, decode64(m.str("server_nonce")))
                             require(code == m.str("code")) { "配对校验失败" }
-                            // 手机上只要看到校验码，不用点确认：由 PC 端核对并允许。
-                            // 仍然回一条 pair_confirm（老版本接收端需要它才会等待 PC 允许）。
-                            mutable.update { it.copy(status = "等待电脑允许连接", pairing = code, pairingConfirmed = true) }
-                            send(message("pair_confirm", "code" to code.j()))
+                            mutable.update { it.copy(status = "等待电脑允许连接", phase = ConnectionPhase.Pairing, pairing = code, pairingConfirmed = true) }
+                            sendOn(ws, message("pair_confirm", "code" to code.j()))
                         }
-                        "ready" -> {
-                            val saved = p.copy(token = m.str("token").ifEmpty { p.token })
-                            val config = wireJson.decodeFromJsonElement<PcConfig>(m["config"]!!).validate()
-                            val profilesSupported = VOICE_PROFILES_FEATURE in m.touchpadCapabilities().features
-                            config.voiceProfiles(profilesSupported)
-                            synchronized(lock) {
-                                if (gen != generation || attempt != desiredConnection) return
-                                revokedCredential = null
-                                udp?.close(); udp = DatagramSocket(); target = InetAddress.getByName(p.host); udpPort = m.long("udp_port").toInt()
-                                val session = m.str("session").toULong(16).toLong()
-                                mouseCodec = UdpCodec(decode64(m.str("mouse_key")), decode64(m.str("mouse_prefix")), session, 1)
-                                audioCodec = UdpCodec(decode64(m.str("audio_key")), decode64(m.str("audio_prefix")), session, 2)
-                                epoch = 0; x = 0; y = 0; sx = 0; sy = 0; connected = true; peer = saved
-                                retryCount = 0; retryAt = 0L; retryNotice = ""
-                                updateWifiLock()
-                            }
-                            scope.launch(Dispatchers.IO) { pairingPersistence.withLock { if (synchronized(lock) { gen == generation && attempt == desiredConnection }) store.save(saved) } }
-                            mutable.update { it.copy(status = "已连接", peerName = p.name, connected = true, pairing = "", pairingConfirmed = false, config = config, error = "", touchpad = m.touchpadCapabilities(), voiceProfilesSupported = profilesSupported) }
-                            heartbeat?.cancel(); heartbeat = scope.launch(Dispatchers.IO) {
-                                while (isActive && synchronized(lock) { gen == generation && connected }) {
-                                    if (SystemClock.elapsedRealtime() - lastResponse >= 1000) {
-                                        ws.cancel(); lost(gen, "电脑心跳超时"); break
-                                    }
-                                    send(message("heartbeat", "tick" to SystemClock.elapsedRealtime().j())); delay(250)
-                                }
-                            }
+                        "ready" -> acceptReady(candidate, attempt, gen, ws, m)
+                        "config" -> {
+                            val c = wireJson.decodeFromJsonElement<PcConfig>(m["config"]!!).validate()
+                            c.voiceProfiles(mutable.value.voiceProfilesSupported)
+                            mutable.update { it.copy(config = c) }
                         }
-                        "config" -> { val c = wireJson.decodeFromJsonElement<PcConfig>(m["config"]!!).validate(); c.voiceProfiles(mutable.value.voiceProfilesSupported); mutable.update { it.copy(config = c) } }
                         "heartbeat" -> mutable.update { it.copy(rttMs = (SystemClock.elapsedRealtime() - m.long("tick")).coerceAtLeast(0)) }
-                        "mic_ready" -> synchronized(lock) {
+                        "mic_ready" -> {
                             if (m.str("recording") == recording && recordingRequested && foreground) {
-                                try { recorder.start(); mutable.update { it.copy(mic = "transmitting", error = "") } } catch (e: Exception) { stopMic(true); mutable.update { it.copy(error = e.message ?: "录音失败") } }
-                            } else send(message("mic_abort", "recording" to m.str("recording").j()))
+                                try { startRecorder(attempt, gen); mutable.update { it.copy(mic = "transmitting", error = "") } }
+                                catch (e: Exception) { stopMic(true); mutable.update { it.copy(error = e.message ?: "录音失败") } }
+                            } else sendOn(ws, message("mic_abort", "recording" to m.str("recording").j()))
                         }
                         "mic_error" -> finishMic(m.str("recording"), m.str("reason"))
                         "mic_stopped" -> finishMic(m.str("recording"))
-                        "error" -> {
-                            if (m.str("code") == "pairing_revoked") { revokePair(gen, m.str("reason")); return }
-                            if (finishPairingAttempt(gen, m.str("code"), m.str("reason"))) return
-                            if (m.str("code") == "version_mismatch") reconnect = false
-                            mutable.update { it.copy(error = m.str("reason")) }
-                            if (m.str("code") == "touchpad_error") touchpadNotice(m.str("reason"))
+                        "error" -> when {
+                            m.str("code") == "pairing_revoked" -> revokePair(gen, m.str("reason"))
+                            finishPairingAttempt(gen, m.str("code"), m.str("reason")) -> Unit
+                            else -> {
+                                if (m.str("code") == "version_mismatch") reconnect = false
+                                mutable.update { it.copy(error = m.str("reason")) }
+                                if (m.str("code") == "touchpad_error") touchpadNotice(m.str("reason"))
+                            }
                         }
                     }
-                }.onFailure { error -> mutable.update { it.copy(error = error.message ?: "协议错误") }; ws.cancel() }
+                }.onFailure { error -> lost(gen, error.message ?: "协议错误") }
             }
-            override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) { lost(gen, t.message ?: "连接已断开") }
-            override fun onClosed(ws: WebSocket, code: Int, reason: String) { lost(gen, reason.ifEmpty { "连接已断开" }) }
+            override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) = dispatch { lost(gen, t.message ?: "连接已断开") }
+            override fun onClosed(ws: WebSocket, code: Int, reason: String) = dispatch { lost(gen, reason.ifEmpty { "连接已断开" }) }
             override fun onClosing(ws: WebSocket, code: Int, reason: String) { ws.close(code, reason) }
         })
-        synchronized(lock) { if (gen == generation) socket = ws else ws.cancel() }
+        synchronized(lock) { if (current(attempt, gen)) socket = ws else ws.cancel() }
     }
-    /**
-     * 配对不再需要手机确认：校验码只用于 PC 端核对，收到后自动回一条 pair_confirm
-     * （兼容老接收端）并进入「等待电脑允许连接」。保留此方法以便手动重发。
-     */
-    fun confirmPair() { val code = mutable.value.pairing; if (code.isNotEmpty()) { send(message("pair_confirm", "code" to code.j())); mutable.update { it.copy(pairingConfirmed = true, status = "等待电脑允许连接") } } }
+    private fun acceptReady(p: Peer, attempt: Long, gen: Long, ws: WebSocket, m: JsonObject) {
+        if (readyPending == gen || connected) return
+        val saved = p.copy(token = m.str("token").ifEmpty { p.token })
+        require(saved.token.isNotEmpty()) { "电脑缺少配对凭据" }
+        val config = wireJson.decodeFromJsonElement<PcConfig>(m["config"]!!).validate()
+        val capabilities = m.touchpadCapabilities()
+        val profilesSupported = VOICE_PROFILES_FEATURE in capabilities.features
+        config.voiceProfiles(profilesSupported)
+        val session = m.str("session").toULong(16).toLong()
+        val mouse = UdpCodec(decode64(m.str("mouse_key")), decode64(m.str("mouse_prefix")), session, 1)
+        val voice = UdpCodec(decode64(m.str("audio_key")), decode64(m.str("audio_prefix")), session, 2)
+        val port = m.long("udp_port").toInt()
+        require(port in 1024..65535) { "UDP 端口无效" }
+        readyPending = gen
+        mutable.update { it.copy(status = "正在保存配对", pairing = "", pairingConfirmed = false, config = config, voiceProfilesSupported = profilesSupported) }
+        // Keep the captured socket alive during storage, without routing old heartbeats to a new target.
+        heartbeat?.cancel()
+        heartbeat = scope.launch(Dispatchers.Main) {
+            while (isActive && current(attempt, gen)) {
+                if (SystemClock.elapsedRealtime() - lastResponse >= 1000) { lost(gen, "电脑心跳超时"); break }
+                sendOn(ws, message("heartbeat", "tick" to SystemClock.elapsedRealtime().j()))
+                delay(250)
+            }
+        }
+        scope.launch(Dispatchers.Main.immediate) {
+            try {
+                val address = withContext(Dispatchers.IO) { InetAddress.getByName(p.host) }
+                val next = editPeers(attempt) { old -> if (current(attempt, gen)) old.upsert(saved).select(saved.id) else old }
+                if (!current(attempt, gen)) return@launch
+                synchronized(lock) {
+                    revokedCredentials.remove(saved.id)
+                    udp?.close(); udp = DatagramSocket(); target = address; udpPort = port
+                    mouseCodec = mouse; audioCodec = voice
+                    epoch = 0; x = 0; y = 0; sx = 0; sy = 0
+                    connected = true; peer = saved; reconnect = true
+                    retryCount = 0; retryAt = 0L; retryNotice = ""
+                    updateWifiLock()
+                    mutable.update { it.copy(status = "已连接", phase = ConnectionPhase.Connected, selectedPeerId = saved.id,
+                        peerName = next.find(saved.id)!!.displayName, connected = true, error = "", touchpad = capabilities) }
+                }
+            } catch (e: CancellationException) { throw e } catch (e: Exception) {
+                if (current(attempt, gen)) { stopAttempt("无法保存配对", "电脑列表读写失败，请重试"); storageError(e) }
+            }
+        }
+    }
+    fun confirmPair() {
+        val code = mutable.value.pairing
+        if (code.isNotEmpty()) send(message("pair_confirm", "code" to code.j()))
+    }
+    private fun stopAttempt(status: String, reason: String) {
+        synchronized(lock) { desiredConnection++; reconnect = false; retryAt = 0L; retryCount = 0; reconnectJob?.cancel() }
+        disconnect(status)
+        peer = null
+        mutable.update { it.copy(selectedPeerId = null, peerName = "TapDeck", error = reason) }
+        val attempt = synchronized(lock) { desiredConnection }
+        scope.launch(Dispatchers.Main.immediate) {
+            try { editPeers(attempt) { it.select(null) } }
+            catch (e: CancellationException) { throw e } catch (e: Exception) { storageError(e) }
+        }
+    }
     internal fun finishPairingAttempt(gen: Long, code: String, reason: String): Boolean {
         if (code != "pairing_rejected" && code != "pairing_expired") return false
-        synchronized(lock) {
-            if (gen != generation) return true
-            desiredConnection++; reconnect = false; retryAt = 0L; retryCount = 0
-            reconnectJob?.cancel(); peer = null
-        }
+        if (synchronized(lock) { gen != generation }) return true
         val status = if (code == "pairing_rejected") "电脑未允许连接" else "配对请求已过期"
-        disconnect(status)
-        mutable.update { it.copy(pairingConfirmed = false, error = reason.ifEmpty { "$status，请重新点击连接" }) }
+        stopAttempt(status, reason.ifEmpty { "$status，请重新点击连接" })
         return true
     }
     private fun revokePair(gen: Long, reason: String) {
-        val revoked = synchronized(lock) {
-            if (gen != generation) return
-            val old = peer
-            revokedCredential = old
-            desiredConnection++; reconnect = false; retryAt = 0L; retryCount = 0
-            reconnectJob?.cancel(); peer = null
-            old
+        if (synchronized(lock) { gen != generation }) return
+        val revoked = peer ?: return
+        revokedCredentials[revoked.id] = revoked
+        synchronized(lock) { desiredConnection++; reconnect = false; retryAt = 0L; retryCount = 0; reconnectJob?.cancel() }
+        disconnect("需重新配对")
+        peer = null
+        directory.value = directory.value.revoke(revoked)
+        mutable.update { it.copy(phase = ConnectionPhase.NeedsPairing, error = reason.ifEmpty { "电脑已解除配对，请重新连接" }) }
+        scope.launch(Dispatchers.Main.immediate) {
+            try { editPeers { it.revoke(revoked) } }
+            catch (e: CancellationException) { throw e } catch (e: Exception) { storageError(e) }
         }
-        disconnect("已解除配对")
-        scope.launch { pairingPersistence.withLock { if (revoked != null && store.load()?.sameCredential(revoked) == true) store.clear() } }
-        mutable.update { it.copy(error = reason.ifEmpty { "电脑已解除配对，请重新连接" }) }
     }
     private fun lost(gen: Long, reason: String) {
-        synchronized(lock) { if (gen != generation) return; generation++; connected = false; updateWifiLock(); recordingRequested = false; recording = ""; socket?.cancel(); socket = null; udp?.close(); udp = null }
-        recorder.stop(); heartbeat?.cancel()
-        mutable.update { it.copy(connected = false, mic = "idle", micMode = "", activeVoiceProfile = null, level = 0f, status = "连接已断开", error = reason, pairing = "", touchpad = TouchpadCapabilities()) }
-        synchronized(lock) {
-            // 只要还有保存的配对就继续自动重连，不要求已经拿到 token。
-            if (reconnect && peer != null) { retryAt = 0; scheduleReconnect() }
-        }
+        if (synchronized(lock) { gen != generation } || closed) return
+        if (!reconnect || peer?.token.isNullOrEmpty()) { stopAttempt("连接失败", reason); return }
+        disconnect("连接已断开，正在重试")
+        mutable.update { it.copy(error = reason) }
+        synchronized(lock) { retryAt = 0; scheduleReconnect() }
     }
     fun disconnect(reason: String = "未连接") {
-        stopMic(true); synchronized(lock) { generation++; connected = false; recordingRequested = false; recording = ""; voiceMouseButtons.clear(); updateWifiLock(); socket?.cancel(); socket = null; udp?.close(); udp = null }
-        heartbeat?.cancel(); mutable.update { it.copy(connected = false, mic = "idle", micMode = "", activeVoiceProfile = null, level = 0f, pairing = "", status = reason, touchpad = TouchpadCapabilities()) }
+        beforeConnectionChange?.invoke()
+        stopMic(true)
+        synchronized(lock) {
+            generation++; connected = false; recordingRequested = false; recording = ""; voiceMouseButtons.clear()
+            updateWifiLock()
+            bootstrapCall?.cancel(); bootstrapCall = null
+            socket?.cancel(); socket = null
+            udp?.close(); udp = null
+            mouseCodec = null; audioCodec = null
+            while (movement.tryReceive().isSuccess) { }
+            while (audio.tryReceive().isSuccess) { }
+            readyPending = -1L
+            mutable.update { it.copy(connected = false, phase = ConnectionPhase.Disconnected, connectionEpoch = generation,
+                mic = "idle", micMode = "", activeVoiceProfile = null, level = 0f, pairing = "", pairingConfirmed = false,
+                status = reason, config = PcConfig(), voiceProfilesSupported = false, touchpad = TouchpadCapabilities(), rttMs = 0) }
+        }
+        recorder.stop()
+        heartbeat?.cancel()
     }
-    fun forget() { synchronized(lock) { desiredConnection++; reconnect = false; retryAt = 0L; retryCount = 0; reconnectJob?.cancel(); peer = null }; disconnect(); scope.launch { pairingPersistence.withLock { store.clear() } } }
     private fun sendOn(ws: WebSocket, m: JsonObject) = ws.send(m.toString())
     private fun send(m: JsonObject): Boolean = socket?.let { sendOn(it, m) } ?: false
+    /** UI callbacks retain their original session even if recomposition is delayed. */
+    fun inputInSession(epoch: Long, action: () -> Unit) {
+        // Callers and connection transitions share Main; never join the recorder while holding lock.
+        if (synchronized(lock) { state.value.connected && state.value.connectionEpoch == epoch }) action()
+    }
     override fun move(dx: Double, dy: Double): Unit = synchronized(lock) { if (!connected) return@synchronized; val gain = inputSettings.value.pointerGain; x += (dx * gain * 1024).toLong(); y += (dy * gain * 1024).toLong(); movement.trySend(generation to Movement(epoch, x, y, sx, sy)); Unit }
     override fun scroll(dx: Double, dy: Double): Unit = synchronized(lock) { if (!connected) return@synchronized; val units = scrollUnits(dx, dy, mutable.value.config.natural_scroll); sx += units.first; sy += units.second; movement.trySend(generation to Movement(epoch, x, y, sx, sy)); Unit }
     private fun barrier(type: String, vararg fields: Pair<String, JsonElement>): Boolean {
@@ -488,5 +715,12 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
                 send(message(if (abort) "mic_abort" else "mic_stop", "recording" to id.j()))
         }
     }
-    fun close() { inputPreferences.close(); reconnect = false; retryAt = 0L; reconnectJob?.cancel(); networkCallback?.let { runCatching { app.getSystemService(android.net.ConnectivityManager::class.java)?.unregisterNetworkCallback(it) } }; disconnect(); movement.close(); audio.close(); http.dispatcher.executorService.shutdown() }
+    fun close() {
+        inputPreferences.close()
+        synchronized(lock) { closed = true; desiredConnection++; reconnect = false; retryAt = 0L }
+        connectionJob?.cancel(); reconnectJob?.cancel()
+        networkCallback?.let { runCatching { app.getSystemService(android.net.ConnectivityManager::class.java)?.unregisterNetworkCallback(it) } }
+        disconnect()
+        movement.close(); audio.close(); http.dispatcher.executorService.shutdown()
+    }
 }
