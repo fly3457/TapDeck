@@ -15,9 +15,9 @@ App 内扫码使用 [ZXing Android Embedded](https://github.com/journeyapps/zxin
 3. 对比复制前后的 SHA-256，从 Gradle `output-metadata.json` 生成内嵌版本清单。
 4. 运行 Go 测试、`go vet`，构建 Windows EXE。APK 缺失、Android 失败或哈希不一致均终止发布。
 
-当前 Android `versionName=0.3.11`、`versionCode=14`，保留 `com.yuncii.tapdeck` 及本机原有开发签名。APK 文件名为 `TapDeck-0.3.11.apk`；独立 Android 构建、Windows 交付目录和内嵌下载均使用这一命名，另保留 `TapDeck-debug.apk` 兼容副本。手机“连接与设备设置”标题下显示安装版本，网页和 PC 显示内嵌版本及完整 SHA-256。`TapDeck-debug.exe --version` 输出 PC 版本，`--apk-info` 可核对两端版本、下载文件名和内嵌哈希。Windows 构建从同一份 Gradle 元数据注入版本，避免两端手工维护产生差异。
+当前 Android `versionName=0.3.12`、`versionCode=15`，保留 `com.yuncii.tapdeck` 及本机原有开发签名。APK 文件名为 `TapDeck-0.3.12.apk`；独立 Android 构建、Windows 交付目录和内嵌下载均使用这一命名，另保留 `TapDeck-debug.apk` 兼容副本。手机“连接与设备设置”标题下显示安装版本，网页和 PC 显示内嵌版本及完整 SHA-256。`TapDeck-debug.exe --version` 输出 PC 版本，`--apk-info` 可核对两端版本、下载文件名和内嵌哈希。Windows 构建从同一份 Gradle 元数据注入版本，避免两端手工维护产生差异。
 
-换构建机时必须保留相同签名密钥，才能覆盖已有安装。主界面说明见 [android-ui.md](android-ui.md)，本次单 EXE 输出至 `dist/0.3.11`。更新时退出旧托盘程序后启动新版 EXE，再覆盖安装 Android APK。连接不支持双指缩放和三指窗口操作的旧电脑端时，App 会提示新手势需要升级。
+换构建机时必须保留相同签名密钥，才能覆盖已有安装。主界面说明见 [android-ui.md](android-ui.md)，本次单 EXE 输出至 `dist/0.3.12`。更新时退出旧托盘程序后启动新版 EXE，再覆盖安装 Android APK。连接不支持双指缩放和三指窗口操作的旧电脑端时，App 会提示新手势需要升级。
 
 ## PC 关于与手机输入测试
 
@@ -43,7 +43,7 @@ b950e39f01af1d04ea623c8f6d8eb9b6ea5c477c637295fabf20631c85116bfb
 
 检测结合 PnP 的 `VBAudioVACWDM` / `VBAudioVACMME` 身份和活动 CABLE Input / Output 端点，分为未安装、已安装但不可用、可用。驱动存在而端点禁用或待重启时，不会当成缺失而重复运行安装向导。
 
-首次正常打开设置且缺失时提示安装；开机自启只更新状态。语音页始终保留“安装虚拟声卡”“重新检测”、VB-Audio 官网、原包许可和捐赠／购买入口。安装会解出 ZIP 全部文件，验证 `VBCABLE_Setup_x64.exe` 和 `vbaudio_cable64_win10.cat` 的离线签名，管理员授权后打开官方交互向导。TapDeck 不静默接受原包许可、不修改驱动、不导入签名证书。
+首次正常打开设置且缺失时提示安装；开机自启只更新状态。语音页保留“安装虚拟声卡”“重新检测”、VB-Audio 官网及原包许可；移除单独的“捐赠 / 购买”按钮，用户可经官网找到捐赠和购买许可途径。安装会解出 ZIP 全部文件，验证 `VBCABLE_Setup_x64.exe` 和 `vbaudio_cable64_win10.cat` 的离线签名，管理员授权后打开官方交互向导。TapDeck 不静默接受原包许可、不修改驱动、不导入签名证书。
 
 根据 [VB-Audio 官方安装说明](https://vb-audio.com/Cable/VBCABLE_ReferenceManual.pdf)，安装完成后必须重启 Windows。TapDeck 显示取消、失败、已安装或需要重启的结果，由用户自行安排重启。安装记录保留系统启动时间，重开 App 仍显示需要重启；通过 [Windows LastBootUpTime](https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-operatingsystem#lastbootuptime)确认系统启动时间已改变后再重新检测，两个端点可用才完成安装验收。
 

@@ -475,7 +475,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 			{Title: "语音", Layout: d.VBox{}, Children: []d.Widget{
 				d.Label{Text: "TapDeck 输出选择 CABLE Input；目标输入法或录音软件的麦克风选择 CABLE Output。"},
 				d.Label{AssignTo: &cableLabel, Text: "正在检测 VB-CABLE…"},
-				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.PushButton{AssignTo: &cableButton, Text: "安装虚拟声卡", OnClicked: installCable}, d.PushButton{Text: "重新检测", OnClicked: redetectCable}, d.PushButton{Text: "VB-Audio 官网", OnClicked: func() { open(vbcable.Website) }}, d.PushButton{Text: "捐赠 / 购买", OnClicked: func() { open(vbcable.DonationURL) }}, d.PushButton{Text: "原包许可", OnClicked: func() { open(cableLicense) }}}},
+				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.PushButton{AssignTo: &cableButton, Text: "安装虚拟声卡", OnClicked: installCable}, d.PushButton{Text: "重新检测", OnClicked: redetectCable}, d.PushButton{Text: "VB-Audio 官网", OnClicked: func() { open(vbcable.Website) }}, d.PushButton{Text: "原包许可", OnClicked: func() { open(cableLicense) }}}},
 				d.Label{Text: "VB-CABLE 来自 VB-Audio，是 donationware，欢迎捐赠。安装后需重启 Windows。"},
 				d.ComboBox{AssignTo: &devices, Model: deviceNames, CurrentIndex: selectedDevice},
 				d.PushButton{Text: "刷新音频设备", OnClicked: refreshAudio},

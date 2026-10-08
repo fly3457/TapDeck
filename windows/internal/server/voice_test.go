@@ -181,6 +181,7 @@ func TestProfileIdentityRevisionAndLegacyRouting(t *testing.T) {
 	s, client := testReceiver(t, func(s *Server) {
 		s.Input, s.Audio = fake, engine
 		s.cfg.Voice.Profiles[2].Enabled = true
+		s.cfg.Voice.Profiles[2].HoldKey = "Ctrl+Shift+M"
 	})
 	conn, ctx := testSocket(t, s, client, "")
 	testPair(t, s, conn, ctx)

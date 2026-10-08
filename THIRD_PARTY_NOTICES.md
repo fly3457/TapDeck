@@ -49,7 +49,7 @@ Android 使用 Lucide 的 `keyboard`、`mic-audio-lines`、`mic-signal`、`plug`
 
 VB-CABLE 的作者和来源是 **VB-Audio / Vincent Burel**，官网 [vb-audio.com](https://vb-audio.com/Cable/)。它是 **donationware**，欢迎通过[官方捐赠 / 购买页面](https://vb-audio.com/Services/licensing.htm)支持作者。TapDeck 的 MIT 许可证不适用于 VB-CABLE。
 
-单 EXE 内嵌未修改的 `VBCABLE_Driver_Pack45.zip`，来源、大小与 SHA-256 见 [manifest.json](windows/internal/vbcable/assets/manifest.json)。解包保留全部文件及原始 `readme.txt`，由用户打开官方安装向导。语音页提供来源、donationware 说明、原文许可和捐赠入口。[官方分发条款](https://vb-audio.com/Services/licensing.htm)允许按其说明将基础 VB-CABLE 包随其他应用分发，须保留来源、donationware 说明和参与捐赠的入口；本轮用途为个人及公开发布。企业部署应按该页面的相应许可方案处理。
+单 EXE 内嵌未修改的 `VBCABLE_Driver_Pack45.zip`，来源、大小与 SHA-256 见 [manifest.json](windows/internal/vbcable/assets/manifest.json)。解包保留全部文件及原始 `readme.txt`，由用户打开官方安装向导。语音页提供来源、donationware 说明、原文许可和官网入口，可经官网找到捐赠及许可购买途径。[官方分发条款](https://vb-audio.com/Services/licensing.htm)要求让用户识别来源、了解 donationware 模式并能捐赠或付费，未指定必须使用独立按钮；据此，0.3.12 移除单独的“捐赠 / 购买”按钮，其他说明与入口保留。本轮用途为个人及公开发布，企业部署应按该页面的相应许可方案处理。
 
 原包 readme 中关于作者授权的限制原文保留；公开分发以官网当前分发条件为依据。安装需要管理员授权并按[官方安装说明](https://vb-audio.com/Cable/VBCABLE_ReferenceManual.pdf)重启 Windows。TapDeck 不修改驱动、不添加自签名证书、不更改默认麦克风。
 

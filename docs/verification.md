@@ -2,6 +2,21 @@
 
 测试日期：2026-10-06 至 2026-10-08。本记录区分已观察到的结果与尚未完成的验收，不把目标数值当作实测结果。
 
+## 0.3.12 第三组语音默认值与捐赠按钮精简
+
+2026-10-08 第三组默认名称由“GPT听写”改为“自定义语音输入”，长按触发、单击开始、单击结束三个热键字段全部留空；默认类型仍为长按、默认关闭。PC 与 Android 默认声明一致，已保存的 schema 3 配置保持原名称与按键，旧配置升级时新增的第三组采用新默认值。
+
+核对[官网分发条件](https://vb-audio.com/Services/licensing.htm)及内嵌原包许可后，移除 PC 语音页独立“捐赠 / 购买”按钮；保留 VB-Audio 官网、原包许可、来源和 donationware 说明，用户可经官网找到捐赠及购买许可入口。判断依据和分发说明同步记录于 [第三方声明](../THIRD_PARTY_NOTICES.md)。
+
+- 官方 `scripts/build-windows.ps1 -OutputDirectory dist/0.3.12` 通过：54 项 Kotlin JVM 测试、Go 测试、`go vet`、APK 及三个 Windows EXE 构建。沿用对系统音量和开机自启注册表两个动作测试的排除。
+- 更新默认值、名称边界和迁移用例，检查第三组名称与全部空热键；服务端同类型不同组路由测试显式设置测试热键，保留原有身份／revision／旧客户端覆盖。
+- 独立屏幕外 Walk 编辑器通过 740×800 与最小 680×700 逻辑窗口、120 DPI（125%）的布局与字段保留检查。6 张截图显示顶部按钮减少为四个，第三组新名称完整可见、触发热键为空；切换单击后的隐藏字段保留逻辑继续通过。
+- PC `--version`、`--apk-info` 与 Android 均为 0.3.12 / code 15，内嵌、Gradle 和交付 APK 哈希一致，沿用原签名证书。本轮未重新运行 Android 模拟器或实体手机测试，未启动实际 PC 接收服务。
+
+交付目录为 `dist/0.3.12`，APK `TapDeck-0.3.12.apk` 为 11,442,228 字节，SHA-256 为 `a1d0393e93b6b8e104831a1c74e8dc4f28dbb09ecab948985821e0a9ee46c84b`。产物校验值保存在目录内 `SHA256SUMS.txt`；构建及 PC 布局日志为 `.tools/ui-validation/windows-0.3.12-build.log` 和 `.tools/ui-validation/pc-voice-0.3.12-ui.log`。
+
+代表性截图：[语音页按钮](screenshots/0.3.12/pc-voice-top.png)、[第三组默认值](screenshots/0.3.12/pc-voice-defaults-bottom.png)。本轮仅生成本地交付包。
+
 ## 0.3.11 本机快捷键设为默认与三次弹跳提醒
 
 2026-10-08 读取本机 `%LOCALAPPDATA%\TapDeck\config.json`（schema 2、revision 27），确认与原默认值不同：第四项为“说话” `Ctrl+L`，第五至八项分别绑定 `Left`、`Up`、`Down`、`Right`，八项全部启用。按照用户要求，将这八项的名称、顺序、按键和启用状态设为 PC 新安装与 Android 的默认配置，完整列表见 [README](../README.md)。已有配置不重置，旧四槽位升级时新增四槽仍为空且关闭。

@@ -19,7 +19,7 @@ fun voiceNameLength(name: String): Int = name.trim().codePoints().toArray().sumO
 fun defaultVoiceProfiles() = listOf(
     VoiceProfile("voice-1", "单击语音输入", true, "toggle", toggle_start_key = "RightCtrl+L", toggle_stop_key = "RightCtrl+L"),
     VoiceProfile("voice-2", "长按语音输入", true, "hold", hold_key = "RightAlt"),
-    VoiceProfile("voice-3", "GPT听写", false, "hold", hold_key = "Ctrl+Shift+M"),
+    VoiceProfile("voice-3", "自定义语音输入", false, "hold"),
 )
 
 fun PcConfig.voiceProfiles(supported: Boolean): List<VoiceProfile> = if (supported) {

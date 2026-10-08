@@ -10,8 +10,8 @@ android {
         applicationId = "com.yuncii.tapdeck"
         minSdk = 26
         targetSdk = 37
-        versionCode = 14
-        versionName = "0.3.11"
+        versionCode = 15
+        versionName = "0.3.12"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true; buildConfig = true }

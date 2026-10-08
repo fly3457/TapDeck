@@ -40,7 +40,7 @@ func TestVoiceProfileEditorUI(t *testing.T) {
 			d.TabWidget{Pages: []d.TabPage{{Title: "语音", Layout: d.VBox{}, Children: []d.Widget{
 				d.Label{Text: "TapDeck 输出选择 CABLE Input；目标输入法或录音软件的麦克风选择 CABLE Output。"},
 				d.Label{Text: "VB-CABLE 可用：CABLE Input / CABLE Output 均已就绪"},
-				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.PushButton{Text: "安装虚拟声卡", Enabled: false}, d.PushButton{Text: "重新检测"}, d.PushButton{Text: "VB-Audio 官网"}, d.PushButton{Text: "捐赠 / 购买"}, d.PushButton{Text: "原包许可"}}},
+				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.PushButton{Text: "安装虚拟声卡", Enabled: false}, d.PushButton{Text: "重新检测"}, d.PushButton{Text: "VB-Audio 官网"}, d.PushButton{Text: "原包许可"}}},
 				d.Label{Text: "VB-CABLE 来自 VB-Audio，是 donationware，欢迎捐赠。安装后需重启 Windows。"},
 				d.ComboBox{Model: []string{"自动选择 CABLE Input"}, CurrentIndex: 0}, d.PushButton{Text: "刷新音频设备"},
 				d.Label{Text: "CABLE Input (VB-Audio Virtual Cable) · 输入电平 0%"},
@@ -105,15 +105,19 @@ func TestVoiceProfileEditorUI(t *testing.T) {
 				if p.HoldKey != "F8" || p.ToggleStartKey != "RightCtrl+L" || p.ToggleStopKey != "RightCtrl+L" {
 					failure = fmt.Errorf("hidden keys lost: %+v", p)
 				}
-				for i := range editors {
-					editors[i].name.SetText("八个汉字名称测试")
-					editors[i].mode.SetCurrentIndex(1)
-				}
 			})
 			time.Sleep(200 * time.Millisecond)
 			mw.Synchronize(func() {
 				for i := 0; i < 10; i++ {
 					scroll.SendMessage(win.WM_VSCROLL, win.SB_PAGEDOWN, 0)
+				}
+			})
+			time.Sleep(200 * time.Millisecond)
+			mw.Synchronize(func() {
+				capture("defaults-bottom")
+				for i := range editors {
+					editors[i].name.SetText("八个汉字名称测试")
+					editors[i].mode.SetCurrentIndex(1)
 				}
 			})
 			time.Sleep(200 * time.Millisecond)

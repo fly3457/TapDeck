@@ -11,7 +11,7 @@ import (
 func TestVoiceDefaultsAndNameBoundaries(t *testing.T) {
 	c := Default()
 	p := c.Voice.Profiles
-	if len(p) != 3 || p[0].Mode != "toggle" || p[0].ToggleStartKey != "RightCtrl+L" || p[0].ToggleStopKey != "RightCtrl+L" || !p[0].Enabled || p[1].HoldKey != "RightAlt" || !p[1].Enabled || p[2].HoldKey != "Ctrl+Shift+M" || p[2].Enabled {
+	if len(p) != 3 || p[0].Mode != "toggle" || p[0].ToggleStartKey != "RightCtrl+L" || p[0].ToggleStopKey != "RightCtrl+L" || !p[0].Enabled || p[1].HoldKey != "RightAlt" || !p[1].Enabled || p[2].Name != "自定义语音输入" || p[2].Mode != "hold" || p[2].HoldKey != "" || p[2].ToggleStartKey != "" || p[2].ToggleStopKey != "" || p[2].Enabled {
 		t.Fatal(p)
 	}
 	for _, tc := range []struct {
@@ -64,7 +64,7 @@ func TestV2VoiceMigrationPreservesKeysSettingsAndOriginal(t *testing.T) {
 			t.Fatal(got)
 		}
 		p := got.Voice.Profiles
-		if p[0].ToggleStartKey != "RightAlt" || p[0].ToggleStopKey != "F10" || p[1].HoldKey != key || p[2].Enabled || p[2].HoldKey != "Ctrl+Shift+M" {
+		if p[0].ToggleStartKey != "RightAlt" || p[0].ToggleStopKey != "F10" || p[1].HoldKey != key || p[2].Enabled || p[2].Name != "自定义语音输入" || p[2].HoldKey != "" || p[2].ToggleStartKey != "" || p[2].ToggleStopKey != "" {
 			t.Fatal(p)
 		}
 		backup, err := os.ReadFile(filepath.Join(dir, "config.v2.bak"))

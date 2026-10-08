@@ -11,7 +11,11 @@ class VoiceProfilesTest {
         assertEquals("RightCtrl+L", p[0].toggle_start_key)
         assertEquals("RightCtrl+L", p[0].toggle_stop_key)
         assertEquals("RightAlt", p[1].hold_key)
-        assertEquals("Ctrl+Shift+M", p[2].hold_key)
+        assertEquals("自定义语音输入", p[2].name)
+        assertEquals("hold", p[2].mode)
+        assertEquals("", p[2].hold_key)
+        assertEquals("", p[2].toggle_start_key)
+        assertEquals("", p[2].toggle_stop_key)
         for (name in listOf("中文English12345", "中".repeat(8), "a".repeat(16), "😀".repeat(8))) {
             assertEquals(16, voiceNameLength(" $name "))
             assertTrue(p[0].copy(name = name).valid())

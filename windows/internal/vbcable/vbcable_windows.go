@@ -28,7 +28,6 @@ import (
 const Filename = "VBCABLE_Driver_Pack45.zip"
 const SHA256 = "b950e39f01af1d04ea623c8f6d8eb9b6ea5c477c637295fabf20631c85116bfb"
 const Website = "https://vb-audio.com/Cable/"
-const DonationURL = "https://vb-audio.com/Services/licensing.htm"
 
 //go:embed assets/*
 var assets embed.FS

@@ -21,7 +21,7 @@ func DefaultVoiceProfiles() []VoiceProfile {
 	return []VoiceProfile{
 		{ID: "voice-1", Name: "单击语音输入", Enabled: true, Mode: "toggle", ToggleStartKey: "RightCtrl+L", ToggleStopKey: "RightCtrl+L"},
 		{ID: "voice-2", Name: "长按语音输入", Enabled: true, Mode: "hold", HoldKey: "RightAlt"},
-		{ID: "voice-3", Name: "GPT听写", Mode: "hold", HoldKey: "Ctrl+Shift+M"},
+		{ID: "voice-3", Name: "自定义语音输入", Mode: "hold"},
 	}
 }
 

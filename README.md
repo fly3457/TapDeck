@@ -8,7 +8,7 @@ TapDeck 将手机麦克风的声音传到 Windows，配合电脑上的语音输�
 
 **[下载 Windows EXE](https://github.com/fly3457/TapDeck/releases/download/v0.3.6/TapDeck.exe) · [下载 Android APK](https://github.com/fly3457/TapDeck/releases/download/v0.3.6/TapDeck-debug.apk) · [查看完整发布包](https://github.com/fly3457/TapDeck/releases/tag/v0.3.6)**
 
-以上为 0.3.6 公开下载链接。当前源码版本为 0.3.11：新安装默认采用本机确认的八项快捷键配置，已有配置继续保留；Android 未连接图标每轮连续弹跳三次，高度递减。保留三组语音配置、底部单行操作提示及两倍长度的横向电平条。
+以上为 0.3.6 公开下载链接。当前源码版本为 0.3.12：第三组默认名称改为“自定义语音输入”，所有热键留空；PC 语音页移除独立“捐赠 / 购买”按钮，保留官网、原包许可及 donationware 说明。已有配置继续保留。
 
 ## 为 Vibe Coding 准备的功能
 
@@ -54,7 +54,7 @@ TapDeck 将手机麦克风的声音传到 Windows，配合电脑上的语音输�
 
 ## 下载与安装
 
-下表公开下载包为 **0.3.6（测试版）**，Android `versionCode=9`；源码及本地构建已更新到 **0.3.11** / code `14`。支持 **Windows 11 x64**、**Android 8 / API 26 及以上**；手机与电脑需要处于可互通的局域网。
+下表公开下载包为 **0.3.6（测试版）**，Android `versionCode=9`；源码及本地构建已更新到 **0.3.12** / code `15`。支持 **Windows 11 x64**、**Android 8 / API 26 及以上**；手机与电脑需要处于可互通的局域网。
 
 | 文件 | 用途 |
 |---|---|
@@ -77,7 +77,7 @@ TapDeck 将手机麦克风的声音传到 Windows，配合电脑上的语音输�
 音频路径为：**手机麦克风 → 局域网传音 → CABLE Input / Output → PC 语音输入法 → 当前输入框**。
 
 - 手机语音区顶部显示当前组名，按 PC 顺序轮换已启用配置。只有一组时切换按钮置灰；全部关闭时显示“语音未启用”。圆形控件按住说话、松手结束，方形控件轻点开始、再点结束。录音期间不能换组，控件位置与选中组保存在本机。单击录音时第一次快捷键或触控板点击只结束录音。
-- PC 固定三组，每组可命名、启用和选择长按／单击类型。长按设置一个触发热键；单击分别设置开始／结束热键。空键仅传音；目标输入框需获得焦点。新安装默认启用“单击语音输入”（开始／结束均 `RightCtrl+L`）和“长按语音输入”（`RightAlt`）；“GPT听写”（长按 `Ctrl+Shift+M`）默认关闭。升级保留已有热键。
+- PC 固定三组，每组可命名、启用和选择长按／单击类型。长按设置一个触发热键；单击分别设置开始／结束热键。空键仅传音；目标输入框需获得焦点。新安装默认启用“单击语音输入”（开始／结束均 `RightCtrl+L`）和“长按语音输入”（`RightAlt`）；第三组“自定义语音输入”默认关闭、类型为长按，所有热键均留空。升级保留已有热键。
 - 全键盘长按空格使用当前组，始终按住开始、松手结束；单击组也会在松手时发送结束热键。全部关闭时空格不触发录音。详细规则见 [三组语音配置](docs/voice-profiles.md)。
 - 左右修饰键分别识别。例如输入法设置为右 Ctrl＋M，应填写 `RightCtrl+M`；`Ctrl+M` 表示左 Ctrl＋M。可使用“录入”或“单键选择”填写。
 - Windows EXE 内嵌 FakerInput 虚拟键盘安装包。需要虚拟键盘的输入法可从 PC“快捷键”页点“安装 / 修复虚拟键盘”，键盘发送方式默认使用“自动”。
@@ -116,12 +116,12 @@ Android 使用 Kotlin，Windows 接收端使用 Go，控制协议为 v2。当前
 在仓库根目录的 PowerShell 执行官方发布入口：
 
 ```powershell
-.\scripts\build-windows.ps1 -OutputDirectory 'dist\0.3.11'
+.\scripts\build-windows.ps1 -OutputDirectory 'dist\0.3.12'
 # 自行指定 JDK 和 Android SDK 时：
-.\scripts\build-windows.ps1 -OutputDirectory 'dist\0.3.11' -JavaHome 'C:\path\to\jdk17' -SdkRoot "$env:LOCALAPPDATA\Android\Sdk"
+.\scripts\build-windows.ps1 -OutputDirectory 'dist\0.3.12' -JavaHome 'C:\path\to\jdk17' -SdkRoot "$env:LOCALAPPDATA\Android\Sdk"
 ```
 
-该入口先构建 Android 并运行 Kotlin 测试，从本次 Gradle 输出复制 `TapDeck-0.3.11.apk`、核对 SHA-256，再运行 Go 测试、`go vet` 和 Windows 构建。两端版本与 APK 文件名来自同一份 Gradle 元数据，同时保留 `TapDeck-debug.apk` 兼容副本。Android 失败、APK 缺失或哈希不一致时终止，不沿用旧 APK。签名密钥不随源码分发；覆盖既有 Android 安装须使用相同签名。
+该入口先构建 Android 并运行 Kotlin 测试，从本次 Gradle 输出复制 `TapDeck-0.3.12.apk`、核对 SHA-256，再运行 Go 测试、`go vet` 和 Windows 构建。两端版本与 APK 文件名来自同一份 Gradle 元数据，同时保留 `TapDeck-debug.apk` 兼容副本。Android 失败、APK 缺失或哈希不一致时终止，不沿用旧 APK。签名密钥不随源码分发；覆盖既有 Android 安装须使用相同签名。
 
 Android 单独开发可用 [build-android.ps1](scripts/build-android.ps1)，模拟器矩阵可用 [test-android-ui.ps1](scripts/test-android-ui.ps1)。国际依赖连接失败时，先检查 Clash Verge 和 Anycast，Android 构建可加 `-UseLocalProxy` 使用本机 SOCKS5 1080。构建与内嵌规则见 [APK 分发说明](docs/apk-download.md)。
 
@@ -142,4 +142,4 @@ Android 单独开发可用 [build-android.ps1](scripts/build-android.ps1)，模�
 | 自动连接 | [自动重连与后台自启](docs/auto-connect.md) |
 | 验证及通信协议 | [验证记录](docs/verification.md)、[协议说明](protocol/README.md) |
 
-TapDeck 源码采用 [MIT 许可证](LICENSE)。第三方组件按各自许可分发，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。内嵌 VB-CABLE 来自 VB-Audio，适用其专有许可及 donationware 条件；来源、许可及捐赠入口保留在程序与完整交付包中。
+TapDeck 源码采用 [MIT 许可证](LICENSE)。第三方组件按各自许可分发，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。内嵌 VB-CABLE 来自 VB-Audio，适用其专有许可及 donationware 条件；程序保留来源、许可、donationware 说明和官网入口，可经官网捐赠或购买许可；完整交付包保留相关声明。
