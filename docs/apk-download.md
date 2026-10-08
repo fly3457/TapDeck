@@ -9,7 +9,7 @@ Windows EXE 内嵌本次构建的 Android APK，不必另找安装文件。
 3. 按 Android 提示允许当前浏览器安装应用，安装后打开 TapDeck 完成配对。
 4. 手机填写网址后点击连接，首次仍由 PC 核对并允许；二维码不携带授权 secret。
 
-当前 APK 为 `TapDeck-0.3.18.apk`，Android `0.3.18 / code 21`。换版本后使用相同签名覆盖安装，PC 配对页也随内嵌版本更新。
+当前 APK 为 [TapDeck-0.3.18.apk](https://github.com/fly3457/TapDeck/releases/download/v0.3.18/TapDeck-0.3.18.apk)，Android `0.3.18 / code 21`。换版本后使用相同签名覆盖安装，PC 配对页也随内嵌版本更新。
 
 ## 接口与构建
 

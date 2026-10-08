@@ -1,6 +1,6 @@
 # 安装与配对
 
-支持 Windows 11 x64、Android 8 / API 26 及以上。手机与 PC 需处于可互通的局域网。安装包见 [GitHub Releases](https://github.com/fly3457/TapDeck/releases)。
+支持 Windows 11 x64、Android 8 / API 26 及以上。手机与 PC 需处于可互通的局域网。安装包见 [0.3.18 Release](https://github.com/fly3457/TapDeck/releases/tag/v0.3.18)。
 
 ## 连接
 

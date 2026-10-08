@@ -49,7 +49,17 @@ README 简化为功能列表、首次使用、截图和致谢，补充 FakerInpu
 
 未连接实体手机，本轮仍待：实体设备间隙操作和覆盖升级、一部手机／两台真实 PC 反复切换、实际 AudioRecord → CABLE Output → 输入法识别、干净系统驱动安装及 PC 高 DPI 布局。历史实机结果保留在下方，不能代替这些当前验收。
 
-测试后模拟器尺寸、密度和字体恢复至 1080×2400 / 420 dpi / 100%，三个临时接收端及隔离 AVD 已退出。公开发布尚未完成，发布成功后补记真实链接。
+测试后模拟器尺寸、密度和字体恢复至 1080×2400 / 420 dpi / 100%，三个临时接收端及隔离 AVD 已退出。
+
+### 公开发布
+
+2026-10-09 已公开 [v0.3.18 Release（测试版）](https://github.com/fly3457/TapDeck/releases/tag/v0.3.18)。标签指向实现、版本、文档和截图提交 [3f5aaee](https://github.com/fly3457/TapDeck/commit/3f5aaeedbf3a1f63f66d6e8dc4180b8b3944ae26)，GitHub 公开时间为 `2026-10-08T18:53:13Z`。
+
+上传 11 项资产：四个带版本号的 EXE／APK、完整 ZIP、两个内嵌信息 JSON、版本清单、校验文件、LICENSE 和第三方声明。全部 GitHub 资产的大小与服务端 SHA-256 均逐项匹配本地；远端 main、标签及标签指向的提交核对通过。对外清单位于 `dist/0.3.18/release`，记录源提交并去除本地兼容副本；官方原始构建清单保持不变。
+
+另从公开 Release 下载 APK、版本清单和校验文件，内容与本地一致；Windows 直达下载链接最终返回 HTTP 200。下载 APK 的 SHA-256 与上表、两个 EXE 内嵌包一致。
+
+[完整 ZIP](https://github.com/fly3457/TapDeck/releases/download/v0.3.18/TapDeck-0.3.18-windows-android.zip) 为 55,702,021 字节，SHA-256 `66b26316e4d624851d460fb6d362f7d7378ad2cd3d7ee6b7e8ace7df28a27511`，包含四个版本包和原始许可证；打开 ZIP 逐项核验四个包的大小／哈希及许可文件。独立下载见 [Windows](https://github.com/fly3457/TapDeck/releases/download/v0.3.18/TapDeck-0.3.18.exe)、[Android](https://github.com/fly3457/TapDeck/releases/download/v0.3.18/TapDeck-0.3.18.apk)。
 
 ## 历史验证
 

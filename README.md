@@ -2,9 +2,9 @@
 
 把 Android 手机变成 Windows 的语音麦克风、触控板和键盘，方便向 AI 编程工具描述需求、补充文字和操作电脑。
 
-**[下载 Windows / Android](https://github.com/fly3457/TapDeck/releases)**
+**[Windows EXE](https://github.com/fly3457/TapDeck/releases/download/v0.3.18/TapDeck-0.3.18.exe) · [Android APK](https://github.com/fly3457/TapDeck/releases/download/v0.3.18/TapDeck-0.3.18.apk) · [完整下载与校验](https://github.com/fly3457/TapDeck/releases/tag/v0.3.18)**
 
-源码版本 **0.3.18** · Android **code 21** · Windows 11 x64 · Android 8 及以上 · 同一局域网
+当前测试版 **0.3.18** · Android **code 21** · Windows 11 x64 · Android 8 及以上 · 同一局域网
 
 ## 功能特色
 
