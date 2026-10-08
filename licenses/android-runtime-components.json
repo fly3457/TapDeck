@@ -635,6 +635,20 @@
     "licenses": []
   },
   {
+    "component": "com.google.zxing:core",
+    "version": "3.4.1",
+    "licenses": [
+      "The Apache Software License, Version 2.0"
+    ]
+  },
+  {
+    "component": "com.journeyapps:zxing-android-embedded",
+    "version": "4.3.0",
+    "licenses": [
+      "The Apache License, Version 2.0"
+    ]
+  },
+  {
     "component": "com.squareup.okhttp3:okhttp",
     "version": "5.5.0",
     "licenses": [

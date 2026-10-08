@@ -799,6 +799,83 @@ class DeviceTest {
         }
     }
 
+    @Test fun pairingScanFillsWithoutConnectingAndPreservesAddressOnCancel() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val automation = instrumentation.uiAutomation
+        val context = instrumentation.targetContext
+        assumeTrue(context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_CAMERA_ANY))
+        automation.grantRuntimePermission(context.packageName, android.Manifest.permission.CAMERA)
+        val store = PairStore(context)
+        val originalPeer = kotlinx.coroutines.runBlocking { store.load() }
+        kotlinx.coroutines.runBlocking { store.clear() }
+        var result = android.app.Instrumentation.ActivityResult(android.app.Activity.RESULT_OK,
+            Intent().putExtra(com.google.zxing.client.android.Intents.Scan.RESULT, "http://10.23.45.67:41080/pair"))
+        var scans = 0
+        val monitor = object : android.app.Instrumentation.ActivityMonitor() {
+            override fun onStartActivity(intent: Intent): android.app.Instrumentation.ActivityResult? {
+                if (intent.component?.className != "com.journeyapps.barcodescanner.CaptureActivity") return null
+                scans++
+                return result
+            }
+        }
+        instrumentation.addMonitor(monitor)
+        try {
+            DeviceActivity().use { scenario ->
+                lateinit var client: TapClient
+                scenario.onActivity { activity -> client = ViewModelProvider(activity)[TapViewModel::class.java].client }
+                fun nodes() = automation.rootInActiveWindow?.let(::accessibilityNodes).orEmpty()
+                await { nodes().any { it.contentDescription?.startsWith("连接设置") == true } }
+                assertTrue(nodes().single { it.contentDescription?.startsWith("连接设置") == true }.performAction(AccessibilityNodeInfo.ACTION_CLICK))
+                fun scan() {
+                    var button: AccessibilityNodeInfo? = null
+                    await { button = nodes().firstOrNull { it.contentDescription?.toString() == "扫码填写 PC 配对网址" }; button != null }
+                    val bounds = Rect().also(button!!::getBoundsInScreen)
+                    val down = SystemClock.uptimeMillis()
+                    for (action in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
+                        val event = motion(down, action, listOf(bounds.exactCenterX() to bounds.exactCenterY()))
+                        assertTrue(automation.injectInputEvent(event, true)); event.recycle()
+                    }
+                    instrumentation.waitForIdleSync()
+                }
+                fun address() = nodes().single { it.isEditable }.text.toString()
+                val before = client.state.value
+                scan()
+                await { address() == "http://10.23.45.67:41080/pair" }
+                assertEquals("scanning must not start a connection", before, client.state.value)
+                assertTrue(nodes().any { it.text?.toString() == "连接与设备设置" })
+                result = android.app.Instrumentation.ActivityResult(android.app.Activity.RESULT_CANCELED, null)
+                scan()
+                await { scans == 2 }
+                instrumentation.waitForIdleSync()
+                assertEquals("http://10.23.45.67:41080/pair", address())
+                result = android.app.Instrumentation.ActivityResult(android.app.Activity.RESULT_OK,
+                    Intent().putExtra(com.google.zxing.client.android.Intents.Scan.RESULT, "https://example.com"))
+                scan()
+                await {
+                    val visible = nodes().any { it.text?.startsWith("未识别到 PC 配对网址") == true }
+                    if (!visible) {
+                        nodes().firstOrNull { it.isScrollable }?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+                        instrumentation.waitForIdleSync()
+                    }
+                    visible
+                }
+                assertEquals("http://10.23.45.67:41080/pair", address())
+                assertEquals(before, client.state.value)
+                saveUiScreenshot("pairing-scan-invalid")
+                result = android.app.Instrumentation.ActivityResult(android.app.Activity.RESULT_OK,
+                    Intent().putExtra(com.google.zxing.client.android.Intents.Scan.RESULT, "http://192.168.1.25:52080/pair"))
+                scan()
+                await { address() == "http://192.168.1.25:52080/pair" }
+                assertFalse(nodes().any { it.text?.startsWith("未识别到 PC 配对网址") == true })
+                assertEquals(before, client.state.value)
+                saveUiScreenshot("pairing-scan-filled")
+            }
+        } finally {
+            instrumentation.removeMonitor(monitor)
+            kotlinx.coroutines.runBlocking { if (originalPeer != null) store.save(originalPeer) else store.clear() }
+        }
+    }
+
     @Test fun keyboardShortLongVoiceAndDisposalRelease() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val events = java.util.Collections.synchronizedList(mutableListOf<String>())

@@ -60,6 +60,8 @@ import kotlinx.coroutines.flow.combine
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import kotlin.math.min
 
 class TapViewModel(app: Application) : AndroidViewModel(app) {
@@ -106,6 +108,7 @@ class MainActivity : ComponentActivity() {
     private var feedbackTestMessage by mutableStateOf("")
     private var pageResumed by mutableStateOf(false)
     private var address by mutableStateOf("http://192.168.1.11:41080/pair")
+    private var pairingScanError by mutableStateOf("")
     /** 语音模式默认长按语音输入；切换入口在语音区的按钮上，状态记在本地。 */
     private val voiceToggle: Boolean get() = vm.voiceMode.value == MicBallView.MODE_TOGGLE
     /** 快捷键的轻点 / 按住手势。 */
@@ -116,8 +119,29 @@ class MainActivity : ComponentActivity() {
     private var modeViews: (() -> Unit)? = null
     private val microphonePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (!granted) android.widget.Toast.makeText(this, "麦克风权限未授予，键鼠仍可使用", android.widget.Toast.LENGTH_LONG).show() }
     private val lanPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) deferredLink?.let { vm.client.enter(it); deferredLink = null } else android.widget.Toast.makeText(this, "需要局域网权限才能连接电脑", android.widget.Toast.LENGTH_LONG).show() }
+    private val pairingScanner = registerForActivityResult(ScanContract()) { result ->
+        settings = true
+        result.contents?.let { contents ->
+            val scannedAddress = pairingAddressFromQr(contents)
+            if (scannedAddress != null) {
+                address = scannedAddress
+                pairingScanError = ""
+            } else {
+                pairingScanError = "未识别到 PC 配对网址，请扫描 PC 设置窗口中的配对二维码"
+            }
+        }
+    }
+    private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) launchPairingScanner()
+        else pairingScanError = "未获得相机权限，可在系统设置中允许后重试，或手动输入配对网址"
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState); fullscreen()
+        if (savedInstanceState != null) {
+            settings = savedInstanceState.getBoolean("connection_settings")
+            address = savedInstanceState.getString("pairing_address", address)
+            pairingScanError = savedInstanceState.getString("pairing_scan_error", "")
+        }
         fun compose(compact: Boolean = true, content: @Composable () -> Unit) = ComposeView(this).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             val feedbackView = this
@@ -247,30 +271,43 @@ class MainActivity : ComponentActivity() {
                         },
                             modifier = Modifier.semantics { contentDescription = "按键震动反馈" })
                     }
-                    Text("控制当前手机的按键震动。", style = MaterialTheme.typography.bodySmall)
-                    TextButton(onClick = {
-                        feedbackAvailability = feedbackController.availability()
-                        feedbackTestMessage = when (window.decorView.keyFeedback(KeyFeedback.Press, feedbackController)) {
-                            FeedbackResult.Requested -> "已触发测试震动"
-                            FeedbackResult.AppDisabled -> "请先开启按键震动反馈"
-                            FeedbackResult.SystemDisabled -> "手机系统触感反馈已关闭"
-                            FeedbackResult.NoVibrator -> "这台设备没有振动马达"
-                            FeedbackResult.Failed -> "未能触发震动，请检查手机振动设置"
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Button(onClick = {
+                            feedbackAvailability = feedbackController.availability()
+                            feedbackTestMessage = when (window.decorView.keyFeedback(KeyFeedback.Press, feedbackController)) {
+                                FeedbackResult.Requested -> "已触发测试震动"
+                                FeedbackResult.AppDisabled -> "请先开启按键震动反馈"
+                                FeedbackResult.SystemDisabled -> "手机系统触感反馈已关闭"
+                                FeedbackResult.NoVibrator -> "这台设备没有振动马达"
+                                FeedbackResult.Failed -> "未能触发震动，请检查手机振动设置"
+                            }
+                        }, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)) { Text("测试震动", maxLines = 1) }
+                        if (feedbackAvailability != FeedbackResult.NoVibrator) TextButton(onClick = {
+                            runCatching { startActivity(Intent(android.provider.Settings.ACTION_SOUND_SETTINGS)) }
+                                .onFailure { feedbackTestMessage = "请在手机系统设置中打开声音与振动" }
+                        }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(0.dp)) {
+                            Text("系统震动设置", Modifier.weight(1f, fill = false), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Spacer(Modifier.width(4.dp))
+                            Icon(painterResource(R.drawable.ic_lucide_chevron_right), contentDescription = null, modifier = Modifier.size(16.dp))
                         }
-                    }) { Text("测试震动") }
+                    }
                     if (feedbackTestMessage.isNotEmpty()) Text(feedbackTestMessage, style = MaterialTheme.typography.bodySmall)
                     if (feedbackAvailability == FeedbackResult.SystemDisabled && feedbackTestMessage != "手机系统触感反馈已关闭") {
                         Text("手机系统触感反馈已关闭", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                     } else if (feedbackAvailability == FeedbackResult.NoVibrator && feedbackTestMessage != "这台设备没有振动马达") {
                         Text("这台设备没有振动马达", style = MaterialTheme.typography.bodySmall)
                     }
-                    if (feedbackAvailability != FeedbackResult.NoVibrator) TextButton(onClick = {
-                        runCatching { startActivity(Intent(android.provider.Settings.ACTION_SOUND_SETTINGS)) }
-                            .onFailure { feedbackTestMessage = "请在手机系统设置中打开声音与振动" }
-                    }) { Text("手机系统振动设置") }
                     HorizontalDivider()
-                    Text("输入 PC 设置窗口显示的配对网址，或粘贴完整配对信息。")
-                    OutlinedTextField(value = address, onValueChange = { address = it }, label = { Text("PC 配对网址") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
+                    Text("输入PC设置窗口显示的配对网址：")
+                    OutlinedTextField(value = address, onValueChange = { address = it; pairingScanError = "" },
+                        modifier = Modifier.fillMaxWidth(), label = { Text("PC 配对网址") }, singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                        trailingIcon = {
+                            IconButton(onClick = ::scanPairingAddress) {
+                                Icon(painterResource(R.drawable.ic_lucide_scan_line), contentDescription = "扫码填写 PC 配对网址")
+                            }
+                        })
+                    if (pairingScanError.isNotEmpty()) Text(pairingScanError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                     if (state.connected) TextButton(onClick = { vm.client.forget() }) { Text("忘记当前电脑") }
                 }
             }, confirmButton = { TextButton(onClick = { enter(address); settings = false }) { Text("连接") } }, dismissButton = { TextButton(onClick = { settings = false }) { Text("关闭") } })
@@ -322,6 +359,29 @@ class MainActivity : ComponentActivity() {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
             show(WindowInsetsCompat.Type.systemBars())
         }
+    }
+    private fun scanPairingAddress() {
+        pairingScanError = ""
+        if (!packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) {
+            pairingScanError = "这台设备没有相机，请手动输入配对网址"
+        } else if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            launchPairingScanner()
+        } else {
+            cameraPermission.launch(Manifest.permission.CAMERA)
+        }
+    }
+    private fun launchPairingScanner() {
+        pairingScanner.launch(ScanOptions()
+            .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+            .setPrompt("扫描 PC 设置窗口中的配对二维码")
+            .setOrientationLocked(false)
+            .setBeepEnabled(false))
+    }
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean("connection_settings", settings)
+        outState.putString("pairing_address", address)
+        outState.putString("pairing_scan_error", pairingScanError)
+        super.onSaveInstanceState(outState)
     }
     private fun enter(link: String) {
         val permission = "android.permission.ACCESS_LOCAL_NETWORK"

@@ -33,6 +33,7 @@ TapDeck 自有源码采用根目录 [MIT License](LICENSE)。第三方组件保�
 | kotlinx.coroutines | 1.10.2 | [Coroutines](https://github.com/Kotlin/kotlinx.coroutines) |
 | kotlinx.serialization | 1.9.0 | [Serialization](https://github.com/Kotlin/kotlinx.serialization) |
 | OkHttp 与其 Okio 依赖 | OkHttp 5.5.0 | [OkHttp](https://github.com/square/okhttp)、[Okio](https://github.com/square/okio) |
+| ZXing Android Embedded 与 ZXing Core | 4.3.0 / 3.4.1 | [JourneyApps](https://github.com/journeyapps/zxing-android-embedded)、[ZXing](https://github.com/zxing/zxing) |
 | Gradle Wrapper | 9.3.1 | [Gradle](https://github.com/gradle/gradle) |
 | Android Gradle Plugin，外部构建工具 | 9.1.1 | [Android Tools](https://android.googlesource.com/platform/tools/base/) |
 
@@ -42,7 +43,7 @@ Gradle Wrapper 的原始版权和许可头保留在 `android/gradlew` 与 `andro
 
 ## Lucide 图标
 
-Android 使用 Lucide 的 `keyboard`、`mic-audio-lines`、`mic-signal`、`plug`、`arrow-big-up`、`corner-down-left`、`delete` 和 `sliders-horizontal` 矢量图标；Shift+Enter 组合 `arrow-big-up` 与 `corner-down-left`。图标适用 ISC 许可及其原始版权声明。完整上游原文（含 Feather 来源附录）保留在 [Lucide-LICENSE.txt](licenses/Lucide-LICENSE.txt)，同一份声明也随 APK 的 `assets/Lucide-LICENSE.txt` 分发。
+Android 使用 Lucide 的 `keyboard`、`mic-audio-lines`、`mic-signal`、`plug`、`arrow-big-up`、`corner-down-left`、`delete`、`sliders-horizontal`、`scan-line` 和 `chevron-right` 矢量图标；Shift+Enter 组合 `arrow-big-up` 与 `corner-down-left`。图标适用 ISC 许可及其原始版权声明。完整上游原文（含 Feather 来源附录）保留在 [Lucide-LICENSE.txt](licenses/Lucide-LICENSE.txt)，同一份声明也随 APK 的 `assets/Lucide-LICENSE.txt` 分发。
 
 ## VB-CABLE 原包与分发
 
