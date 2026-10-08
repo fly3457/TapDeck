@@ -957,6 +957,7 @@ class DeviceTest {
             repeat(3) { index ->
                 tapSwitch(); SystemClock.sleep(80)
                 assertEquals(order[(order.indexOf(first) + index + 1) % 3], vm.selectedVoice.value!!.id)
+                if (vm.selectedVoice.value!!.id != "voice-3") saveUiScreenshot("voice-${vm.selectedVoice.value!!.mode}-idle")
             }
             assertEquals(3, feedback.size)
             scenario.onActivity { activity ->
@@ -967,17 +968,18 @@ class DeviceTest {
             repeat(2) { tapSwitch(); SystemClock.sleep(80) }
             assertEquals(twoGroupStart, vm.selectedVoice.value!!.id)
             assertEquals(5, feedback.size)
-            for (phase in listOf("preparing", "transmitting", "stopping")) {
+            for (profile in all.take(2)) for (phase in listOf("preparing", "transmitting", "stopping")) {
                 scenario.onActivity { activity ->
                     val current = uiState(activity).value
-                    uiState(activity).value = current.copy(mic = phase, micMode = "toggle", activeVoiceProfile = all[0], config = current.config.copy(voice = Voice(profiles = all.map { it.copy(enabled = false) })))
+                    uiState(activity).value = current.copy(mic = phase, micMode = profile.mode, activeVoiceProfile = profile, level = if (phase == "transmitting") 0.42f else 0f, config = current.config.copy(voice = Voice(profiles = all.map { it.copy(enabled = false) })))
                 }
                 SystemClock.sleep(80)
-                assertEquals("单击语音输入", mic.profileName)
-                assertEquals("toggle", mic.gestureMode)
+                assertEquals(profile.name, mic.profileName)
+                assertEquals(profile.mode, mic.gestureMode)
                 assertTrue(mic.available)
                 assertFalse(mic.switchAvailable)
                 tapSwitch(); assertEquals(5, feedback.size)
+                saveUiScreenshot("voice-${profile.mode}-$phase")
             }
             scenario.onActivity { activity -> uiState(activity).value = uiState(activity).value.copy(mic = "idle", activeVoiceProfile = null) }
             SystemClock.sleep(120)

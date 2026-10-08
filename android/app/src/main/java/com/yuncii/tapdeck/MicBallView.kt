@@ -139,6 +139,12 @@ class MicBallView(
         c.drawColor(BACKGROUND)
         val g = geometry()
         val (cx, cy) = ballCenter()
+        // The top edge separates shortcuts from voice controls.
+        if (status == "transmitting") {
+            paint.style = Paint.Style.FILL
+            paint.color = ControllerStyle.PRESSED
+            c.drawRect(0f, 0f, width * (level * 2f).coerceIn(0f, 1f), g.unit * 0.004f, paint)
+        }
         drawModeButton(c)
         paint.style = Paint.Style.FILL
         paint.color = when {
@@ -175,47 +181,33 @@ class MicBallView(
             else -> if (!voiceEnabled) "禁用" else if (gestureMode == MODE_TOGGLE) "轻点" else "长按"
         }
         label(c, caption, cx, cy + radius() * 0.17f, captionSize(caption), radius() * 1.7f)
-        // One caption and a separate level bar fit inside the 0.045W footer.
+        // Keep the instruction and drag hint (or recording level) on one line.
         hintPaint.color = ControllerStyle.SECONDARY
         hintPaint.textAlign = Paint.Align.CENTER
         hintPaint.typeface = android.graphics.Typeface.DEFAULT
         hintPaint.textSize = g.unit * 0.025f
+        val recording = status in listOf("preparing", "transmitting", "stopping")
+        val instruction = if ((if (recording) mode else gestureMode) == MODE_TOGGLE) "轻点开始，再点结束" else "按住说话，松手结束"
         val hint = when {
-            status == "transmitting" -> "麦克风电平 ${(level * 100).toInt()}% · 可拖动调整位置"
-            available -> "可拖动到区域任意位置"
+            recording -> "麦克风电平 ${(level.coerceIn(0f, 1f) * 100).toInt()}% · $instruction"
+            available -> "$instruction · 可拖动到区域任意位置"
             !voiceEnabled -> "请在 PC 语音页启用配置"
             else -> "连接电脑后使用语音输入"
         }
         val footerCaption = TextUtils.ellipsize(hint, hintPaint, (width - g.unit * 0.03f).coerceAtLeast(0f), TextUtils.TruncateAt.END).toString()
-        val baseline = g.footerTop + (g.footerHeight - g.unit * 0.008f) / 2f - (hintPaint.ascent() + hintPaint.descent()) / 2f
+        val baseline = g.footerTop + g.footerHeight / 2f - (hintPaint.ascent() + hintPaint.descent()) / 2f
         c.drawText(footerCaption, width / 2f, baseline, hintPaint)
-        if (status == "transmitting") {
-            paint.color = ControllerStyle.PRESSED
-            c.drawRect(0f, height - g.unit * 0.004f, width * level.coerceIn(0f, 1f), height.toFloat(), paint)
-        }
     }
 
     /** 两字说明用大字号，避免在方形控件里显得空。 */
     private fun captionSize(text: String): Float = if (text.length <= 2) radius() * 0.55f else radius() * 0.45f
 
     /**
-     * 顶部一行：模式按钮（Lucide 图标 + 模式名）+ 当前状态的提示文字。
-     * 按钮是唯一的模式切换入口：按住说话 / 轻点开始。
+     * 顶部居中显示配置切换按钮；操作提示统一放在底部。
      */
     private fun drawModeButton(c: Canvas) {
         val toggle = gestureMode == MODE_TOGGLE
         val text = profileName ?: if (toggle) "单击语音输入" else "长按语音输入"
-        val hint = when (status) {
-            "preparing" -> "准备中…"
-            "stopping" -> "正在结束…"
-            "transmitting" -> if (mode == MODE_TOGGLE) "录音中，再点结束" else "录音中，松手结束"
-            else -> when {
-                !voiceEnabled -> "请在 PC 语音页启用配置"
-                !available -> "连接电脑后使用语音输入"
-                toggle -> "轻点开始，再点结束"
-                else -> "按住说话，松手结束"
-            }
-        }
         val g = geometry()
         val textSize = g.unit * 0.03f
         val iconSize = g.unit * 0.04f
@@ -225,12 +217,8 @@ class MicBallView(
         hintPaint.textAlign = Paint.Align.LEFT
         hintPaint.typeface = android.graphics.Typeface.DEFAULT_BOLD
         val labelWidth = hintPaint.measureText(text)
-        hintPaint.typeface = android.graphics.Typeface.DEFAULT
-        hintPaint.textSize = g.unit * 0.025f
-        val hintWidth = hintPaint.measureText(hint)
         val buttonWidth = padH * 2 + iconSize + gap + labelWidth
-        val total = buttonWidth + gap * 2 + hintWidth
-        val left = ((width - total) / 2f).coerceAtLeast(width * ControllerStyle.SIDE)
+        val left = ((width - buttonWidth) / 2f).coerceAtLeast(width * ControllerStyle.SIDE)
         val pillHeight = g.unit * 0.058f
         val top = (g.modeHeight - pillHeight) / 2f
         val corner = width * ControllerStyle.CORNER
@@ -263,12 +251,6 @@ class MicBallView(
         hintPaint.textAlign = Paint.Align.LEFT
         hintPaint.typeface = android.graphics.Typeface.DEFAULT_BOLD
         c.drawText(text, modeButton.left + padH + iconSize + gap, modeButton.centerY() - (hintPaint.descent() + hintPaint.ascent()) / 2f, hintPaint)
-        hintPaint.typeface = android.graphics.Typeface.DEFAULT
-        hintPaint.textSize = g.unit * 0.025f
-        hintPaint.color = ControllerStyle.SECONDARY
-        val hintLeft = modeButton.right + gap * 2
-        val fittedHint = TextUtils.ellipsize(hint, hintPaint, (width - width * ControllerStyle.SIDE - hintLeft).coerceAtLeast(0f), TextUtils.TruncateAt.END).toString()
-        c.drawText(fittedHint, hintLeft, modeButton.centerY() - (hintPaint.descent() + hintPaint.ascent()) / 2f, hintPaint)
     }
 
     /** 点击模式按钮：在长按 / 单击之间切换，并通知外部记录到本地。 */

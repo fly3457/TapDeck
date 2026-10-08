@@ -8,7 +8,7 @@ TapDeck 将手机麦克风的声音传到 Windows，配合电脑上的语音输�
 
 **[下载 Windows EXE](https://github.com/fly3457/TapDeck/releases/download/v0.3.6/TapDeck.exe) · [下载 Android APK](https://github.com/fly3457/TapDeck/releases/download/v0.3.6/TapDeck-debug.apk) · [查看完整发布包](https://github.com/fly3457/TapDeck/releases/tag/v0.3.6)**
 
-以上为 0.3.6 公开下载链接。当前源码版本为 0.3.9：PC 提供三组可命名、启用及选择类型的语音配置，手机按启用顺序轮换，全键盘长按空格使用当前组。升级保留旧热键并备份原配置。
+以上为 0.3.6 公开下载链接。当前源码版本为 0.3.10：保留三组语音配置和空格跟随；手机操作说明与拖动提示合并在底部一行，激活后显示电平百分比和操作说明，横向电平条移至快捷键与语音区之间，显示长度调整为 2 倍。
 
 ## 为 Vibe Coding 准备的功能
 
@@ -43,7 +43,7 @@ TapDeck 将手机麦克风的声音传到 Windows，配合电脑上的语音输�
 
 ## 下载与安装
 
-下表公开下载包为 **0.3.6（测试版）**，Android `versionCode=9`；源码及本地构建已更新到 **0.3.9** / code `12`。支持 **Windows 11 x64**、**Android 8 / API 26 及以上**；手机与电脑需要处于可互通的局域网。
+下表公开下载包为 **0.3.6（测试版）**，Android `versionCode=9`；源码及本地构建已更新到 **0.3.10** / code `13`。支持 **Windows 11 x64**、**Android 8 / API 26 及以上**；手机与电脑需要处于可互通的局域网。
 
 | 文件 | 用途 |
 |---|---|
