@@ -276,25 +276,15 @@ class MainActivity : ComponentActivity() {
                         },
                             modifier = Modifier.semantics { contentDescription = "按键震动反馈" })
                     }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Button(onClick = {
-                            feedbackAvailability = feedbackController.availability()
-                            feedbackTestMessage = when (window.decorView.keyFeedback(KeyFeedback.Press, feedbackController)) {
-                                FeedbackResult.Requested -> "已发送测试震动"
-                                FeedbackResult.AppDisabled -> "请先开启按键震动反馈"
-                                FeedbackResult.NoVibrator -> "这台设备没有振动马达"
-                                FeedbackResult.Failed -> "未能触发震动，请检查手机振动设置"
-                            }
-                        }, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)) { Text("测试震动", maxLines = 1) }
-                        if (feedbackAvailability != FeedbackResult.NoVibrator) TextButton(onClick = {
-                            runCatching { startActivity(Intent(android.provider.Settings.ACTION_SOUND_SETTINGS)) }
-                                .onFailure { feedbackTestMessage = "请在手机系统设置中打开声音与振动" }
-                        }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(0.dp)) {
-                            Text("系统震动设置", Modifier.weight(1f, fill = false), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Spacer(Modifier.width(4.dp))
-                            Icon(painterResource(R.drawable.ic_lucide_chevron_right), contentDescription = null, modifier = Modifier.size(16.dp))
+                    Button(onClick = {
+                        feedbackAvailability = feedbackController.availability()
+                        feedbackTestMessage = when (window.decorView.keyFeedback(KeyFeedback.Press, feedbackController)) {
+                            FeedbackResult.Requested -> "已发送测试震动"
+                            FeedbackResult.AppDisabled -> "请先开启按键震动反馈"
+                            FeedbackResult.NoVibrator -> "这台设备没有振动马达"
+                            FeedbackResult.Failed -> "未能触发震动，请检查手机振动设置"
                         }
-                    }
+                    }, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)) { Text("测试震动", maxLines = 1) }
                     if (feedbackTestMessage.isNotEmpty()) Text(feedbackTestMessage, style = MaterialTheme.typography.bodySmall)
                     if (feedbackAvailability == FeedbackResult.NoVibrator && feedbackTestMessage != "这台设备没有振动马达") {
                         Text("这台设备没有振动马达", style = MaterialTheme.typography.bodySmall)
@@ -303,14 +293,15 @@ class MainActivity : ComponentActivity() {
                     Text("输入PC设置窗口显示的配对网址：")
                     OutlinedTextField(value = address, onValueChange = { address = it; pairingScanError = "" },
                         modifier = Modifier.fillMaxWidth(), label = { Text("PC 配对网址") }, singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                        trailingIcon = {
-                            IconButton(onClick = ::scanPairingAddress) {
-                                Icon(painterResource(R.drawable.ic_lucide_scan_line), contentDescription = "扫码填写 PC 配对网址")
-                            }
-                        })
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
                     if (pairingScanError.isNotEmpty()) Text(pairingScanError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                    if (state.connected) TextButton(onClick = { vm.client.forget() }) { Text("忘记当前电脑") }
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        if (state.connected) TextButton(onClick = { vm.client.forget() }) { Text("忘记当前电脑") }
+                        Spacer(Modifier.weight(1f))
+                        IconButton(onClick = ::scanPairingAddress) {
+                            Icon(painterResource(R.drawable.ic_lucide_scan_line), contentDescription = "扫码填写 PC 配对网址")
+                        }
+                    }
                 }
             }, confirmButton = { TextButton(onClick = { enter(address); settings = false }) { Text("连接") } }, dismissButton = { TextButton(onClick = { settings = false }) { Text("关闭") } })
             if (state.pairing.isNotEmpty()) AlertDialog(onDismissRequest = { vm.client.forget() }, title = { Text("等待电脑允许连接") }, text = { Column { Text("请核对 PC 设置窗口里的校验码是否一致，一致后在电脑上点“允许连接”："); Spacer(Modifier.height(12.dp)); Text(state.pairing, fontSize = 19.sp); Spacer(Modifier.height(12.dp)); Text("电脑允许后会自动连上，手机上不需要额外操作。") } }, confirmButton = {}, dismissButton = { TextButton(onClick = vm.client::forget) { Text("取消") } })

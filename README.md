@@ -8,7 +8,7 @@ TapDeck 将手机麦克风的声音传到 Windows，配合电脑上的语音输�
 
 **[下载 Windows EXE](https://github.com/fly3457/TapDeck/releases/download/v0.3.6/TapDeck.exe) · [下载 Android APK](https://github.com/fly3457/TapDeck/releases/download/v0.3.6/TapDeck-debug.apk) · [查看完整发布包](https://github.com/fly3457/TapDeck/releases/tag/v0.3.6)**
 
-以上为 0.3.6 公开下载链接。当前源码版本为 0.3.7：快捷键间距统一为宽度的 1%，直接调用手机振动服务，增加两端版本显示、带版本号的 APK 和 PC“关于”输入测试框，并修复单击录音时触控板点击的停止同步。
+以上为 0.3.6 公开下载链接。当前源码版本为 0.3.8：在 0.3.7 的直接震动、统一间距、版本信息和语音停止同步基础上，移除系统震动设置入口，并把扫码图标放到“忘记当前电脑”同一行的右侧。
 
 ## 为 Vibe Coding 准备的功能
 
@@ -43,7 +43,7 @@ TapDeck 将手机麦克风的声音传到 Windows，配合电脑上的语音输�
 
 ## 下载与安装
 
-当前版本为 **0.3.6（测试版）**，Android `versionCode=9`。支持 **Windows 11 x64**、**Android 8 / API 26 及以上**；手机与电脑需要处于可互通的局域网。
+下表公开下载包为 **0.3.6（测试版）**，Android `versionCode=9`；源码及本地构建已更新到 **0.3.8** / code `11`。支持 **Windows 11 x64**、**Android 8 / API 26 及以上**；手机与电脑需要处于可互通的局域网。
 
 | 文件 | 用途 |
 |---|---|
@@ -85,9 +85,9 @@ TapDeck 将手机麦克风的声音传到 Windows，配合电脑上的语音输�
 | 快捷键轻点、按住 | 发送一次组合键，或持续保持按下；松手释放 |
 | 全键盘短按、长按 | 短按发送主键、长按发送副键；Ctrl、Shift、回车及 Shift＋回车支持相应组合和保持操作 |
 
-触控板左上角图标可调灵敏度。手机顶部连接图标打开“连接与设备设置”，其中提供“按键震动反馈”开关、“测试震动”及系统振动设置入口。
+触控板左上角图标可调灵敏度。手机顶部连接图标打开“连接与设备设置”，其中提供“按键震动反馈”开关和“测试震动”按钮。
 
-手机连接设置中可查看安装版本，网址框右侧可扫描 PC 配对二维码并回填。PC“关于”页显示版本和应用信息，下方的多行文本框可测试手机键盘与语音输入；先点击输入框或“开始输入测试”，语音识别仍使用电脑当前输入法。
+手机连接设置中可查看安装版本，网址下方操作行右侧可扫描 PC 配对二维码并回填，与“忘记当前电脑”同排。PC“关于”页显示版本和应用信息，下方的多行文本框可测试手机键盘与语音输入；先点击输入框或“开始输入测试”，语音识别仍使用电脑当前输入法。
 
 ## 连接与设备管理
 
@@ -104,20 +104,20 @@ Android 使用 Kotlin，Windows 接收端使用 Go，控制协议为 v2。当前
 在仓库根目录的 PowerShell 执行官方发布入口：
 
 ```powershell
-.\scripts\build-windows.ps1 -OutputDirectory 'dist\0.3.7'
+.\scripts\build-windows.ps1 -OutputDirectory 'dist\0.3.8'
 # 自行指定 JDK 和 Android SDK 时：
-.\scripts\build-windows.ps1 -OutputDirectory 'dist\0.3.7' -JavaHome 'C:\path\to\jdk17' -SdkRoot "$env:LOCALAPPDATA\Android\Sdk"
+.\scripts\build-windows.ps1 -OutputDirectory 'dist\0.3.8' -JavaHome 'C:\path\to\jdk17' -SdkRoot "$env:LOCALAPPDATA\Android\Sdk"
 ```
 
-该入口先构建 Android 并运行 Kotlin 测试，从本次 Gradle 输出复制 `TapDeck-0.3.7.apk`、核对 SHA-256，再运行 Go 测试、`go vet` 和 Windows 构建。两端版本与 APK 文件名来自同一份 Gradle 元数据，同时保留 `TapDeck-debug.apk` 兼容副本。Android 失败、APK 缺失或哈希不一致时终止，不沿用旧 APK。签名密钥不随源码分发；覆盖既有 Android 安装须使用相同签名。
+该入口先构建 Android 并运行 Kotlin 测试，从本次 Gradle 输出复制 `TapDeck-0.3.8.apk`、核对 SHA-256，再运行 Go 测试、`go vet` 和 Windows 构建。两端版本与 APK 文件名来自同一份 Gradle 元数据，同时保留 `TapDeck-debug.apk` 兼容副本。Android 失败、APK 缺失或哈希不一致时终止，不沿用旧 APK。签名密钥不随源码分发；覆盖既有 Android 安装须使用相同签名。
 
 Android 单独开发可用 [build-android.ps1](scripts/build-android.ps1)，模拟器矩阵可用 [test-android-ui.ps1](scripts/test-android-ui.ps1)。国际依赖连接失败时，先检查 Clash Verge 和 Anycast，Android 构建可加 `-UseLocalProxy` 使用本机 SOCKS5 1080。构建与内嵌规则见 [APK 分发说明](docs/apk-download.md)。
 
 ## 验证与当前范围
 
-0.3.7 已通过 51 项 Kotlin 单元测试、Android 14 模拟器的布局与语音状态回归，以及官方流程中的 Go 测试、`go vet` 和两端构建。交付 APK 与 EXE 内嵌 APK 的版本和 SHA-256 一致。详细结果、硬件测试排除项和历史真机记录见 [验证记录](docs/verification.md)。
+0.3.8 已通过 51 项 Kotlin 单元测试和官方流程中的 Go 测试、`go vet`、两端构建；连接设置和扫码回填在普通屏幕及小屏大字体的 Android 14 模拟器上回归。交付 APK 与 EXE 内嵌 APK 的版本和 SHA-256 一致。详细结果、硬件测试排除项和历史真机记录见 [验证记录](docs/verification.md)。
 
-当前 Android 使用竖屏布局，Windows 运行文件为未签名测试构建，APK 使用现有开发签名。实体手机的图标、按键与震动手感、覆盖升级及原配对重连，以及手机语音转换成目标输入框文字的完整链路，仍需实际设备验收。多设备共享键鼠，语音一次只由一台设备传送。
+当前 Android 使用竖屏布局，Windows 运行文件为未签名测试构建，APK 使用现有开发签名。用户已确认其手机在关闭系统震动开关后仍可使用 App 震动；其他机型表现、覆盖升级及原配对重连，以及手机语音转换成目标输入框文字的完整链路，按验证记录逐项验收。多设备共享键鼠，语音一次只由一台设备传送。
 
 ## 文档与许可
 

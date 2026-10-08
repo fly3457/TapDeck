@@ -952,13 +952,17 @@ class DeviceTest {
                 assertTrue(nodes().single { it.contentDescription?.startsWith("连接设置") == true }.performAction(AccessibilityNodeInfo.ACTION_CLICK))
                 fun scan() {
                     var button: AccessibilityNodeInfo? = null
-                    await { button = nodes().firstOrNull { it.contentDescription?.toString() == "扫码填写 PC 配对网址" }; button != null }
-                    val bounds = Rect().also(button!!::getBoundsInScreen)
-                    val down = SystemClock.uptimeMillis()
-                    for (action in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
-                        val event = motion(down, action, listOf(bounds.exactCenterX() to bounds.exactCenterY()))
-                        assertTrue(automation.injectInputEvent(event, true)); event.recycle()
+                    await {
+                        button = nodes().firstOrNull { it.contentDescription?.toString() == "扫码填写 PC 配对网址" }
+                        if (button == null) {
+                            nodes().firstOrNull { it.isScrollable }?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+                            instrumentation.waitForIdleSync()
+                        }
+                        button != null
                     }
+                    // Accessibility activation is stable while the scroll animation settles.
+                    val action = generateSequence(button!!) { it.parent }.first { it.isClickable }
+                    assertTrue(action.performAction(AccessibilityNodeInfo.ACTION_CLICK))
                     instrumentation.waitForIdleSync()
                 }
                 fun address() = nodes().single { it.isEditable }.text.toString()
@@ -993,6 +997,10 @@ class DeviceTest {
                 assertFalse(nodes().any { it.text?.startsWith("未识别到 PC 配对网址") == true })
                 assertEquals(before, client.state.value)
                 saveUiScreenshot("pairing-scan-filled")
+                // Preview the connected action row without opening a real PC connection.
+                scenario.onActivity { activity -> uiState(activity).value = before.copy(connected = true) }
+                await { nodes().any { it.text?.toString() == "忘记当前电脑" } }
+                saveUiScreenshot("pairing-connected-actions")
             }
         } finally {
             instrumentation.removeMonitor(monitor)

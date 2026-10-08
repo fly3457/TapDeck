@@ -2,7 +2,7 @@
 
 ## 安装与配对
 
-PC“连接”页二维码内容是 `http://<PC 地址>:<HTTP 端口>/pair`。手机用系统扫码工具打开网页，下载内置 Android APK；安装后返回网页点击“打开 TapDeck 连接”。已安装用户也可在 App“连接与设备设置”的网址输入框右侧点扫码图标，扫描 PC 二维码自动填写网址，再点“连接”；仍支持手动输入。
+PC“连接”页二维码内容是 `http://<PC 地址>:<HTTP 端口>/pair`。手机用系统扫码工具打开网页，下载内置 Android APK；安装后返回网页点击“打开 TapDeck 连接”。已安装用户也可在 App“连接与设备设置”的网址下方操作行右侧点扫码图标（与“忘记当前电脑”同排），扫描 PC 二维码自动填写网址，再点“连接”；仍支持手动输入。
 
 App 内扫码使用 [ZXing Android Embedded](https://github.com/journeyapps/zxing-android-embedded)，仅在点击扫码时请求相机权限；相机硬件可选，无相机或拒绝权限时仍可手动输入。扫码只回填 PC 配对网址，取消或扫到非配对二维码时保留原值，不自动发起连接。所有首次配对都显示校验码，由 PC 核对并允许。旧链接的 `secret` 字段不会产生授权。控制协议仍为 v2，现有凭据和旧客户端的 `pair_confirm` 保持兼容。
 
@@ -15,9 +15,9 @@ App 内扫码使用 [ZXing Android Embedded](https://github.com/journeyapps/zxin
 3. 对比复制前后的 SHA-256，从 Gradle `output-metadata.json` 生成内嵌版本清单。
 4. 运行 Go 测试、`go vet`，构建 Windows EXE。APK 缺失、Android 失败或哈希不一致均终止发布。
 
-当前 Android `versionName=0.3.7`、`versionCode=10`，保留 `com.yuncii.tapdeck` 及本机原有开发签名。APK 文件名为 `TapDeck-0.3.7.apk`；独立 Android 构建、Windows 交付目录和内嵌下载均使用这一命名，另保留 `TapDeck-debug.apk` 兼容副本。手机“连接与设备设置”标题下显示安装版本，网页和 PC 显示内嵌版本及完整 SHA-256。`TapDeck-debug.exe --version` 输出 PC 版本，`--apk-info` 可核对两端版本、下载文件名和内嵌哈希。Windows 构建从同一份 Gradle 元数据注入版本，避免两端手工维护产生差异。
+当前 Android `versionName=0.3.8`、`versionCode=11`，保留 `com.yuncii.tapdeck` 及本机原有开发签名。APK 文件名为 `TapDeck-0.3.8.apk`；独立 Android 构建、Windows 交付目录和内嵌下载均使用这一命名，另保留 `TapDeck-debug.apk` 兼容副本。手机“连接与设备设置”标题下显示安装版本，网页和 PC 显示内嵌版本及完整 SHA-256。`TapDeck-debug.exe --version` 输出 PC 版本，`--apk-info` 可核对两端版本、下载文件名和内嵌哈希。Windows 构建从同一份 Gradle 元数据注入版本，避免两端手工维护产生差异。
 
-换构建机时必须保留相同签名密钥，才能覆盖已有安装。主界面说明见 [android-ui.md](android-ui.md)，本次单 EXE 输出至 `dist/0.3.7`。更新时退出旧托盘程序后启动新版 EXE，再覆盖安装 Android APK。连接不支持双指缩放和三指窗口操作的旧电脑端时，App 会提示新手势需要升级。
+换构建机时必须保留相同签名密钥，才能覆盖已有安装。主界面说明见 [android-ui.md](android-ui.md)，本次单 EXE 输出至 `dist/0.3.8`。更新时退出旧托盘程序后启动新版 EXE，再覆盖安装 Android APK。连接不支持双指缩放和三指窗口操作的旧电脑端时，App 会提示新手势需要升级。
 
 ## PC 关于与手机输入测试
 
