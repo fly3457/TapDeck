@@ -35,6 +35,9 @@ import (
 	"unsafe"
 )
 
+// Official builds inject the release version from the verified Android metadata.
+var appVersion = "dev"
+
 func main() {
 	worker := flag.Bool("keyboard-worker", false, "internal inherited-pipe keyboard worker")
 	extractDriver := flag.String("extract-keyboard-driver", "", "extract bundled signed MSI to this directory")
@@ -43,6 +46,7 @@ func main() {
 	cableStatus := flag.Bool("cable-status", false, "print VB-CABLE driver and endpoint status without installing")
 	extractCable := flag.String("extract-cable", "", "extract and verify the original VB-CABLE pack without installing")
 	apkInfo := flag.Bool("apk-info", false, "verify and print bundled Android APK metadata")
+	showVersion := flag.Bool("version", false, "print TapDeck version")
 	headless := flag.Bool("headless", false, "启动接收端并与托盘常驻，但不弹出设置窗口（用于开机自启）")
 	data := flag.String("data-dir", config.Directory(), "settings directory")
 	list := flag.Bool("list-audio", false, "list WASAPI render endpoints")
@@ -50,6 +54,10 @@ func main() {
 	autostartOn := flag.Bool("autostart-on", false, "register the receiver to start at Windows sign-in, then exit")
 	autostartOff := flag.Bool("autostart-off", false, "remove the sign-in startup entry, then exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Printf("TapDeck %s\n", appVersion)
+		return
+	}
 	if *autostartOn || *autostartOff {
 		on, err := autostart.Set(*autostartOn)
 		if err != nil {
@@ -105,7 +113,7 @@ func main() {
 		if err := apkdist.Verify(); err != nil {
 			log.Fatal(err)
 		}
-		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"version_name": apkdist.Version(), "version_code": apkdist.VersionCode(), "sha256": apkdist.SHA256(), "bytes": len(apkdist.Bytes())})
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"pc_version": appVersion, "version_name": apkdist.Version(), "version_code": apkdist.VersionCode(), "filename": apkdist.Name(), "sha256": apkdist.SHA256(), "bytes": len(apkdist.Bytes())})
 		return
 	}
 	if *probe > 0 {
@@ -224,6 +232,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 	defer runtime.UnlockOSThread()
 	var mw *walk.MainWindow
 	var address *walk.LineEdit
+	var inputTest *walk.TextEdit
 	var status, audioStatus, pendingLabel, stats *walk.Label
 	var qrView *walk.ImageView
 	var devices *walk.ComboBox
@@ -490,6 +499,23 @@ func window(s *server.Server, dir string, startHidden bool) error {
 					walk.MsgBox(mw, "启动失败", e.Error(), walk.MsgBoxIconError)
 				}
 			}}, d.PushButton{Text: "停止接收", OnClicked: s.Stop}, d.PushButton{Text: "打开日志", OnClicked: func() { open(filepath.Join(dir, "tapdeck.log")) }}}}, d.VSpacer{}}},
+			{Title: "关于", Layout: d.VBox{}, Children: []d.Widget{
+				d.Label{Text: "TapDeck", Font: d.Font{Family: "Microsoft YaHei UI", PointSize: 20, Bold: true}},
+				d.Label{Text: "Windows 接收端 · 版本 " + appVersion},
+				d.Label{Text: "将 Android 手机变成电脑的触控板、快捷键面板、键盘和语音输入控制器。"},
+				d.Label{Text: "支持 Windows 11 x64、Android 8 及以上；手机与电脑需处于同一局域网。"},
+				d.Label{Text: "开源许可：MIT · 第三方组件保留各自许可"},
+				d.PushButton{Text: "项目主页 · github.com/fly3457/TapDeck", OnClicked: func() { open("https://github.com/fly3457/TapDeck") }},
+				d.Label{Text: apkSummary()},
+				d.Label{Text: "手机输入测试", Font: d.Font{Family: "Microsoft YaHei UI", PointSize: 11, Bold: true}},
+				d.Label{Text: "先点击下方输入框，再使用手机键盘或语音输入。语音文字由电脑当前输入法识别。"},
+				d.TextEdit{AssignTo: &inputTest, Name: "phoneInputTest", VScroll: true, MinSize: d.Size{Height: 180}, StretchFactor: 1},
+				d.Composite{Layout: d.HBox{}, Children: []d.Widget{
+					d.PushButton{Text: "开始输入测试", OnClicked: func() { _ = inputTest.SetFocus() }},
+					d.PushButton{Text: "清空", OnClicked: func() { _ = inputTest.SetText(""); _ = inputTest.SetFocus() }},
+					d.HSpacer{},
+				}},
+			}},
 		}}, d.PushButton{Text: "保存并同步配置", OnClicked: save},
 	}}).Create()
 	if err != nil {

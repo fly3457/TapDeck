@@ -7,7 +7,7 @@
 1. PC 上正常启动 `dist/TapDeck.exe`（`--headless` 也一样）。
 2. 手机浏览器打开配对网址 `http://<PC 地址>:41080/pair`（PC 设置窗口里的网址，或二维码）。
 3. 网页「下载 Android 端」区块显示 APK 下载按钮、下载二维码、版本、文件名与大小、下载地址和完整 SHA-256。
-4. 手机扫码（或点按钮）下载 `TapDeck.apk`，按系统提示允许「安装未知应用」后安装。装好后再用同一个页面完成配对。
+4. 手机扫码（或点按钮）下载带版本号的安装包，例如 `TapDeck-0.3.7.apk`，按系统提示允许「安装未知应用」后安装。装好后再用同一个页面完成配对。
 
 ## 实现
 
@@ -15,14 +15,14 @@
 
 - 新增 `windows/internal/apkdist`：用 `//go:embed assets` 把 `assets/*.apk` 打进 EXE，导出 `Available()`、`Name()`、`Bytes()`、`SHA256()`、`SizeText()`。
 - `assets/*.apk` 和 `assets/apk.json` 是构建产物，已在 `.gitignore` 中忽略。
-- 官方入口 `scripts/build-windows.ps1` 每次先调用 Android 构建和 Kotlin 测试；成功后仅从该次 Gradle 输出目录复制 `app-debug.apk`，核对 SHA-256 并写入版本清单，再测试和构建 Windows。不会读取旧 `dist` APK；Android 失败、缺包或复制后哈希不一致立即失败。
-- `cmd/tapdeck` 启动前验证内嵌 APK 与元数据，再调用 `s.SetAPK(...)` 注入内容、文件名、版本与完整 SHA-256。设置页「设置与状态」显示版本、code、大小和完整哈希。源码直接 `go build` 虽可用于开发，但缺失有效 APK 时不能启动接收端，不能用于发布。
+- 官方入口 `scripts/build-windows.ps1` 每次先调用 Android 构建和 Kotlin 测试；成功后仅从该次 Gradle 输出目录复制 `app-debug.apk`，核对 SHA-256 并写入版本清单，再测试和构建 Windows。0.3.7 起从 Gradle 元数据生成 `TapDeck-<versionName>.apk` 文件名，同时给 PC 注入同一版本；独立 Android 构建也生成带版本号的文件。不会读取旧 `dist` APK；Android 失败、缺包或复制后哈希不一致立即失败。
+- `cmd/tapdeck` 启动前验证内嵌 APK 与元数据，再调用 `s.SetAPK(...)` 注入内容、文件名、版本与完整 SHA-256。设置页「设置与状态」和「关于」显示内嵌版本、code、大小和完整哈希；「关于」另显示 PC 版本。源码直接 `go build` 的 PC 版本显示为 `dev`，缺失有效 APK 时不能启动接收端，不能用于发布。
 
 ### 2. 两个新路由（HTTP 端口，默认 41080）
 
 | 路由 | 说明 |
 |---|---|
-| `GET /apk` | 下载内置 APK：`Content-Type: application/vnd.android.package-archive`、`Content-Disposition: attachment; filename="TapDeck.apk"`、带 `Content-Length`，用 `http.ServeContent` 因此支持 Range 断点续传。未内置时返回 404 + 提示去 GitHub Release 下载。 |
+| `GET /apk` | 下载内置 APK：`Content-Type: application/vnd.android.package-archive`、`Content-Disposition: attachment; filename="TapDeck-0.3.7.apk"`（文件名随版本变化）、带 `Content-Length`，用 `http.ServeContent` 因此支持 Range 断点续传。未内置时返回 404 + 提示去 GitHub Release 下载。 |
 | `GET /apk/qr.png` | 下载地址的二维码 PNG（`go-qrcode`，512 px，纠错等级 M）。二维码内容取请求的 `Host`，所以手机从哪个地址打开配对页，二维码就指向哪个地址（IP 或主机名都行）。 |
 
 PC“连接”页的二维码始终打开 `/pair` 网页，不含 secret。网页下载区块显示版本和完整 SHA-256，安装后点击“打开 TapDeck 连接”；每次首次配对都由 PC 核对并允许。网页中的 `/apk/qr.png` 是可选的下载直链二维码。页面 CSP 保持 `default-src 'self'`。

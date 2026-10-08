@@ -39,23 +39,28 @@ try {
     $taskApkMetadata = Get-Content -LiteralPath (Join-Path $taskApkOutput 'output-metadata.json') -Raw | ConvertFrom-Json
     $taskApkElement = @($taskApkMetadata.elements | Where-Object { $_.outputFile -eq 'app-debug.apk' })
     if ($taskApkElement.Count -ne 1) { throw 'Android APK version metadata missing or ambiguous' }
+    $taskVersion = $taskApkElement[0].versionName
+    if ($taskVersion -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') { throw 'Invalid release version' }
+    $taskApkName = 'TapDeck-' + $taskVersion + '.apk'
     $taskApkHash = (Get-FileHash -LiteralPath $taskApkSource -Algorithm SHA256).Hash.ToLowerInvariant()
-    $taskEmbeddedApk = Join-Path $taskApkDir 'TapDeck.apk'
+    $taskEmbeddedApk = Join-Path $taskApkDir $taskApkName
     Copy-Item -LiteralPath $taskApkSource -Destination $taskEmbeddedApk -Force
     if ((Get-FileHash -LiteralPath $taskEmbeddedApk -Algorithm SHA256).Hash.ToLowerInvariant() -ne $taskApkHash) { throw 'Embedded APK hash mismatch' }
     $taskEmbeddedMetadata = @{ version_name = $taskApkElement[0].versionName; version_code = $taskApkElement[0].versionCode; sha256 = $taskApkHash } | ConvertTo-Json
     [IO.File]::WriteAllText((Join-Path $taskApkDir 'apk.json'),$taskEmbeddedMetadata,[Text.UTF8Encoding]::new($false))
     Copy-Item -LiteralPath $taskApkSource -Destination (Join-Path $OutputDirectory 'TapDeck-debug.apk') -Force
+    Copy-Item -LiteralPath $taskApkSource -Destination (Join-Path $OutputDirectory $taskApkName) -Force
     Write-Host ('内嵌 Android {0}（code {1}）：SHA-256 {2}' -f $taskApkElement[0].versionName,$taskApkElement[0].versionCode,$taskApkHash)
     go test ./... -skip '^(TestVolumeControlChangesEndpoint|TestEnableDisableRoundTrip)$'
     if ($LASTEXITCODE -ne 0) { throw 'Go tests failed' }
     go vet ./...
     if ($LASTEXITCODE -ne 0) { throw 'Go vet failed' }
-    $taskLinkFlags = '-s -w'
+    $taskVersionFlags = '-X main.appVersion=' + $taskVersion
+    $taskLinkFlags = '-s -w ' + $taskVersionFlags
     if (-not $Console) { $taskLinkFlags += ' -H=windowsgui' }
     go build -trimpath -ldflags $taskLinkFlags -o (Join-Path $OutputDirectory 'TapDeck.exe') ./cmd/tapdeck
     if ($LASTEXITCODE -ne 0) { throw 'Windows build failed' }
-    go build -trimpath -o (Join-Path $OutputDirectory 'TapDeck-debug.exe') ./cmd/tapdeck
+    go build -trimpath -ldflags $taskVersionFlags -o (Join-Path $OutputDirectory 'TapDeck-debug.exe') ./cmd/tapdeck
     if ($LASTEXITCODE -ne 0) { throw 'Windows console build failed' }
     go build -trimpath -o (Join-Path $OutputDirectory 'TapDeck-hidprobe.exe') ./cmd/hidprobe
     if ($LASTEXITCODE -ne 0) { throw 'HID diagnostic build failed' }

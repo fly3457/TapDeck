@@ -260,7 +260,12 @@ class MainActivity : ComponentActivity() {
             val state by vm.client.state.collectAsStateWithLifecycle()
             val inputSettings by vm.client.inputSettings.collectAsStateWithLifecycle()
             if (sensitivitySettings) SensitivitySettings(inputSettings, vm.client::setSensitivity) { sensitivitySettings = false }
-            if (settings) AlertDialog(onDismissRequest = { settings = false }, title = { Text("连接与设备设置") }, text = {
+            if (settings) AlertDialog(onDismissRequest = { settings = false }, title = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("连接与设备设置")
+                    Text("TapDeck ${BuildConfig.VERSION_NAME}（${BuildConfig.VERSION_CODE}）", style = MaterialTheme.typography.bodySmall)
+                }
+            }, text = {
                 Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text("按键震动反馈", Modifier.weight(1f))
@@ -275,9 +280,8 @@ class MainActivity : ComponentActivity() {
                         Button(onClick = {
                             feedbackAvailability = feedbackController.availability()
                             feedbackTestMessage = when (window.decorView.keyFeedback(KeyFeedback.Press, feedbackController)) {
-                                FeedbackResult.Requested -> "已触发测试震动"
+                                FeedbackResult.Requested -> "已发送测试震动"
                                 FeedbackResult.AppDisabled -> "请先开启按键震动反馈"
-                                FeedbackResult.SystemDisabled -> "手机系统触感反馈已关闭"
                                 FeedbackResult.NoVibrator -> "这台设备没有振动马达"
                                 FeedbackResult.Failed -> "未能触发震动，请检查手机振动设置"
                             }
@@ -292,9 +296,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     if (feedbackTestMessage.isNotEmpty()) Text(feedbackTestMessage, style = MaterialTheme.typography.bodySmall)
-                    if (feedbackAvailability == FeedbackResult.SystemDisabled && feedbackTestMessage != "手机系统触感反馈已关闭") {
-                        Text("手机系统触感反馈已关闭", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                    } else if (feedbackAvailability == FeedbackResult.NoVibrator && feedbackTestMessage != "这台设备没有振动马达") {
+                    if (feedbackAvailability == FeedbackResult.NoVibrator && feedbackTestMessage != "这台设备没有振动马达") {
                         Text("这台设备没有振动马达", style = MaterialTheme.typography.bodySmall)
                     }
                     HorizontalDivider()
@@ -499,10 +501,11 @@ class MainActivity : ComponentActivity() {
         val rows = if (visible.size > 4) 2 else 1
         val columns = if (rows == 2) 4 else visible.size.coerceAtLeast(1)
         val width = maxWidth
-        val side = width * ControllerStyle.SIDE
-        val gap = width * ControllerStyle.GAP
+        val side = width * KeyboardGeometry.SIDE.toFloat()
+        val gap = width * KeyboardGeometry.GAP.toFloat()
         val rowGap = gap * scale
         val cellWidth = (width.value - side.value * 2 - (columns - 1) * gap.value) / columns
+        // 上外边距复用原生面板已有的 1% 留白，避免与全键盘相比多算一次。
         val cellHeight = (maxHeight.value - rowGap.value * rows) / rows
         val titleSize = with(LocalDensity.current) {
             min(width.value * 0.035f * scale, min(cellWidth * 0.26f, cellHeight * 0.32f)).coerceAtLeast(0f).dp.toSp()

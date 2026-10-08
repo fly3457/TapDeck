@@ -364,7 +364,7 @@ class DeviceTest {
                 await { client.inputSettings.value.haptics }
                 assertTrue(nodes().any { it.text?.toString() == "测试震动" })
                 tapNode(nodes().single { it.text?.toString() == "测试震动" })
-                await { nodes().any { it.text?.toString() in listOf("已触发测试震动", "手机系统触感反馈已关闭", "这台设备没有振动马达") } }
+                await { nodes().any { it.text?.toString() in listOf("已发送测试震动", "这台设备没有振动马达") } }
                 saveUiScreenshot("key-feedback-settings")
                 val offToggle = nodes().single { it.contentDescription?.toString() == "按键震动反馈" }
                 tapNode(offToggle)
@@ -381,13 +381,14 @@ class DeviceTest {
         } }
     }
 
-    @Test fun keyFeedbackUsesVibratorServiceAndHonorsSettings() {
+    @Test fun keyFeedbackUsesVibratorServiceWithSystemTouchFeedbackOff() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val automation = instrumentation.uiAutomation
         fun shell(command: String): String = automation.executeShellCommand(command).use { descriptor ->
             android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).bufferedReader().use { it.readText().trim() }
         }
         assumeTrue("system feedback settings are only changed on an isolated emulator", shell("getprop ro.kernel.qemu") == "1")
+        assumeTrue(android.os.Build.VERSION.SDK_INT >= 33)
         val previous = listOf("haptic_feedback_enabled", "haptic_feedback_intensity").associateWith { shell("settings get system $it") }
         val context = instrumentation.targetContext
         assertEquals(android.content.pm.PackageManager.PERMISSION_GRANTED,
@@ -395,7 +396,7 @@ class DeviceTest {
         val vibrator = context.getSystemService(android.os.VibratorManager::class.java).defaultVibrator
         assertTrue("validation emulator requires a simulated vibrator", vibrator.hasVibrator())
         fun records() = shell("dumpsys vibrator_manager").lineSequence()
-            .filter { it.contains("com.yuncii.tapdeck") && it.contains("status: finished") && it.contains("Usage=TOUCH") }.toList()
+            .filter { it.contains("com.yuncii.tapdeck") && it.contains("status: finished") && it.contains("Usage=PHYSICAL_EMULATION") }.toList()
         try {
             shell("settings put system haptic_feedback_enabled 1")
             shell("settings put system haptic_feedback_intensity 2")
@@ -411,7 +412,7 @@ class DeviceTest {
                     }
                     await { records() != before }
                     val dump = shell("dumpsys vibrator_manager")
-                    assertTrue("feedback was not classified as touch: $dump", dump.contains("TOUCH"))
+                    assertTrue("feedback was not classified as physical emulation: $dump", dump.contains("PHYSICAL_EMULATION"))
                     SystemClock.sleep(150)
                 }
                 val beforeDisabled = records()
@@ -419,20 +420,25 @@ class DeviceTest {
                 scenario.onActivity { activity ->
                     assertEquals(FeedbackResult.AppDisabled, activity.window.decorView.keyFeedback(KeyFeedback.Press, controller))
                 }
+                SystemClock.sleep(150)
+                assertEquals("app-disabled feedback reached the vibrator", beforeDisabled, records())
                 enabled = true
                 shell("settings put system haptic_feedback_enabled 0")
-                assertEquals(FeedbackResult.SystemDisabled, controller.availability())
+                SystemClock.sleep(150)
+                assertEquals(FeedbackResult.Requested, controller.availability())
                 scenario.onActivity { activity ->
-                    assertEquals(FeedbackResult.SystemDisabled, activity.window.decorView.keyFeedback(KeyFeedback.Press, controller))
+                    assertEquals(FeedbackResult.Requested, activity.window.decorView.keyFeedback(KeyFeedback.Press, controller))
                 }
+                await { records() != beforeDisabled }
+                val beforeIntensityOff = records()
                 shell("settings put system haptic_feedback_enabled 1")
                 shell("settings put system haptic_feedback_intensity 0")
-                assertEquals(FeedbackResult.SystemDisabled, controller.availability())
-                scenario.onActivity { activity ->
-                    assertEquals(FeedbackResult.SystemDisabled, activity.window.decorView.keyFeedback(KeyFeedback.LongPress, controller))
-                }
                 SystemClock.sleep(150)
-                assertEquals("disabled feedback reached the vibrator", beforeDisabled, records())
+                assertEquals(FeedbackResult.Requested, controller.availability())
+                scenario.onActivity { activity ->
+                    assertEquals(FeedbackResult.Requested, activity.window.decorView.keyFeedback(KeyFeedback.LongPress, controller))
+                }
+                await { records() != beforeIntensityOff }
             }
         } finally {
             for ((key, value) in previous) shell(if (value == "null") "settings delete system $key" else "settings put system $key $value")
@@ -579,6 +585,7 @@ class DeviceTest {
                 }
                 SystemClock.sleep(200)
                 var bounds = Rect()
+                var shortcutScale = 1f
                 scenario.onActivity { activity ->
                     val viewport = activity.findViewById<View>(R.id.controller_regions)
                     val m = ControllerLayout.measure(viewport.width, viewport.height)
@@ -601,6 +608,7 @@ class DeviceTest {
                     assertEquals(panelTop, panel.top)
                     val location = IntArray(2); shortcut.getLocationOnScreen(location)
                     bounds = Rect(location[0], location[1], location[0] + shortcut.width, location[1] + shortcut.height)
+                    shortcutScale = m.scale
                     val g = VoiceGeometry(mic.width.toFloat(), mic.height.toFloat(), mic.width * m.scale)
                     val center = mic.ballCenter()
                     assertTrue(center.second - g.radius - g.halo >= g.modeHeight)
@@ -615,6 +623,17 @@ class DeviceTest {
                     .filter { it.contentDescription?.startsWith("快捷键 ") == true }
                 assertEquals(count, nodes.size)
                 val rects = nodes.map { it.refresh(); Rect().also(it::getBoundsInScreen) }
+                val expectedGap = bounds.width() * 0.01f
+                val expectedVerticalGap = expectedGap * shortcutScale
+                assertEquals("shortcut left margin", expectedGap, (rects.minOf { it.left } - bounds.left).toFloat(), 1.5f)
+                assertEquals("shortcut right margin", expectedGap, (bounds.right - rects.maxOf { it.right }).toFloat(), 1.5f)
+                assertEquals("shortcut bottom margin", expectedVerticalGap, (bounds.bottom - rects.maxOf { it.bottom }).toFloat(), 1.5f)
+                val rowRects = rects.groupBy { it.top }.toSortedMap().values.map { row -> row.sortedBy { it.left } }
+                for (row in rowRects) for ((left, right) in row.zipWithNext()) {
+                    assertEquals("shortcut column gap", expectedGap, (right.left - left.right).toFloat(), 1.5f)
+                }
+                if (rowRects.size == 2) assertEquals("shortcut row gap", expectedVerticalGap,
+                    (rowRects[1][0].top - rowRects[0][0].bottom).toFloat(), 1.5f)
                 saveUiScreenshot("shortcuts-$count")
                 assertEquals(if (count > 4) 2 else 1, rects.map { it.top }.distinct().size)
                 rects.forEachIndexed { i, r ->
@@ -796,6 +815,111 @@ class DeviceTest {
             InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
             scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
             scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        }
+    }
+
+    private class RecordingSocket : okhttp3.WebSocket {
+        val messages = java.util.concurrent.CopyOnWriteArrayList<JsonObject>()
+        override fun request() = okhttp3.Request.Builder().url("http://127.0.0.1/").build()
+        override fun queueSize() = 0L
+        override fun send(text: String): Boolean { messages += Json.parseToJsonElement(text).jsonObject; return true }
+        override fun send(bytes: okio.ByteString) = true
+        override fun close(code: Int, reason: String?) = true
+        override fun cancel() {}
+    }
+
+    private fun withVoiceTestClient(block: (TapClient, RecordingSocket, MutableStateFlow<ClientState>) -> Unit) {
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as android.app.Application
+        val client = TapClient(app, scope)
+        val socket = RecordingSocket()
+        client.javaClass.getDeclaredField("socket").apply { isAccessible = true }.set(client, socket)
+        client.javaClass.getDeclaredField("connected").apply { isAccessible = true }.setBoolean(client, true)
+        client.setForeground(true)
+        @Suppress("UNCHECKED_CAST")
+        val state = client.javaClass.getDeclaredField("mutable").apply { isAccessible = true }.get(client) as MutableStateFlow<ClientState>
+        try { block(client, socket, state) } finally {
+            client.close()
+            scope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+        }
+    }
+
+    @Test fun toggleVoiceStopsAndConsumesTouchpadClick() {
+        withVoiceTestClient { client, socket, state ->
+            fun types() = socket.messages.map { it.str("type") }
+            for (phase in listOf("preparing", "transmitting")) {
+                assertTrue(client.startMic("toggle"))
+                val id = socket.messages.last().str("recording")
+                state.value = state.value.copy(mic = phase, level = 0.8f)
+                socket.messages.clear()
+                client.click("left")
+                assertEquals(listOf("mic_stop"), types())
+                assertEquals(id, socket.messages.single().str("recording"))
+                assertEquals("stopping", state.value.mic)
+                assertEquals(0f, state.value.level)
+                client.click("right")
+                assertEquals("clicks while draining must not interrupt the input method", listOf("mic_stop"), types())
+                client.finishMic("old-recording")
+                assertEquals("stopping", state.value.mic)
+                client.finishMic(id)
+                assertEquals("idle", state.value.mic)
+                assertEquals("", state.value.micMode)
+                socket.messages.clear()
+                client.click("left")
+                assertEquals(listOf("mouse_button", "mouse_button"), types())
+                assertTrue(socket.messages[0]["down"]!!.jsonPrimitive.boolean)
+                assertFalse(socket.messages[1]["down"]!!.jsonPrimitive.boolean)
+            }
+            assertTrue(client.startMic("toggle"))
+            val id = socket.messages.last().str("recording")
+            socket.messages.clear()
+            client.button("left", true)
+            client.finishMic(id)
+            client.button("left", true) // A repeated down cannot escape a consumed press.
+            client.button("left", false)
+            assertEquals(listOf("mic_stop"), types())
+            assertTrue(client.startMic("hold"))
+            val holdId = socket.messages.last().str("recording")
+            socket.messages.clear()
+            client.click("left")
+            assertEquals("hold-to-talk must still allow mouse input", listOf("mouse_button", "mouse_button"), types())
+            assertEquals("preparing", state.value.mic)
+            client.finishMic(id)
+            assertEquals("old stop cannot end a new recording", "preparing", state.value.mic)
+            client.finishMic(holdId)
+        }
+    }
+
+    @Test fun pcVoiceStopReleasesRecorderAndIgnoresStaleReplies() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.uiAutomation.grantRuntimePermission(instrumentation.targetContext.packageName, android.Manifest.permission.RECORD_AUDIO)
+        DeviceActivity().use {
+            withVoiceTestClient { client, socket, state ->
+                assertTrue(client.startMic("toggle"))
+                val id = socket.messages.last().str("recording")
+                // Exercise the real AudioRecord without creating a UDP audio session.
+                client.javaClass.getDeclaredField("recordingRequested").apply { isAccessible = true }.setBoolean(client, false)
+                val recorder = client.javaClass.getDeclaredField("recorder").apply { isAccessible = true }.get(client) as MicCapture
+                recorder.start()
+                val thread = recorder.javaClass.getDeclaredField("thread").apply { isAccessible = true }.get(recorder) as Thread
+                state.value = state.value.copy(mic = "transmitting", level = 0.8f)
+                assertTrue(thread.isAlive)
+                client.finishMic("stale-recording")
+                assertTrue(thread.isAlive)
+                assertEquals("transmitting", state.value.mic)
+                client.finishMic(id)
+                await { !thread.isAlive }
+                assertEquals("idle", state.value.mic)
+                assertEquals("", state.value.micMode)
+                assertEquals(0f, state.value.level)
+                assertTrue(client.startMic("toggle"))
+                val newId = socket.messages.last().str("recording")
+                client.finishMic(id)
+                assertEquals("preparing", state.value.mic)
+                client.finishMic(newId, "测试录音错误")
+                assertEquals("idle", state.value.mic)
+                assertEquals("测试录音错误", state.value.error)
+            }
         }
     }
 

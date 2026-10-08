@@ -15,4 +15,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Android build failed' }
     New-Item -ItemType Directory -Path (Join-Path $taskProjectRoot 'dist') -Force | Out-Null
     Copy-Item '.\app\build\outputs\apk\debug\app-debug.apk' (Join-Path $taskProjectRoot 'dist\TapDeck-debug.apk') -Force
+    $taskApkMetadata = Get-Content -Raw -LiteralPath '.\app\build\outputs\apk\debug\output-metadata.json' | ConvertFrom-Json
+    $taskApkElement = @($taskApkMetadata.elements | Where-Object { $_.outputFile -eq 'app-debug.apk' })
+    if ($taskApkElement.Count -ne 1 -or $taskApkElement[0].versionName -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') { throw 'Android APK version metadata missing or invalid' }
+    $taskVersionedApk = Join-Path $taskProjectRoot ('dist\TapDeck-' + $taskApkElement[0].versionName + '.apk')
+    Copy-Item -LiteralPath '.\app\build\outputs\apk\debug\app-debug.apk' -Destination $taskVersionedApk -Force
+    Write-Host ('Android 安装包：' + $taskVersionedApk)
 } finally { Pop-Location }

@@ -89,17 +89,21 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
     private val audio = Channel<ByteArray>(6)
     private var recording = ""
     private var recordingRequested = false
+    private val voiceMouseButtons = mutableSetOf<String>()
     private val recorder = MicCapture(frame = { pcm, pos, level ->
         val id = synchronized(lock) { if (!recordingRequested || !connected) return@MicCapture; recording }
         if (id.isEmpty()) return@MicCapture
         val body = ByteBuffer.allocate(976).order(ByteOrder.LITTLE_ENDIAN).putLong(id.toULong(16).toLong()).putLong(pos).put(pcm).array()
-        audio.trySend(body)
-        if (pos % 4800L == 0L) mutable.update { it.copy(level = level) }
+        synchronized(lock) {
+            if (!recordingRequested || recording != id) return@MicCapture
+            audio.trySend(body)
+            if (pos % 4800L == 0L) mutable.update { it.copy(level = level) }
+        }
     }, onError = { reason -> stopMic(true); mutable.update { it.copy(error = reason) } })
     private val http = OkHttpClient.Builder().connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS).readTimeout(5, java.util.concurrent.TimeUnit.SECONDS).followRedirects(false).followSslRedirects(false).build()
     init {
         scope.launch(Dispatchers.IO) { for ((gen, m) in movement) synchronized(lock) { if (connected && gen == generation) runCatching { val bytes = mouseCodec!!.seal(m.bytes()); udp!!.send(DatagramPacket(bytes, bytes.size, target, udpPort)) }.onFailure { Log.w("TapDeck", "mouse UDP failed", it) } } }
-        scope.launch(Dispatchers.IO) { for (body in audio) synchronized(lock) { if (connected && recording.isNotEmpty() && ByteBuffer.wrap(body).order(ByteOrder.LITTLE_ENDIAN).long == recording.toULong(16).toLong()) runCatching { val bytes = audioCodec!!.seal(body); udp!!.send(DatagramPacket(bytes, bytes.size, target, udpPort)) }.onFailure { Log.w("TapDeck", "audio UDP failed", it) } } }
+        scope.launch(Dispatchers.IO) { for (body in audio) synchronized(lock) { if (connected && recordingRequested && recording.isNotEmpty() && ByteBuffer.wrap(body).order(ByteOrder.LITTLE_ENDIAN).long == recording.toULong(16).toLong()) runCatching { val bytes = audioCodec!!.seal(body); udp!!.send(DatagramPacket(bytes, bytes.size, target, udpPort)) }.onFailure { Log.w("TapDeck", "audio UDP failed", it) } } }
         registerNetworkCallback()
     }
     private fun registerNetworkCallback() {
@@ -278,13 +282,8 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
                                 try { recorder.start(); mutable.update { it.copy(mic = "transmitting", error = "") } } catch (e: Exception) { stopMic(true); mutable.update { it.copy(error = e.message ?: "录音失败") } }
                             } else send(message("mic_abort", "recording" to m.str("recording").j()))
                         }
-                        "mic_error" -> {
-                            val matches = synchronized(lock) {
-                                if (m.str("recording") != recording) false else { recordingRequested = false; recording = ""; true }
-                            }
-                            if (matches) { recorder.stop(); mutable.update { it.copy(mic = "idle", micMode = "", level = 0f, error = m.str("reason")) } }
-                        }
-                        "mic_stopped" -> synchronized(lock) { if (m.str("recording") == recording) { recording = ""; recordingRequested = false; mutable.update { it.copy(mic = "idle", micMode = "", level = 0f) } } }
+                        "mic_error" -> finishMic(m.str("recording"), m.str("reason"))
+                        "mic_stopped" -> finishMic(m.str("recording"))
                         "error" -> {
                             if (m.str("code") == "pairing_revoked") { revokePair(gen, m.str("reason")); return }
                             if (m.str("code") == "version_mismatch") reconnect = false
@@ -328,7 +327,7 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
         }
     }
     fun disconnect(reason: String = "未连接") {
-        stopMic(true); synchronized(lock) { generation++; connected = false; recordingRequested = false; recording = ""; updateWifiLock(); socket?.cancel(); socket = null; udp?.close(); udp = null }
+        stopMic(true); synchronized(lock) { generation++; connected = false; recordingRequested = false; recording = ""; voiceMouseButtons.clear(); updateWifiLock(); socket?.cancel(); socket = null; udp?.close(); udp = null }
         heartbeat?.cancel(); mutable.update { it.copy(connected = false, mic = "idle", micMode = "", level = 0f, pairing = "", status = reason, touchpad = TouchpadCapabilities()) }
     }
     fun forget() { synchronized(lock) { desiredConnection++; reconnect = false; retryAt = 0L; retryCount = 0; reconnectJob?.cancel(); peer = null }; disconnect(); scope.launch { pairingPersistence.withLock { store.clear() } } }
@@ -344,11 +343,26 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
         epoch++
         return true
     }
-    override fun button(name: String, down: Boolean) = synchronized(lock) {
-        barrier("mouse_button", "button" to name.j(), "down" to down.j())
-        Unit
+    override fun button(name: String, down: Boolean) {
+        val finishVoice = synchronized(lock) {
+            if (name in voiceMouseButtons) {
+                if (!down) voiceMouseButtons.remove(name)
+                return
+            }
+            val current = mutable.value
+            if (down && current.micMode == "toggle" && current.mic in listOf("preparing", "transmitting", "stopping")) {
+                voiceMouseButtons.add(name)
+                true
+            } else {
+                barrier("mouse_button", "button" to name.j(), "down" to down.j())
+                false
+            }
+        }
+        // 与快捷键一致：这一轮按下/抬起仅用于结束单击录音，避免点击提前打断输入法。
+        // recorder.stop() 会等待采音线程，必须放在连接锁外。
+        if (finishVoice) stopMic()
     }
-    override fun click(name: String): Unit = synchronized(lock) { button(name, true); button(name, false) }
+    override fun click(name: String) { button(name, true); button(name, false) }
     private fun touchpadNotice(reason: String) {
         mutable.update { it.copy(error = reason) }
         val now = SystemClock.elapsedRealtime()
@@ -421,6 +435,20 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
             return@synchronized false
         }
         true
+    }
+    internal fun finishMic(id: String, reason: String? = null) {
+        synchronized(lock) {
+            if (id.isEmpty() || id != recording) return
+            recordingRequested = false
+            while (audio.tryReceive().isSuccess) { }
+            mutable.update { it.copy(mic = "stopping", level = 0f) }
+        }
+        recorder.stop()
+        synchronized(lock) {
+            if (recording != id) return
+            recording = ""
+            mutable.update { it.copy(mic = "idle", micMode = "", level = 0f, error = reason ?: it.error) }
+        }
     }
     fun stopMic(abort: Boolean = false) {
         val id = synchronized(lock) {

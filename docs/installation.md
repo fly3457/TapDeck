@@ -15,7 +15,13 @@ App 内扫码使用 [ZXing Android Embedded](https://github.com/journeyapps/zxin
 3. 对比复制前后的 SHA-256，从 Gradle `output-metadata.json` 生成内嵌版本清单。
 4. 运行 Go 测试、`go vet`，构建 Windows EXE。APK 缺失、Android 失败或哈希不一致均终止发布。
 
-当前 Android `versionName=0.3.3`、`versionCode=6`，保留 `com.yuncii.tapdeck` 及本机原有开发签名。网页和 PC“设置与状态”显示版本及完整 SHA-256；`TapDeck-debug.exe --apk-info` 可核对内嵌信息。换构建机时必须保留相同签名密钥，才能覆盖已有安装。主界面说明见 [android-ui.md](android-ui.md)，对应单 EXE 输出至 `dist/0.3.3`。双指缩放和三指窗口操作需要两端更新：退出旧托盘程序后启动新版 EXE，再覆盖安装 Android APK。连接旧电脑端时，App 会提示新手势需要升级。
+当前 Android `versionName=0.3.7`、`versionCode=10`，保留 `com.yuncii.tapdeck` 及本机原有开发签名。APK 文件名为 `TapDeck-0.3.7.apk`；独立 Android 构建、Windows 交付目录和内嵌下载均使用这一命名，另保留 `TapDeck-debug.apk` 兼容副本。手机“连接与设备设置”标题下显示安装版本，网页和 PC 显示内嵌版本及完整 SHA-256。`TapDeck-debug.exe --version` 输出 PC 版本，`--apk-info` 可核对两端版本、下载文件名和内嵌哈希。Windows 构建从同一份 Gradle 元数据注入版本，避免两端手工维护产生差异。
+
+换构建机时必须保留相同签名密钥，才能覆盖已有安装。主界面说明见 [android-ui.md](android-ui.md)，本次单 EXE 输出至 `dist/0.3.7`。更新时退出旧托盘程序后启动新版 EXE，再覆盖安装 Android APK。连接不支持双指缩放和三指窗口操作的旧电脑端时，App 会提示新手势需要升级。
+
+## PC 关于与手机输入测试
+
+PC“关于”页显示 Windows 版本、内置 Android 版本、应用用途、支持的平台、项目主页和许可说明，下方提供可滚动的多行文本输入框。“开始输入测试”让输入框获得焦点，再使用手机键盘或语音输入；“清空”清除测试文本并把焦点放回输入框。文本只用于当前窗口的临时测试，不写入配置。语音识别仍由电脑当前输入法完成，需按“语音”页配置热键与音频路由。
 
 ## 已配对设备
 
@@ -53,4 +59,4 @@ VB-CABLE 来自 [VB-Audio / Vincent Burel](https://vb-audio.com/Cable/)，是 do
 
 Windows 官方构建完成 Go／Kotlin 单元测试和 `go vet`。默认自动构建跳过会实际修改本机音量、开机自启注册表的两项测试，其余测试执行。本机已有 VB-CABLE，检测结果为可用；没有重复运行安装向导。
 
-仍需在干净 Windows 11 x64 环境人工验证离线安装、UAC 取消、重启后端点可用，以及新版手机传音进入 CABLE Output。本机无可用干净虚拟机，新版 APK 真机覆盖升级、凭据保留与系统扫码／网页唤起由用户实机验收；已确认新旧 APK 签名相同、包名相同且 versionCode 递增。0.3.1–0.3.3 使用隔离的 API 34 模拟器验收布局和交互，结果及历史真机记录见 [verification.md](verification.md)，历史结果不作为本轮实机结论。
+仍需在干净 Windows 11 x64 环境人工验证离线安装、UAC 取消、重启后端点可用，以及新版手机传音进入 CABLE Output。本机无可用干净虚拟机，新版 APK 真机覆盖升级、凭据保留与系统扫码／网页唤起由用户实机验收；构建继续使用相同包名和签名，versionCode 递增。当前使用隔离的 API 34 模拟器验收布局和交互，结果及历史真机记录见 [verification.md](verification.md)，历史结果不作为本轮实机结论。
