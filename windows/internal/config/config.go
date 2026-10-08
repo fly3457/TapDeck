@@ -45,8 +45,8 @@ type Config struct {
 
 func Default() Config {
 	return Config{SchemaVersion: SchemaVersion, Revision: 1, HTTPPort: 41080, WSSPort: 41443, UDPPort: 41444,
-		Shortcuts: []Shortcut{{"复制", "Ctrl+C", true}, {"粘贴", "Ctrl+V", true}, {"撤销", "Ctrl+Z", true}, {"回车", "Enter", true},
-			{"快捷键 5", "", false}, {"快捷键 6", "", false}, {"快捷键 7", "", false}, {"快捷键 8", "", false}},
+		Shortcuts: []Shortcut{{"复制", "Ctrl+C", true}, {"粘贴", "Ctrl+V", true}, {"撤销", "Ctrl+Z", true}, {"说话", "Ctrl+L", true},
+			{"快捷键 5", "Left", true}, {"快捷键 6", "Up", true}, {"快捷键 7", "Down", true}, {"快捷键 8", "Right", true}},
 		Voice: Voice{Profiles: DefaultVoiceProfiles(), HoldKey: "RightAlt", ToggleStartKey: "RightCtrl+L", ToggleStopKey: "RightCtrl+L", StopDelayMS: 200}, Gain: 1, Sensitivity: PointerBaseSensitivity, NaturalScroll: true, KeyboardBackend: "auto"}
 }
 func Directory() string { return filepath.Join(os.Getenv("LOCALAPPDATA"), "TapDeck") }
@@ -86,7 +86,10 @@ func Load(dir string) (Config, error) {
 		for i := range c.Shortcuts {
 			c.Shortcuts[i].Enabled = true
 		}
-		c.Shortcuts = append(c.Shortcuts, Default().Shortcuts[4:]...)
+		// New-install defaults must not enable extra shortcuts during an upgrade.
+		for len(c.Shortcuts) < ShortcutCount {
+			c.Shortcuts = append(c.Shortcuts, Shortcut{Label: fmt.Sprintf("快捷键 %d", len(c.Shortcuts)+1)})
+		}
 		switch old.Voice.Mode {
 		case "", "mic":
 		case "hold":

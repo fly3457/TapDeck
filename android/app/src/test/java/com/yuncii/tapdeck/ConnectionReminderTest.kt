@@ -12,7 +12,7 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ConnectionReminderTest {
-    @Test fun startsEveryThreeSecondsAndReturnsToBaseline() = runTest {
+    @Test fun startsThreeDampedBouncesEveryThreeSecondsAndReturnsToBaseline() = runTest {
         val events = mutableListOf<Pair<Long, Float>>()
         val job = launch {
             ConnectionReminder.run { target, duration ->
@@ -22,9 +22,10 @@ class ConnectionReminderTest {
         }
         advanceTimeBy(2999)
         assertTrue(events.isEmpty())
-        advanceTimeBy(3721)
+        advanceTimeBy(4001)
         runCurrent()
-        assertEquals(listOf(3000L to -1f, 3180L to 0f, 6000L to -1f, 6180L to 0f), events)
+        val firstCycle = listOf(3000L to -1f, 3220L to 0f, 3440L to -0.5f, 3595L to 0f, 3750L to -0.25f, 3860L to 0f)
+        assertEquals(firstCycle + firstCycle.map { (time, target) -> time + 3000L to target }, events)
         job.cancelAndJoin()
     }
 

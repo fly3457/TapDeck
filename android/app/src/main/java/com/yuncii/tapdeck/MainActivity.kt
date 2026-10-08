@@ -14,7 +14,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -458,7 +458,11 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(reminderEnabled) {
             jump.snapTo(0f)
             if (reminderEnabled) ConnectionReminder.run { target, duration ->
-                jump.animateTo(target, tween(durationMillis = duration, easing = FastOutSlowInEasing))
+                // Slow down toward the apex, then accelerate toward the baseline.
+                val easing = Easing { fraction ->
+                    if (target < 0f) 1f - (1f - fraction) * (1f - fraction) else fraction * fraction
+                }
+                jump.animateTo(target, tween(durationMillis = duration, easing = easing))
             }
         }
         Row(

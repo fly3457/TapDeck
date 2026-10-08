@@ -96,6 +96,7 @@ func TestEnabledShortcutValidation(t *testing.T) {
 		t.Fatal("zero shortcuts allowed")
 	}
 	c.Shortcuts[7].Enabled = true
+	c.Shortcuts[7].Chord = ""
 	if c.Validate() == nil {
 		t.Fatal("unconfigured enabled shortcut allowed")
 	}

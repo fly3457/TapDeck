@@ -12,7 +12,7 @@ function Invoke-TapDeckDevice([string[]]$Arguments) {
 if ((Invoke-TapDeckDevice -Arguments @('shell', 'getprop', 'ro.kernel.qemu') | Out-String).Trim() -ne '1') {
     throw 'This matrix changes display settings and must run on an Android emulator.'
 }
-if (-not $OutputDirectory) { $OutputDirectory = Join-Path $taskProjectRoot 'dist\0.3.10\screenshots' }
+if (-not $OutputDirectory) { $OutputDirectory = Join-Path $taskProjectRoot 'dist\0.3.11\screenshots' }
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 if (-not $SkipBuild) {
