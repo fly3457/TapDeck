@@ -17,18 +17,6 @@ $taskBundledCable = Join-Path $taskProjectRoot 'windows\internal\vbcable\assets\
 if ((Get-FileHash -LiteralPath $taskBundledCable -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'b950e39f01af1d04ea623c8f6d8eb9b6ea5c477c637295fabf20631c85116bfb') { throw 'Bundled VB-CABLE pack hash mismatch' }
 Push-Location (Join-Path $taskProjectRoot 'windows')
 try {
-    # Use the verified, fixed-version module cache when available. Running an
-    # explicit @version otherwise queries deprecation metadata on every build.
-    $taskGoCache = (go env GOMODCACHE).Trim()
-    $taskRsrcSource = Join-Path $taskGoCache 'github.com\akavel\rsrc@v0.10.2'
-    if (Test-Path (Join-Path $taskRsrcSource 'go.mod')) {
-        $taskManifest = Join-Path $taskProjectRoot 'windows\cmd\tapdeck\app.manifest'
-        $taskResource = Join-Path $taskProjectRoot 'windows\cmd\tapdeck\rsrc.syso'
-        Push-Location $taskRsrcSource
-        try { go run . -manifest $taskManifest -o $taskResource } finally { Pop-Location }
-    } else { go run github.com/akavel/rsrc@v0.10.2 -manifest cmd/tapdeck/app.manifest -o cmd/tapdeck/rsrc.syso }
-    if ($LASTEXITCODE -ne 0) { throw 'Manifest compilation failed' }
-    Copy-Item -LiteralPath 'cmd\tapdeck\rsrc.syso' -Destination 'cmd\hidprobe\rsrc.syso' -Force
     # 把编译好的 Android 安装包放进 embed 目录，接收端就能在配对网页上给出下载二维码。
     $taskApkDir = Join-Path $taskProjectRoot 'windows\internal\apkdist\assets'
     New-Item -ItemType Directory -Force -Path $taskApkDir | Out-Null
@@ -41,6 +29,8 @@ try {
     if ($taskApkElement.Count -ne 1) { throw 'Android APK version metadata missing or ambiguous' }
     $taskVersion = $taskApkElement[0].versionName
     if ($taskVersion -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') { throw 'Invalid release version' }
+    go run ./cmd/winresources -version $taskVersion
+    if ($LASTEXITCODE -ne 0) { throw 'Windows resource compilation failed' }
     $taskApkName = 'TapDeck-' + $taskVersion + '.apk'
     $taskApkHash = (Get-FileHash -LiteralPath $taskApkSource -Algorithm SHA256).Hash.ToLowerInvariant()
     $taskEmbeddedApk = Join-Path $taskApkDir $taskApkName
@@ -58,10 +48,25 @@ try {
     $taskVersionFlags = '-X main.appVersion=' + $taskVersion
     $taskLinkFlags = '-s -w ' + $taskVersionFlags
     if (-not $Console) { $taskLinkFlags += ' -H=windowsgui' }
-    go build -trimpath -ldflags $taskLinkFlags -o (Join-Path $OutputDirectory 'TapDeck.exe') ./cmd/tapdeck
+    $taskReceiverName = 'TapDeck-' + $taskVersion + '.exe'
+    $taskDebugName = 'TapDeck-debug-' + $taskVersion + '.exe'
+    $taskProbeName = 'TapDeck-hidprobe-' + $taskVersion + '.exe'
+    go build -trimpath -ldflags $taskLinkFlags -o (Join-Path $OutputDirectory $taskReceiverName) ./cmd/tapdeck
     if ($LASTEXITCODE -ne 0) { throw 'Windows build failed' }
-    go build -trimpath -ldflags $taskVersionFlags -o (Join-Path $OutputDirectory 'TapDeck-debug.exe') ./cmd/tapdeck
+    go build -trimpath -ldflags $taskVersionFlags -o (Join-Path $OutputDirectory $taskDebugName) ./cmd/tapdeck
     if ($LASTEXITCODE -ne 0) { throw 'Windows console build failed' }
-    go build -trimpath -o (Join-Path $OutputDirectory 'TapDeck-hidprobe.exe') ./cmd/hidprobe
+    go build -trimpath -o (Join-Path $OutputDirectory $taskProbeName) ./cmd/hidprobe
     if ($LASTEXITCODE -ne 0) { throw 'HID diagnostic build failed' }
+    # Verify the Explorer Details fields, then keep stable names for existing scripts.
+    foreach ($taskArtifact in @(
+        @{ Name = $taskReceiverName; Alias = 'TapDeck.exe' },
+        @{ Name = $taskDebugName; Alias = 'TapDeck-debug.exe' },
+        @{ Name = $taskProbeName; Alias = 'TapDeck-hidprobe.exe' }
+    )) {
+        $taskArtifactPath = Join-Path $OutputDirectory $taskArtifact.Name
+        $taskFileVersion = (Get-Item -LiteralPath $taskArtifactPath).VersionInfo
+        if ($taskFileVersion.FileVersion -ne $taskVersion -or $taskFileVersion.ProductVersion -ne $taskVersion) { throw ('Windows version metadata mismatch: ' + $taskArtifact.Name) }
+        Copy-Item -LiteralPath $taskArtifactPath -Destination (Join-Path $OutputDirectory $taskArtifact.Alias) -Force
+        Write-Host ('Windows 程序：' + $taskArtifactPath)
+    }
 } finally { Pop-Location }

@@ -123,6 +123,8 @@ Android 使用 Kotlin，Windows 接收端使用 Go，控制协议为 v2。当前
 
 该入口先构建 Android 并运行 Kotlin 测试，从本次 Gradle 输出复制 `TapDeck-0.3.12.apk`、核对 SHA-256，再运行 Go 测试、`go vet` 和 Windows 构建。两端版本与 APK 文件名来自同一份 Gradle 元数据，同时保留 `TapDeck-debug.apk` 兼容副本。Android 失败、APK 缺失或哈希不一致时终止，不沿用旧 APK。签名密钥不随源码分发；覆盖既有 Android 安装须使用相同签名。
 
+Windows 生成 `TapDeck-0.3.12.exe`、`TapDeck-debug-0.3.12.exe` 和 `TapDeck-hidprobe-0.3.12.exe`；文件名、程序内版本与“属性 → 详细信息”中的文件版本／产品版本均自动取自同一份版本信息。不带版本号的 EXE 作为兼容副本保留，供现有脚本使用。
+
 Android 单独开发可用 [build-android.ps1](scripts/build-android.ps1)，模拟器矩阵可用 [test-android-ui.ps1](scripts/test-android-ui.ps1)。国际依赖连接失败时，先检查 Clash Verge 和 Anycast，Android 构建可加 `-UseLocalProxy` 使用本机 SOCKS5 1080。构建与内嵌规则见 [APK 分发说明](docs/apk-download.md)。
 
 ## 验证与当前范围

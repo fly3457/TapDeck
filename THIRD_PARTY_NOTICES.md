@@ -14,11 +14,15 @@ TapDeck 自有源码采用根目录 [MIT License](LICENSE)。第三方组件保�
 | [go-qrcode](https://github.com/skip2/go-qrcode) | da1b6568686e | MIT | [LICENSE](licenses/go-qrcode-LICENSE.txt) |
 | [golang.org/x/sys](https://cs.opensource.google/go/x/sys) | 0.48.0 | BSD-3-Clause | [LICENSE](licenses/x-sys-LICENSE.txt)、[PATENTS](licenses/x-sys-PATENTS.txt) |
 | [govaluate](https://github.com/Knetic/govaluate) | 3.0.0 | MIT | [LICENSE](licenses/govaluate-LICENSE.txt) |
-| [rsrc](https://github.com/akavel/rsrc)，构建资源工具 | 0.10.2 | MIT | [LICENSE](licenses/rsrc-LICENSE.txt) |
+| [winres](https://github.com/tc-hib/winres)，构建资源工具 | 0.3.1 | ISC | [LICENSE](licenses/winres-LICENSE.txt) |
+| [nfnt/resize](https://github.com/nfnt/resize)，资源工具依赖 | 83c6a9932646 | ISC | [LICENSE](licenses/nfnt-resize-LICENSE.txt) |
+| [golang.org/x/image](https://go.googlesource.com/image)，资源工具依赖 | 0.31.0 | BSD-3-Clause | [LICENSE](licenses/x-image-LICENSE.txt) |
 | [FakerInput](https://github.com/Ryochan7/FakerInput/releases/tag/v0.1.1)，内嵌驱动安装包 | 0.1.1 x64 | MIT | [LICENSE](windows/internal/driver/assets/LICENSE.FakerInput.txt)、[分发副本](licenses/FakerInput-LICENSE.txt) |
 | [VB-CABLE](https://vb-audio.com/Cable/)，内嵌完整官方原包 | Driver Pack45 | VB-Audio donationware / 专有许可 | [原包 readme](windows/internal/vbcable/assets/LICENSE.VB-CABLE.txt)、[官方分发条件](https://vb-audio.com/Services/licensing.htm) |
 
 内嵌 MSI 是未修改的上游签名安装包；来源、发布者及 SHA-256 记录在 `windows/internal/driver/assets/manifest.json`。HID 客户端依据公开的报告格式使用 Go 实现，接口参考 [FakerInputDll](https://github.com/Ryochan7/FakerInputDll)，不分发其源码或客户端 DLL。上游已归档，当前版本固定使用。
+
+`winres` 及其图像依赖只用于构建阶段生成资源，不作为运行时组件链接进接收端或 HID 工具。历史构建工具 `rsrc` 的许可副本继续保留在 `licenses/rsrc-LICENSE.txt`。
 
 ## Android 与构建工具
 

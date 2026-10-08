@@ -2,6 +2,17 @@
 
 测试日期：2026-10-06 至 2026-10-08。本记录区分已观察到的结果与尚未完成的验收，不把目标数值当作实测结果。
 
+## 0.3.12 Windows 文件名与文件属性版本
+
+2026-10-08 为 Windows 构建增加版本文件名，沿用本轮应用版本 0.3.12 / Android code 15。正式版、控制台诊断版及 HID 工具分别生成 `TapDeck-0.3.12.exe`、`TapDeck-debug-0.3.12.exe`、`TapDeck-hidprobe-0.3.12.exe`，并保留三个不带版本号的兼容副本。
+
+- 新构建资源工具从 Gradle 元数据取得版本，生成 VERSIONINFO；Windows 文件属性中的 `FileVersion`、`ProductVersion` 均为 `0.3.12`，数字版本为 `0.3.12.0`。正式构建脚本自动核对这些属性。
+- 读取三个实际 EXE 的 PE 资源，逐字节确认应用清单与原 `app.manifest` 一致，同时存在版本资源；原有 Common Controls、DPI 与 `asInvoker` 设置保留。
+- 三组带版本／兼容文件的 SHA-256 分别一致。带版本号的诊断版 `--version` 与 `--apk-info` 均正常，内嵌 APK 的版本和哈希保持本节下方记录的值。
+- 官方构建入口通过 Android 构建及 JVM 检查（54 项已有结果复用）、Go 测试、`go vet` 和三种 EXE 构建；沿用对系统音量与开机自启注册表两个动作测试的排除。未更改本机配对、系统配置或开机自启注册表。
+
+产物位于 `dist/0.3.12`；文件属性结果保存于 `windows-version-info.json`，全部 EXE／APK 的校验值更新至 `SHA256SUMS.txt`。本次构建日志为 `.tools/ui-validation/windows-0.3.12-versioned-build.log`，仅生成本地交付包。
+
 ## 0.3.12 第三组语音默认值与捐赠按钮精简
 
 2026-10-08 第三组默认名称由“GPT听写”改为“自定义语音输入”，长按触发、单击开始、单击结束三个热键字段全部留空；默认类型仍为长按、默认关闭。PC 与 Android 默认声明一致，已保存的 schema 3 配置保持原名称与按键，旧配置升级时新增的第三组采用新默认值。
