@@ -46,15 +46,47 @@ class KeyboardGeometryTest {
         }
     }
 
+    @Test fun touchRegionsSplitInternalGapsWithoutChangingFacesOrOuterMargins() {
+        for (width in listOf(320, 411, 640, 720, 1080, 1234, 1404, 2048)) {
+            for ((height, scale) in listOf((width * 0.60).toInt() to 1f, 130 to 0.4f)) {
+                val faces = KeyboardGeometry.measure(width, height, scale)
+                val targets = KeyboardGeometry.touchBounds(faces)
+                targets.forEachIndexed { rowIndex, row ->
+                    assertEquals(faces[rowIndex].first().left, row.first().left)
+                    assertEquals(faces[rowIndex].last().right, row.last().right)
+                    row.forEachIndexed { column, target ->
+                        val face = faces[rowIndex][column]
+                        assertTrue(target.left <= face.left && target.right >= face.right)
+                        assertTrue(target.top <= face.top && target.bottom >= face.bottom)
+                        if (column > 0) {
+                            val previousFace = faces[rowIndex][column - 1]
+                            val midpoint = previousFace.right + (face.left - previousFace.right) / 2
+                            assertEquals(midpoint, row[column - 1].right)
+                            assertEquals(midpoint, target.left)
+                        }
+                        if (rowIndex > 0) {
+                            val previousBottom = faces[rowIndex - 1].first().bottom
+                            val midpoint = previousBottom + (face.top - previousBottom) / 2
+                            assertEquals(midpoint, targets[rowIndex - 1].first().bottom)
+                            assertEquals(midpoint, target.top)
+                        }
+                    }
+                }
+                assertEquals(0, targets.first().first().top)
+                assertEquals(height, targets.last().first().bottom)
+            }
+        }
+    }
+
     @Test fun tinyAndAwkwardPixelSizesNeverProduceOverlapOrOutOfBoundsCells() {
         for (width in 0..1024) for (height in listOf(0, 1, 2, 3, 12, 39, 600)) {
             val layout = ControllerLayout.measure(width, height)
             val rows = KeyboardGeometry.measure(width, layout.panelContent, layout.scale)
-            rows.forEachIndexed { index, row ->
+            for (regions in listOf(rows, KeyboardGeometry.touchBounds(rows))) regions.forEachIndexed { index, row ->
                 row.forEachIndexed { column, cell ->
                     assertTrue("$width/$height: $cell", cell.width >= 0 && cell.height >= 0 && cell.left >= 0 && cell.right <= width && cell.top >= 0 && cell.bottom <= layout.panelContent)
                     if (column > 0) assertTrue(row[column - 1].right <= cell.left)
-                    if (index > 0) assertTrue(rows[index - 1].first().bottom <= cell.top)
+                    if (index > 0) assertTrue(regions[index - 1].first().bottom <= cell.top)
                 }
             }
             if (width > 0) assertTrue(abs(rows[0].last().right + rows[0].first().left - width) <= 1)

@@ -8,6 +8,8 @@ import (
 	d "github.com/lxn/walk/declarative"
 )
 
+const voiceHotkeyHintText = "热键：在手机端激活语音时触发，一般设置为PC端的语音输入法快捷键，留空则只传输音频。"
+
 type voiceProfileEditor struct {
 	enabled                *walk.CheckBox
 	name                   *walk.LineEdit

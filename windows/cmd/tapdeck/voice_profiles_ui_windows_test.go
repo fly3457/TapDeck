@@ -49,7 +49,7 @@ func TestVoiceProfileEditorUI(t *testing.T) {
 			d.Label{Text: "已连接：布局验证设备"},
 			d.TabWidget{Pages: []d.TabPage{{Title: "语音", Layout: d.VBox{}, Children: []d.Widget{
 				environmentWidget,
-				settingsSection("语音快捷键设置", 1, d.Label{Text: "名称：最多 8 个汉字 / 16 个英文字符。热键：留空仅传音。"}, widget,
+				settingsSection("语音快捷键设置", 1, d.Label{Text: "名称：最多 8 个汉字 / 16 个英文字符。"}, d.Label{Text: voiceHotkeyHintText}, widget,
 					d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.Label{Text: "尾音结束延迟 ms"}, d.NumberEdit{Value: float64(200), MinValue: 0, MaxValue: 1000}}}),
 			}}}}, d.PushButton{Text: "保存并同步配置"},
 		}}).Create(); err != nil {

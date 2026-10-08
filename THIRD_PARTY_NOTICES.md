@@ -2,6 +2,8 @@
 
 TapDeck 自有源码采用根目录 [MIT License](LICENSE)。第三方组件保留各自的许可证、版权及声明，不因项目的 MIT 许可证而改变。依赖的准确版本由 `windows/go.mod`、`windows/go.sum` 及 Android Gradle 配置定义。
 
+感谢 [Ryochan7 / FakerInput](https://github.com/Ryochan7/FakerInput) 的虚拟键盘，让豆包等输入法接收语音热键；感谢 [VB-Audio / VB-CABLE](https://vb-audio.com/Cable/) 的虚拟声卡，将手机音频接入 PC 麦克风输入。两者按需安装，VB-CABLE 是 donationware。使用步骤见[安装说明](docs/installation.md)，以下保留完整组件和许可信息。
+
 ## Windows
 
 | 组件 | 版本 | 许可证 | 保留的原文 |

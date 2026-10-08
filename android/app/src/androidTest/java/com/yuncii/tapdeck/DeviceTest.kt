@@ -681,22 +681,23 @@ class DeviceTest {
             val w = keyboardBounds.width().toDouble()
             val rows = rects.groupBy { it.top }.toSortedMap().values.map { row -> row.sortedBy { it.left } }
             assertEquals(listOf(10, 9, 9, 5), rows.map { it.size })
-            val widths = listOf(
-                List(10) { 0.089 }, List(9) { 0.089 },
-                listOf(0.1385) + List(7) { 0.089 } + 0.1385,
-                listOf(0.188, 0.089, 0.3365, 0.1385, 0.188),
-            )
+            val faces = KeyboardGeometry.measure(keyboardBounds.width(), keyboardBounds.height(), keyboardScale)
+            val targets = KeyboardGeometry.touchBounds(faces)
             rows.forEachIndexed { rowIndex, row ->
                 row.forEachIndexed { index, key ->
-                    assertEquals("key width $rowIndex/$index", w * widths[rowIndex][index], key.width().toDouble(), 2.0)
+                    val expected = targets[rowIndex][index]
+                    assertEquals("target left $rowIndex/$index", keyboardBounds.left + expected.left, key.left)
+                    assertEquals("target right $rowIndex/$index", keyboardBounds.left + expected.right, key.right)
+                    assertEquals("target top $rowIndex/$index", keyboardBounds.top + expected.top, key.top)
+                    assertEquals("target bottom $rowIndex/$index", keyboardBounds.top + expected.bottom, key.bottom)
                     assertEquals(row.first().bottom, key.bottom)
-                    if (index > 0) assertEquals("horizontal gap", w * 0.01, (key.left - row[index - 1].right).toDouble(), 2.0)
+                    if (index > 0) assertEquals("horizontal targets meet", row[index - 1].right, key.left)
                 }
                 val left = row.first().left - keyboardBounds.left
                 val right = keyboardBounds.right - row.last().right
                 assertEquals("centered row", left.toDouble(), right.toDouble(), 1.0)
                 assertEquals("side margin", w * if (rowIndex == 1) 0.0595 else 0.01, left.toDouble(), 2.0)
-                if (rowIndex > 0) assertEquals("vertical gap", w * 0.01 * keyboardScale, (row.first().top - rows[rowIndex - 1].first().bottom).toDouble(), 2.0)
+                if (rowIndex > 0) assertEquals("vertical targets meet", rows[rowIndex - 1].first().bottom, row.first().top)
             }
             assertEquals(keyboardBounds.top, rows.first().first().top)
             assertEquals(keyboardBounds.bottom, rows.last().first().bottom)
@@ -776,7 +777,7 @@ class DeviceTest {
             SystemClock.sleep(500)
             var region = Rect()
             scenario.onActivity { activity ->
-                uiState(activity).value = ClientState()
+                uiState(activity).value = ClientState(connected = true, status = "已连接")
                 val header = activity.findViewById<View>(R.id.connection_header)
                 val p = IntArray(2); header.getLocationOnScreen(p)
                 region = Rect(p[0] + (header.width * 0.875f).toInt(), p[1], p[0] + header.width, p[1] + header.height)
@@ -795,13 +796,19 @@ class DeviceTest {
                 assertTrue("missing ${if (connected) "green" else "orange"} connection icon", count > 5)
                 return sum.toFloat() / count
             }
+            SystemClock.sleep(200)
+            val baseline = iconCenter(true)
+            scenario.onActivity { activity -> uiState(activity).value = ClientState() }
+            SystemClock.sleep(200)
             val centers = mutableListOf<Float>()
             // A tablet screenshot can take longer than one animation frame. Observe up
             // to two reminder cycles so a slow capture does not miss the whole jump.
             val deadline = SystemClock.elapsedRealtime() + 7000
             while (SystemClock.elapsedRealtime() < deadline) {
                 centers += iconCenter(false)
-                if (centers.max() - centers.min() > 2f) break
+                // Include a baseline frame as well as a bounce; a slow tablet
+                // capture may first see the icon partway through its flight.
+                if (centers.max() - centers.min() > 2f && kotlin.math.abs(centers.max() - baseline) < 1f) break
                 SystemClock.sleep(45)
             }
             assertTrue("disconnected icon did not bounce: $centers", centers.max() - centers.min() > 2f)
@@ -810,7 +817,8 @@ class DeviceTest {
             val green = iconCenter(true)
             SystemClock.sleep(500)
             assertEquals(green, iconCenter(true), 0.1f)
-            assertEquals(centers.max(), green, 1f)
+            assertEquals(baseline, green, 0.1f)
+            assertEquals(baseline, centers.max(), 1f)
             val button = accessibilityNodes(automation.rootInActiveWindow).single { it.contentDescription?.startsWith("连接设置") == true }
             assertTrue(button.performAction(AccessibilityNodeInfo.ACTION_CLICK))
             SystemClock.sleep(250)
@@ -1209,6 +1217,104 @@ class DeviceTest {
         } finally {
             instrumentation.removeMonitor(monitor)
             kotlinx.coroutines.runBlocking { store.updateCatalog { originalCatalog } }
+        }
+    }
+
+    @Test fun keyboardGapsRouteToNearestKey() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val events = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val feedback = java.util.concurrent.CopyOnWriteArrayList<KeyFeedback>()
+        val hold = KeyHold({ events += "down $it" }, { events += "up $it" })
+        val connected = mutableStateOf(true)
+        val keyNames = listOf(
+            "Q W E R T Y U I O P".split(' '), "A S D F G H J K L".split(' '),
+            listOf("LeftShift", "Z", "X", "C", "V", "B", "N", "M", "Backspace"),
+            listOf("LeftCtrl", "Period", "Space", "LeftShift+Enter", "Enter"),
+        )
+        DeviceActivity().use { scenario ->
+            SystemClock.sleep(500)
+            scenario.onActivity { activity -> ViewModelProvider(activity)[TapViewModel::class.java].keyboardOn.value = true }
+            SystemClock.sleep(150)
+            lateinit var faces: List<List<KeyboardCellBounds>>
+            val origin = IntArray(2)
+            scenario.onActivity { activity ->
+                val viewport = activity.findViewById<View>(R.id.controller_regions)
+                val scale = ControllerLayout.measure(viewport.width, viewport.height).scale
+                val keyboard = activity.findViewById<ComposeView>(R.id.keyboard_region)
+                faces = KeyboardGeometry.measure(keyboard.width, keyboard.height, scale)
+                keyboard.getLocationOnScreen(origin)
+                keyboard.setContent {
+                    CompositionLocalProvider(LocalKeyFeedback provides { feedback.add(it) }) { MaterialTheme { CompactControls {
+                        KeyboardView(connected = connected.value, voiceActive = false, scale = scale, hold = hold,
+                            beginVoice = { error("short gap tap must not start voice") }, stopVoice = {})
+                    } } }
+                }
+            }
+            await { instrumentation.uiAutomation.rootInActiveWindow?.let { root ->
+                accessibilityNodes(root).count { it.contentDescription?.startsWith("Q 键") == true } == 1
+            } == true }
+            fun inject(action: Int, points: List<Pair<Float, Float>>, down: Long) {
+                val event = motion(down, action, points.map { (x, y) -> x + origin[0] to y + origin[1] })
+                assertTrue(instrumentation.uiAutomation.injectInputEvent(event, true)); event.recycle()
+            }
+            fun tap(point: Pair<Float, Float>, key: String) {
+                scenario.onActivity { hold.releaseAll(); events.clear(); feedback.clear() }
+                val down = SystemClock.uptimeMillis()
+                inject(MotionEvent.ACTION_DOWN, listOf(point), down); SystemClock.sleep(40)
+                inject(MotionEvent.ACTION_UP, listOf(point), down)
+                instrumentation.waitForIdleSync()
+                scenario.onActivity { hold.releaseAll() }
+                assertEquals("gap at $point must select $key once", listOf("down $key", "up $key"), events.toList())
+                assertEquals(listOf(KeyFeedback.Press), feedback.toList())
+            }
+            fun horizontalGap(row: Int, column: Int, fraction: Float): Pair<Float, Float> {
+                val left = faces[row][column]; val right = faces[row][column + 1]
+                return left.right + (right.left - left.right) * fraction to (left.top + left.bottom) / 2f
+            }
+            for (row in faces.indices) for (column in 0 until faces[row].lastIndex) {
+                tap(horizontalGap(row, column, 0.25f), keyNames[row][column])
+                tap(horizontalGap(row, column, 0.75f), keyNames[row][column + 1])
+            }
+            // Shared boundaries use [left, right): the exact midpoint belongs to the right key.
+            val q = faces[0][0]; val w = faces[0][1]
+            tap((q.right + (w.left - q.right) / 2).toFloat() to (q.top + q.bottom) / 2f, "W")
+            for (row in 0 until faces.lastIndex) {
+                val bottom = faces[row].first().bottom; val top = faces[row + 1].first().top
+                for ((index, cell) in faces[row].withIndex())
+                    tap((cell.left + cell.right) / 2f to bottom + (top - bottom) * 0.25f, keyNames[row][index])
+                for ((index, cell) in faces[row + 1].withIndex())
+                    tap((cell.left + cell.right) / 2f to bottom + (top - bottom) * 0.75f, keyNames[row + 1][index])
+            }
+            scenario.onActivity { hold.releaseAll(); events.clear(); feedback.clear() }
+            val leftGap = horizontalGap(0, 0, 0.25f)
+            var down = SystemClock.uptimeMillis()
+            inject(MotionEvent.ACTION_DOWN, listOf(leftGap), down); SystemClock.sleep(550)
+            inject(MotionEvent.ACTION_UP, listOf(leftGap), down); instrumentation.waitForIdleSync()
+            assertEquals(listOf("down 1", "up 1"), events.toList())
+            assertEquals(listOf(KeyFeedback.Press, KeyFeedback.LongPress), feedback.toList())
+            events.clear(); feedback.clear()
+            val ctrl = horizontalGap(3, 0, 0.25f); val c = horizontalGap(2, 2, 0.75f)
+            down = SystemClock.uptimeMillis()
+            inject(MotionEvent.ACTION_DOWN, listOf(ctrl), down); SystemClock.sleep(550)
+            inject(MotionEvent.ACTION_POINTER_DOWN or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), listOf(ctrl, c), down)
+            SystemClock.sleep(40)
+            inject(MotionEvent.ACTION_POINTER_UP or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), listOf(ctrl, c), down)
+            inject(MotionEvent.ACTION_UP, listOf(ctrl), down); instrumentation.waitForIdleSync()
+            assertEquals(listOf("down LeftCtrl", "down C", "up C", "up LeftCtrl"), events.toList())
+            events.clear(); feedback.clear()
+            val backspace = horizontalGap(2, 7, 0.75f)
+            down = SystemClock.uptimeMillis()
+            inject(MotionEvent.ACTION_DOWN, listOf(backspace), down); SystemClock.sleep(550)
+            assertEquals(listOf("down Backspace"), events.toList())
+            scenario.onActivity { connected.value = false }
+            await { events.toList() == listOf("down Backspace", "up Backspace") }
+            inject(MotionEvent.ACTION_UP, listOf(backspace), down)
+            val feedbackCount = feedback.size
+            down = SystemClock.uptimeMillis()
+            inject(MotionEvent.ACTION_DOWN, listOf(leftGap), down)
+            inject(MotionEvent.ACTION_UP, listOf(leftGap), down); instrumentation.waitForIdleSync()
+            assertEquals(2, events.size); assertEquals(feedbackCount, feedback.size)
+            scenario.onActivity { hold.releaseAll() }
         }
     }
 

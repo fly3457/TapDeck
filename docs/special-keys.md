@@ -1,6 +1,44 @@
-# 特殊按键：支持范围与音量键实现（2026-10-07）
+# 特殊按键
 
-本页记录特殊键的名称统一与音量实现。0.3.2 进一步修复“音量加减可以保存，但系统音量不变”：此前选择了枚举列表的第一个播放设备，而不是 Windows 默认播放设备。
+PC 快捷键支持手动填写、单键选择及“录入”。组合键用 `+` 连接，例如 `RightCtrl+L`、`Ctrl+Shift+Enter`。
+
+## 支持范围
+
+| 类别 | 按键 |
+|---|---|
+| 字母、数字 | A–Z、0–9、F1–F24 |
+| 修饰键 | 左右 Ctrl、Shift、Alt、Win；省略左右时采用左键 |
+| 编辑与导航 | Backspace、Esc、Tab、Space、Enter、Insert、Delete、Home、End、PageUp、PageDown、方向键 |
+| 系统键 | PrintScreen、ScrollLock、Pause |
+| 小键盘 | Numpad0–9、运算符、NumpadEnter |
+| 标点 | 分号、引号、反引号、加减号、逗号、句号、斜线、反斜线、方括号 |
+| 音量 | VolumeUp、VolumeDown、VolumeMute |
+| 媒体 | MediaNextTrack、MediaPrevTrack、MediaStop、MediaPlayPause |
+
+名称不区分大小写；`Back`、`Escape`、`Prior`、`Next`、`Return`、`VolUp` 等旧别名继续兼容。录入与发送共用 [keys.go](../windows/internal/input/keys.go) 的名称表。
+
+全键盘的 `…` 使用 `Ellipsis`，由 Unicode 软件输入发送；自动模式会选择软件后端，强制 HID 模式会提示不支持。其他标点支持 HID。
+
+## 按住与释放
+
+快捷键按下即保持组合键，抬手释放；长按方向键、退格等可由 Windows 重复。断开连接、切换 PC 或撤销设备时，只取消并释放对应会话的输入。
+
+单击语音录制中，第一次快捷键按下只结束录音；录音结束后再次按下才发送快捷键。开始录音会先释放手机仍按住的键。
+
+## 音量与限制
+
+音量加减及静音直接调用 Windows Core Audio，始终作用于**系统默认播放设备**，不跟随 TapDeck 的语音输出选择。每次按下只调整一步，需松手再按；没有默认设备时提示错误。自动、HID、软件三种发送方式行为一致。
+
+媒体键可以保存和发送，但效果取决于播放器及系统，尚未完成播放器实测。`Ctrl+Alt+Del` 等受保护的系统操作不保证有效；Fn 和系统截图行为取决于固件及 Windows。
+
+## 开发与诊断
+
+在 `windows` 目录运行 `go test ./...` 和 `go vet ./...`。观察接收按键可运行 `go run ./cmd/keywatch -seconds 10`；音量诊断可运行 `go run ./cmd/volkeycheck -chord VolumeUp`，会改变默认设备音量。
+
+当前结果见[验证记录](verification.md)，输入方式见[虚拟键盘](virtual-keyboard.md)。
+
+<details>
+<summary>历史按键与音量修复实测（2026-10-07）</summary>
 
 ## 0.3.2：跟随系统默认播放设备
 
@@ -83,31 +121,5 @@ TapDeck 里按键有两条链路：设置页“录入”对话框写入的文本
 
 `internal/input/volume_windows_test.go` 覆盖路由：音量键不会进入 SendInput、按住不重复、含修饰键的组合只注入修饰键、没有音量控制器时返回错误。
 
-## 4. 仍然受限的按键
 
-- **媒体键**（下一曲 / 上一曲 / 停止 / 播放暂停）与音量键同样属于“注入无效”的一类，本机未接播放器实测，因此 TapDeck 目前只对音量键走 Core Audio；媒体键可以保存和发送，但实际效果取决于系统是否响应注入事件，需要人工确认。
-- **`Ctrl+Alt+Del`**、**Win 组合键的部分系统级行为**受 Windows 保护，不承诺可用。
-- **`Fn`、`PrintScreen` 的系统截图行为**由固件 / 系统接管，TapDeck 只负责发送按键本身。
-
-## 5. 复现与验证命令
-
-```powershell
-cd windows
-go test ./...            # 含按键表、录入名称、音量路由与 Core Audio 实测
-go vet ./...
-```
-
-音量与静音验证需要本机存在默认播放设备；没有设备时 `NewVolumeControl` 返回“取系统默认播放设备失败”，音量键会明确报错而不是静默失效。
-
-可用以下诊断命令验证一次加减（会改变当前默认播放设备音量）：
-
-```powershell
-go run ./cmd/volkeycheck -chord VolumeUp
-go run ./cmd/volkeycheck -chord VolumeDown
-```
-
-观察「手机按键到底有没有到 PC」可以用 `cmd/keywatch`（轮询 `GetAsyncKeyState`，只报真实按下 / 抬起，与焦点窗口、输入法无关）：
-
-```powershell
-go run ./cmd/keywatch -seconds 10   # 这 10 秒内所有下按的虚拟键与时间戳
-```
+</details>

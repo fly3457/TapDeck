@@ -45,4 +45,24 @@ internal object KeyboardGeometry {
             }
         }
     }
+
+    /** Internal gaps are visual only: neighbours share them at a single pixel boundary. */
+    fun touchBounds(rows: List<List<KeyboardCellBounds>>): List<List<KeyboardCellBounds>> =
+        rows.mapIndexed { rowIndex, row ->
+            row.mapIndexed { column, cell ->
+                val top = if (rowIndex == 0) cell.top else {
+                    val previous = rows[rowIndex - 1].first().bottom
+                    previous + (cell.top - previous) / 2
+                }
+                val bottom = if (rowIndex == rows.lastIndex) cell.bottom else
+                    cell.bottom + (rows[rowIndex + 1].first().top - cell.bottom) / 2
+                val left = if (column == 0) cell.left else {
+                    val previous = row[column - 1].right
+                    previous + (cell.left - previous) / 2
+                }
+                val right = if (column == row.lastIndex) cell.right else
+                    cell.right + (row[column + 1].left - cell.right) / 2
+                KeyboardCellBounds(left, top, right, bottom)
+            }
+        }
 }

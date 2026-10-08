@@ -1,33 +1,46 @@
-# 虚拟键盘集成与验证
+# 虚拟键盘 FakerInput
 
-日期：2026-10-06 至 2026-10-08。当前接收端与 Android 版本为 0.3.14 / Android code 17，控制协议 v2。下方历史实测保留当时的版本和验收范围。
+感谢 [Ryochan7 / FakerInput](https://github.com/Ryochan7/FakerInput) 提供虚拟 HID 键盘。TapDeck 内嵌未修改的 0.1.1 x64 官方 MSI，采用上游 MIT 许可证。
 
-## 0.3.14 启动检测与安装提示
+首次使用豆包等输入法的语音热键时，请在 PC“快捷键 → 键盘环境”安装。部分输入法不接受软件注入，虚拟键盘可帮助激活语音输入；不需要这类功能时可跳过。
 
-正常打开接收端窗口时检查键盘工作进程是否能使用 HID；未就绪时再枚举已安装的 PnP 硬件 ID `root\FakerInput`，包括未激活的设备。驱动使用 Windows 的 UMDF 服务，不能用是否存在同名 `FakerInput` 服务注册表项来判断安装状态。
+## 安装与检测
 
-- 未安装：提示从 EXE 内置 MSI 安装。
-- 已安装但不可用：提示重新检测或修复，避免误报未安装。
-- 可用：显示驱动名称、API 和实际发送方式，不弹出安装提示。
-- 检测失败：显示错误，保留稍后重新检测的机会，不按缺失处理。
+“安装 / 修复虚拟键盘”启动原版 MSI，由 Windows 请求管理员授权；“重新检测”更新状态。后台自启不立即弹提示，正常打开窗口后缺失时提示一次；录音、按键或安装忙碌时延后。
 
-每次运行最多自动提示一次。后台自启延后到打开设置时提示，录音／按键忙碌或已有安装过程时延后；键盘提示、声卡提示和安装结果弹窗按顺序展示。“快捷键”页始终保留安装／修复与重新检测入口。确认后才启动 Windows 管理员授权和原版 MSI；取消不反复弹窗，自动模式仍可使用软件按键。
+| 状态 | 操作 |
+|---|---|
+| 未安装 | 按需安装 |
+| 已安装但不可用 | 重新检测或修复 |
+| 已就绪 | 显示驱动、API 和实际发送方式 |
+| 检测失败 | 查看错误后重试，不当成未安装 |
 
-`--keyboard-status` 在原有字段外增加 `installation`（`missing` / `installed_unavailable` / `ready`），检测失败时另有 `detection_error`。单元测试覆盖提示时机、拒绝后的去重、可用／不可用区分与准确硬件 ID 匹配；本机实际检测为已安装并可用。干净系统的完整安装验收仍见 [验证记录](verification.md)。
+“自动”优先 HID，不支持的键使用 SendInput；强制 HID 不支持 `…` 等 Unicode 键。鼠标仍使用 SendInput。取消安装可继续软件发送，退出 TapDeck 不卸载驱动。
 
-## 采用方案
+## 原包与实现
 
-`TapDeck.exe` 内置未修改的 FakerInput 0.1.1 x64 官方 MSI（1,089,536 字节）、MIT 许可证与版本清单。安装包 SHA-256：
+安装包 SHA-256：
 
-```
+```text
 4c0aefb7340051a91d606776243298b5cd1143ef5508bbae6800c474f9ed0840
 ```
 
-MSI、驱动 DLL、CAT 的签名均有效，发布者为 Ryodigi Solutions LLC。驱动是 UMDF 用户态组件，使用 Windows 自带的 HID / WUDF 组件；没有修改 INF、关闭内存完整性、关闭 Secure Boot 或启用测试签名。官方 MSI 在本机返回 0，设备状态 OK，无需重启。签名检查不等于在所有 Windows 设备上已通过兼容性验收。
+[发布来源](https://github.com/Ryochan7/FakerInput/releases/tag/v0.1.1)及许可证、签名信息保留在 EXE 和[第三方声明](../THIRD_PARTY_NOTICES.md)。使用 UMDF / HID 原版接口，不需要关闭 Secure Boot、内存完整性或导入自签名证书。上游已归档，版本固定；不同系统的兼容性按实测确认。
 
-Go 客户端通过 SetupAPI 与 HID API 找到 VID `FE0F` / PID `00FF`、Usage Page `FF00` 的控制端点，检查 API v1 后发送原版 65 字节报告。无需 CGO 或额外客户端 DLL。HID 负责键盘，鼠标仍使用现有 SendInput。
+独立键盘进程经继承管道接收动作，按会话持有和释放按键；管道断开也清理。接口依据 [FakerInputDll](https://github.com/Ryochan7/FakerInputDll)，Go 实现不额外分发其 DLL。
 
-键盘工作进程与接收端使用同一 EXE，以继承的匿名管道通信。点按保持 50 ms，持有键按引用计数管理，左右修饰键独立。自动模式下 F13–F24 使用软件发送；已持有的共用 Ctrl 保持原来的发送方式，避免回退快捷键释放语音热键。驱动写入失败不会把已发出的组合键重复发送到其他后端。
+诊断命令：
+
+```powershell
+.\dist\0.3.18\TapDeck-debug-0.3.18.exe --keyboard-status
+.\dist\0.3.18\TapDeck-debug-0.3.18.exe --extract-keyboard-driver "$env:TEMP\TapDeckDriver"
+.\dist\0.3.18\TapDeck-hidprobe-0.3.18.exe --out "$env:TEMP\TapDeckHIDProbe"
+```
+
+HID 工具仅在自身窗口前台接受按下动作；失去前台或超过八秒自动释放。历史本机结果见下方，当前构建及干净系统待验收范围见[验证记录](verification.md)。
+
+<details>
+<summary>2026-10-06 至 10-08 本机虚拟键盘实测</summary>
 
 ## 实测与验收边界
 
@@ -54,19 +67,4 @@ Go 客户端通过 SetupAPI 与 HID API 找到 VID `FE0F` / PID `00FF`、Usage P
 
 仍需人工完成：手机传音实际识别文字、Android 快捷键 / 圆球两种手势触发豆包、每种热键连续 10 轮豆包起停，以及真实复制 / 粘贴效果。完整音频延迟、其他设备、安装取消和要求重启场景也未实机验收。当前 100 次测试验证的是采音与键盘生命周期，并不代表豆包已识别 100 次。
 
-## 使用与诊断
-
-PC“快捷键”页选择自动 / HID / SendInput，保存后生效；录音或按键执行期间禁止切换。缺少驱动时显示安装入口；取消安装后键鼠可继续使用软件发送。修复入口重新运行原版 MSI 并检测设备，程序不自动重启电脑。正常退出不卸载驱动。
-
-```powershell
-.\dist\TapDeck-debug.exe --keyboard-status
-.\dist\TapDeck-debug.exe --extract-keyboard-driver "$env:TEMP\TapDeckDriver"
-.\dist\TapDeck-debug.exe --install-keyboard-driver
-.\dist\TapDeck-hidprobe.exe --out "$env:TEMP\TapDeckHIDProbe"
-```
-
-HID 诊断窗口通过输出目录中的 `command.json` 接收动作，例如 `{"id":1,"action":"down","chord":"RightCtrl+M"}`，接着用更大的 id 发送 `up` 或 `release`。支持 `down` / `up` / `tap` / `release`。只有本诊断窗口在前台才允许发出按下动作，失去前台或诊断持有超过 8 秒自动释放；事件日志仅记录本测试窗口在前台时的事件。控制文件请使用完整 JSON，每次提高 id，关闭诊断程序会释放其持有键。
-
-本机验证日志在 `.tools/hid-validation`，不会打包用户配置、凭据或测试输入内容。分发 ZIP 中包含 Windows GUI、控制台版、HID 诊断版、现有 Android APK、使用说明、协议与本验证记录。
-
-上游参考：[官方发布](https://github.com/Ryochan7/FakerInput/releases/tag/v0.1.1)、[MIT 许可证](https://github.com/Ryochan7/FakerInput/blob/v0.1.1/LICENSE)、[接口实现](https://github.com/Ryochan7/FakerInputDll/blob/master/FakerInputDll/fakerinputclient.cpp)、[Microsoft 键盘钩子标记](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-kbdllhookstruct)。上游仓库已归档，此版本固定分发，后续 Windows 兼容性需要继续实测。
+</details>

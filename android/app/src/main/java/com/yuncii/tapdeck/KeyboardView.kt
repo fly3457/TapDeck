@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.Role
@@ -81,7 +82,7 @@ private data class Key(
  * - 空格：短按一次空格，长按＝长按语音输入（同时开始传音并保持 PC 长按热键，松手结束）。
  *
  * KeyboardGeometry 统一计算键面边界：常规键 8.9%、间隙与左右留白 1%。
- * 特殊键保留原网格跨度；第 2 行居中。上下留白复用原生父容器，不重复添加。
+ * 触控范围延伸到相邻键间隙的中线，键面不变。第 2 行居中，上下留白复用原生父容器。
  */
 @Composable
 fun KeyboardView(
@@ -127,16 +128,26 @@ fun KeyboardView(
     Surface(modifier = Modifier.fillMaxSize(), color = Color(ControllerStyle.PANEL)) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val available = maxWidth
+            val density = LocalDensity.current
+            val rowsBounds = KeyboardGeometry.measure(constraints.maxWidth, constraints.maxHeight, scale)
+            val faces = rowsBounds.flatten()
+            val targets = KeyboardGeometry.touchBounds(rowsBounds).flatten()
             Layout(modifier = Modifier.fillMaxSize(), content = {
-                rows.flatten().forEach { item ->
+                rows.flatten().forEachIndexed { index, item ->
+                    val face = faces[index]
+                    val target = targets[index]
                     KeyboardKeyCell(
                         item = item, viewportWidth = available, scale = scale,
+                        visualPadding = with(density) { PaddingValues(
+                            start = (face.left - target.left).toDp(), top = (face.top - target.top).toDp(),
+                            end = (target.right - face.right).toDp(), bottom = (target.bottom - face.bottom).toDp(),
+                        ) },
                         connected = connected, voiceActive = voiceActive, hold = hold,
                         beginVoice = beginVoice, stopVoice = stopVoice,
                     )
                 }
             }) { measurables, constraints ->
-                val cells = KeyboardGeometry.measure(constraints.maxWidth, constraints.maxHeight, scale).flatten()
+                val cells = targets
                 check(measurables.size == cells.size) { "Keyboard keys and geometry must match" }
                 val placeables = measurables.mapIndexed { index, measurable ->
                     val cell = cells[index]
@@ -193,6 +204,7 @@ private fun KeyboardKeyCell(
     item: Key,
     viewportWidth: Dp,
     scale: Float,
+    visualPadding: PaddingValues,
     connected: Boolean,
     voiceActive: Boolean,
     hold: KeyHold,
@@ -221,8 +233,8 @@ private fun KeyboardKeyCell(
         Kind.Dual -> if (item.altLabel.isEmpty()) "${item.mainLabel} 键"
         else "${item.mainLabel} 键，长按输入 ${item.altLabel}"
     }
-    KeySurface(
-        modifier = Modifier.fillMaxSize()
+    // The un-clipped outer target owns its half of each gap; only the inner surface is painted.
+    Box(Modifier.fillMaxSize()
             .semantics(mergeDescendants = true) {
                 contentDescription = description
                 role = Role.Button
@@ -240,61 +252,65 @@ private fun KeyboardKeyCell(
                 }
             }
             .keyGesture(item, connected, hold, scope, beginVoice, stopVoice, { feedback(it) }) { pressed = it },
-        viewportWidth = viewportWidth,
-        active = active,
-        special = item.special,
     ) {
-        val unit = viewportWidth * scale
-        val secondaryColor = if (active) Color.White.copy(alpha = 0.9f) else Color(ControllerStyle.SECONDARY)
-        val mainSize = widthFont(viewportWidth, if (item.mainLabel.length == 1) 0.05f else 0.04f, scale)
-        val altSize = widthFont(viewportWidth, 0.028f, scale)
-        // Center the two hints as a group, with a small explicit gap. This keeps
-        // secondary labels off the top edge and close to their primary labels.
-        Column(
-            Modifier.fillMaxSize().padding(horizontal = unit * 0.004f),
-            verticalArrangement = Arrangement.spacedBy(unit * 0.002f, Alignment.CenterVertically),
-            horizontalAlignment = Alignment.CenterHorizontally,
+        KeySurface(
+            modifier = Modifier.fillMaxSize().padding(visualPadding),
+            viewportWidth = viewportWidth,
+            active = active,
+            special = item.special,
         ) {
-            if (item.kind == Kind.VoiceDual) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_lucide_mic_audio_lines),
-                    contentDescription = null,
-                    tint = secondaryColor,
-                    modifier = Modifier.size(unit * 0.035f),
-                )
-            } else if (item.altLabel.isNotEmpty()) {
-                Text(
-                    text = item.altLabel,
-                    fontSize = altSize,
-                    lineHeight = altSize * 1.1f,
-                    textAlign = TextAlign.Center,
-                    color = secondaryColor,
-                    maxLines = 1,
-                    overflow = TextOverflow.Clip,
-                )
-            }
-            if (item.icon != null) {
-                val icons = when (item.icon) {
-                    KeyIcon.Shift -> listOf(R.drawable.ic_lucide_arrow_big_up)
-                    KeyIcon.Backspace -> listOf(R.drawable.ic_lucide_delete)
-                    KeyIcon.Enter -> listOf(R.drawable.ic_lucide_corner_down_left)
-                    KeyIcon.ShiftEnter -> listOf(R.drawable.ic_lucide_arrow_big_up, R.drawable.ic_lucide_corner_down_left)
+            val unit = viewportWidth * scale
+            val secondaryColor = if (active) Color.White.copy(alpha = 0.9f) else Color(ControllerStyle.SECONDARY)
+            val mainSize = widthFont(viewportWidth, if (item.mainLabel.length == 1) 0.05f else 0.04f, scale)
+            val altSize = widthFont(viewportWidth, 0.028f, scale)
+            // Center the two hints as a group, with a small explicit gap. This keeps
+            // secondary labels off the top edge and close to their primary labels.
+            Column(
+                Modifier.fillMaxSize().padding(horizontal = unit * 0.004f),
+                verticalArrangement = Arrangement.spacedBy(unit * 0.002f, Alignment.CenterVertically),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                if (item.kind == Kind.VoiceDual) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_lucide_mic_audio_lines),
+                        contentDescription = null,
+                        tint = secondaryColor,
+                        modifier = Modifier.size(unit * 0.035f),
+                    )
+                } else if (item.altLabel.isNotEmpty()) {
+                    Text(
+                        text = item.altLabel,
+                        fontSize = altSize,
+                        lineHeight = altSize * 1.1f,
+                        textAlign = TextAlign.Center,
+                        color = secondaryColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Clip,
+                    )
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(unit * 0.0025f)) {
-                    icons.forEach { resource ->
-                        Icon(painterResource(resource), contentDescription = null,
-                            tint = LocalContentColor.current, modifier = Modifier.size(unit * 0.05f))
+                if (item.icon != null) {
+                    val icons = when (item.icon) {
+                        KeyIcon.Shift -> listOf(R.drawable.ic_lucide_arrow_big_up)
+                        KeyIcon.Backspace -> listOf(R.drawable.ic_lucide_delete)
+                        KeyIcon.Enter -> listOf(R.drawable.ic_lucide_corner_down_left)
+                        KeyIcon.ShiftEnter -> listOf(R.drawable.ic_lucide_arrow_big_up, R.drawable.ic_lucide_corner_down_left)
                     }
+                    Row(horizontalArrangement = Arrangement.spacedBy(unit * 0.0025f)) {
+                        icons.forEach { resource ->
+                            Icon(painterResource(resource), contentDescription = null,
+                                tint = LocalContentColor.current, modifier = Modifier.size(unit * 0.05f))
+                        }
+                    }
+                } else if (item.mainLabel.isNotEmpty()) {
+                    Text(
+                        text = item.mainLabel,
+                        fontSize = mainSize,
+                        lineHeight = mainSize * 1.1f,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
-            } else if (item.mainLabel.isNotEmpty()) {
-                Text(
-                    text = item.mainLabel,
-                    fontSize = mainSize,
-                    lineHeight = mainSize * 1.1f,
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
             }
         }
     }

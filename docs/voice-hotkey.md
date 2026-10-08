@@ -1,6 +1,22 @@
-# 豆包语音热键与虚拟键盘实测（2026-10-07）
+# 豆包输入法与语音热键
 
-本次会话在用户本机（Windows 11 Pro x64，豆包输入法 v0.9.1.22，TapDeck 0.3 + FakerInput 0.1.1）实测了“虚拟键盘无法激活豆包语音输入”这一问题。结论分三部分：能触发、不能触发的原因、以及本次修好的代码缺陷。
+推荐[豆包输入法 Windows 版](https://ime.doubao.com/pc)，从官网安装；它不随 TapDeck 分发。
+
+## 配置
+
+1. 在 PC“快捷键 → 键盘环境”安装 [FakerInput](https://github.com/Ryochan7/FakerInput)，发送方式保留“自动”。
+2. 将 TapDeck 音频输出设为 CABLE Input，输入法麦克风设为 CABLE Output，见[首次使用](installation.md)。
+3. 按输入法自己的设置填写 TapDeck 语音热键。右 Ctrl 写 `RightCtrl`，`Ctrl` 表示左 Ctrl，不能混用。
+4. 让目标输入框获得焦点，再从手机开始语音。
+
+例如输入法长按热键为右 Ctrl+M，填写 `RightCtrl+M`；单击开始和结束均为右 Ctrl+L，则两处都填写 `RightCtrl+L`。这些是示例，请以你的输入法设置为准；TapDeck 默认长按组是 `RightAlt`，不会自动覆盖已有配置。
+
+无反应时先用实体键盘在同一输入框测试，再检查左右修饰键、虚拟键盘状态和麦克风路由。详细设备检测见[虚拟键盘](virtual-keyboard.md)，当前验收见[验证记录](verification.md)。
+
+下方保留 2026-10-07 本机实测，使用豆包 v0.9.1.22 和当时 TapDeck；不代表所有输入法版本或完整识别链路已验收。
+
+<details>
+<summary>2026-10-07 豆包热键实测与排查原文</summary>
 
 ## 1. 结论
 
@@ -75,3 +91,5 @@ RightShift+K  -> recorded="RightShift+K"
 3. 长按模式：按住圆球达到阈值后 TapDeck 按下热键并保持，松手释放，与豆包“长按模式”对应。免按模式：开始与结束各发一次 `RightCtrl+L`，对应豆包“免按模式”的起停。
 4. 本机 Alt 键硬件异常，实测中右 Alt 的触发结果不可复现，因此本记录不推荐用 Alt 作为豆包语音热键。
 5. 本次仍属本机实测：语音识别成文字、免按模式连续起停、以及 30 分钟级长测未在本次会话中重做。
+
+</details>

@@ -50,7 +50,7 @@ try {
         Invoke-TapDeckDevice -Arguments @('shell', 'wm', 'size', $taskVariant.Size) | Out-Null
         Invoke-TapDeckDevice -Arguments @('shell', 'wm', 'density', $taskVariant.Density) | Out-Null
         Invoke-TapDeckDevice -Arguments @('shell', 'settings', 'put', 'system', 'font_scale', $taskVariant.Font) | Out-Null
-        $taskCases = @('controllerModesAndShortcutVariants', 'connectionIconReminderAndSettings', 'deviceSensitivitySliderPersistsAndKeepsPcConfigIndependent', 'voiceProfileButtonsCycleDisableAndFreeze')
+        $taskCases = @('controllerModesAndShortcutVariants', 'keyboardGapsRouteToNearestKey', 'connectionIconReminderAndSettings', 'deviceSensitivitySliderPersistsAndKeepsPcConfigIndependent', 'voiceProfileButtonsCycleDisableAndFreeze')
         if ($taskVariant.Full) { $taskCases += @('percentageLayoutAndCameraOptional', 'touchpadSettingsIconCancelsPendingClickAndDoesNotMoveMouse', 'keyFeedbackUsesVibratorServiceWithSystemTouchFeedbackOff', 'launcherIconUsesPcColorsAndSafeAdaptiveLayers', 'toggleVoiceStopsAndConsumesTouchpadClick', 'pcVoiceStopReleasesRecorderAndIgnoresStaleReplies', 'voiceProfilesWireSnapshotAndSpaceGesture', 'pairingRejectionStopsRetryAndIgnoresStaleFailure') }
         if ($taskVariant.Full -or $taskVariant.Gestures) { $taskCases += @('gesturesMoveClickScrollDragAndCancel', 'multiFingerZoomSwipeAndPointerIds', 'keyboardShortLongVoiceAndDisposalRelease', 'compactVoiceAndTouchpadPointersStayIndependent', 'shortcutFeedbackOncePerPressAndDisabledDoesNotTrigger') }
         $taskClassList = ($taskCases | ForEach-Object { 'com.yuncii.tapdeck.DeviceTest#' + $_ }) -join ','

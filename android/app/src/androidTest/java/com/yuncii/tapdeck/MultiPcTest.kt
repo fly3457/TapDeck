@@ -145,7 +145,12 @@ class MultiPcTest {
             click("管理电脑")
             shot("manage")
             click("修改办公电脑备注")
-            val field = nodes(instrumentation.uiAutomation.rootInActiveWindow).first { it.isEditable }
+            var editField: AccessibilityNodeInfo? = null
+            await {
+                editField = nodes(instrumentation.uiAutomation.rootInActiveWindow).firstOrNull { it.isEditable && it.isVisibleToUser }
+                editField != null
+            }
+            val field = editField!!
             assertTrue(field.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, android.os.Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "书房") }))
             click("保存")
             await { vm.client.peers.value.find(a.id)?.alias == "书房" }

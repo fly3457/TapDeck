@@ -1,6 +1,60 @@
-# TapDeck 原型验证记录
+# TapDeck 验证记录
 
-测试日期：2026-10-06 至 2026-10-09。本记录区分已观察到的结果与尚未完成的验收，不把目标数值当作实测结果。
+测试日期：2026-10-06 至 2026-10-09。使用页描述当前行为；历史结果按当时版本理解。截图中的示例连接和录音状态不作为实机识别证明。
+
+当前：接收端 **0.3.18**、Android **0.3.18 / code 21** · [安装](installation.md) · [版本规则](versioning.md)
+
+## 0.3.18 键盘间隙触控、语音提示与文档整理
+
+2026-10-09 以 0.3.17 提交为基线。Android 保留原 1% 视觉间隙和键面尺寸，触控范围扩展到相邻间隙中线；左右及上下相邻键平分，中线归右／下，四周和第二行居中留白保留。间隙中的触摸沿用短按、副键长按、多指修饰键及断线释放。
+
+PC“语音快捷键设置”的名称长度提示单独一行，以下热键说明另占一行：
+
+> 热键：在手机端激活语音时触发，一般设置为PC端的语音输入法快捷键，留空则只传输音频。
+
+README 简化为功能列表、首次使用、截图和致谢，补充 FakerInput、VB-CABLE 用途与可选安装、官方来源、豆包输入法官网。各使用和开发文档统一当前行为、移除过时的当前版本表述；保留历史实测、截图和已公开链接。第三方许可证原文未修改。
+
+| 验证项 | 结果 |
+|---|---|
+| 几何与 JVM | 60 项、0 失败／错误。新增中线与触控范围测试；覆盖多种宽度、受限高度、0–1024 px 极小／非整齐尺寸，键面包含、无重叠、外边距保持 |
+| 真实触摸注入 | 每种布局验证 29 个横向间隙的两侧、Q/W 精确中线、所有行间隙邻近键中心；各点击只产生一对按下／释放和一次反馈。副键长按、多指 Ctrl+C、退格长按后断线及不可用状态通过；输入回调使用测试后端，不向桌面注入 |
+| Android 五种矩阵 | API 34 隔离模拟器：1080×2400 / 420 dpi / 100% 字体 20 项；720×1280 / 300 dpi / 130% 6 项；640×960 / 320 dpi / 130% 11 项；1404×1872 / 300 dpi / 100% 6 项；1080 宽、应用高度 600 px 的受限视口 11 项，共 54 项通过。含零／一／多台、同名／长名称管理、录音三阶段和扫码／外部 Intent 限制 |
+| 测试重试 | 首轮平板动画测试误把飞行中的图标当作静止基线，改为先读取基线并同时观察基线与跳动；平板 6 项和受限视口 11 项重跑通过。多 PC 首轮备注框取节点过早，改为等待可见输入框；另一次冷启动重跑在输入持有阶段发生心跳超时，同一已启动模拟器完整重跑 3 项通过，失败日志保留为 `.tools/ui-validation/multipc-0.3.18-cold.log`。未改变产品动画、心跳阈值或窗口尺寸 |
+| 多 PC 真实协议 | 专项 3 项通过：真实 Keystore 迁移和失败保留、管理界面、三个独立证书／配置／凭据接收端的 HTTP、固定指纹 WSS 与加密 UDP。覆盖 A→B→A、快速 A→B→C、离线目标重试、恢复和免确认重连、单独撤销及重新授权、输入与语音配置归属；音频与输入为测试后端 |
+| PC 原生页面 | 生产页面构造函数在 740×800、最小 680×700 窗口各验证快捷键及语音，共 4 个用例通过，实际 96 dpi。新说明完整单行，名称提示独立；分组、音频操作行、启用／名称／类型同排、禁用收起热键及隐藏值保留均通过 |
+| 官方构建 | `scripts/build-windows.ps1 -OutputDirectory dist/0.3.18` 通过 29 项版本规则检查、Android 构建、60 项 JVM 测试、Go 测试、vet 及三个 EXE。沿用脚本对会实际修改本机音量和开机自启注册表两项测试的排除 |
+| 版本与内嵌 | 本轮仅执行一次 `-Target Android`，两端升至 0.3.18 / Android code 21。三个 EXE 文件／产品版本为 0.3.18；正式与诊断 EXE 实际运行 `--apk-info`，均内嵌 Android 0.3.18 / code 21，文件名、大小、SHA-256 匹配。清单全部 8 个版本／兼容产物的大小和哈希复核通过 |
+| APK 与覆盖安装 | aapt 确认包名 `com.yuncii.tapdeck`、versionName 0.3.18、code 21、min API 26；apksigner 验证通过。继续使用开发签名，证书 SHA-256 `7a73774806a038cf5ac53dff3aa4332390158c2ecbf55bebd5c01811ae543e30`。Gradle、交付及内嵌 APK 哈希一致，模拟器覆盖安装成功 |
+
+### 产物与日志
+
+官方交付目录 `dist/0.3.18`，包含带版本号 EXE／APK、两个 `.apk-info.json`、`release-manifest.json` 和 `SHA256SUMS.txt`。最终构建后仅调整测试基线取样、文档和截图，生产代码未再变化。
+
+| 产物 | 字节数 | SHA-256 |
+|---|---:|---|
+| `TapDeck-0.3.18.apk` | 11,507,764 | `bc39d948ad5ad7ee36b0e0c66d5ef8d8b09958a848be9f423a7cf5787e51b475` |
+| `TapDeck-0.3.18.exe` | 26,668,032 | `253716eb6534fdda4b712a733ddb6b5d206e7c8ee4be35b556a7edfc7dbcd8cd` |
+| `TapDeck-debug-0.3.18.exe` | 32,177,152 | `55ce0ee9f49cd3a6eb5583ef1824df586294d31980127631cb3135540dd9003e` |
+| `TapDeck-hidprobe-0.3.18.exe` | 8,048,128 | `420fe1d005247a20557a9e18b4ca0d7b085a52081414d69fc6078af90ee5dcbc` |
+
+日志：`.tools/ui-validation/windows-0.3.18-build.log`、`pc-0.3.18-ui.log`、`android-0.3.18-ui.log`、`android-0.3.18-ui-retry.log`、`android-0.3.18-multipc-warm.log`；各布局结果见 `dist/0.3.18/screenshots/*.log`，三接收端专项见 `dist/0.3.18/multipc/{android,fixture}.log`。
+
+### 当前截图与待验收
+
+[PC 默认语音](screenshots/0.3.18/pc-voice-740x800-96dpi-top.png) · [最小语音](screenshots/0.3.18/pc-voice-680x700-96dpi-top.png) · [取消启用](screenshots/0.3.18/pc-voice-680x700-96dpi-disabled.png) · [默认快捷键](screenshots/0.3.18/pc-shortcuts-740x800-96dpi.png) · [最小快捷键](screenshots/0.3.18/pc-shortcuts-680x700-96dpi.png)
+
+[手机键盘](screenshots/0.3.18/phone-100-keyboard.png) · [手机大字体](screenshots/0.3.18/phone-130-keyboard.png) · [小屏大字体](screenshots/0.3.18/small-130-keyboard.png) · [平板](screenshots/0.3.18/tablet-100-keyboard.png) · [受限高度](screenshots/0.3.18/restricted-100-keyboard.png)
+
+[手机开始](screenshots/0.3.18/phone-100-voice-toggle-idle.png) · [手机结束](screenshots/0.3.18/phone-100-voice-toggle-transmitting.png) · [小屏开始](screenshots/0.3.18/small-130-voice-toggle-idle.png) · [多 PC 列表](screenshots/0.3.18/phone-100-multipc-many.png) · [录音切换限制](screenshots/0.3.18/small-130-multipc-recording-disabled.png)
+
+未连接实体手机，本轮仍待：实体设备间隙操作和覆盖升级、一部手机／两台真实 PC 反复切换、实际 AudioRecord → CABLE Output → 输入法识别、干净系统驱动安装及 PC 高 DPI 布局。历史实机结果保留在下方，不能代替这些当前验收。
+
+测试后模拟器尺寸、密度和字体恢复至 1080×2400 / 420 dpi / 100%，三个临时接收端及隔离 AVD 已退出。公开发布尚未完成，发布成功后补记真实链接。
+
+## 历史验证
+
+<details>
+<summary>展开 0.3.17 及更早版本的原始记录</summary>
 
 ## 0.3.17 PC 输入设置分组与 Android 单击语音文案
 
@@ -553,3 +607,5 @@ RTT 使用客户端单调时钟测量 WSS 心跳往返，每约 250 ms 读取最
 本次交付 0.2.0：`dist/TapDeck.exe` 为 Windows GUI 接收端，`dist/TapDeck-debug.exe` 提供控制台诊断，`dist/TapDeck-debug.apk` 为开发签名 APK。`dist/TapDeck-prototype.zip` 包含上述程序、使用说明、协议和本验证记录；`dist/SHA256SUMS.txt` 提供校验值。依赖、构建和防火墙脚本保留在源码中，VB-CABLE 驱动单独安装，不随包分发。
 
 最终交付时 PC 接收端保持运行、Android 保持配对且麦克风空闲。持久凭据留在受保护的本机应用目录。
+
+</details>
