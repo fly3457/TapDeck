@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"syscall"
 	"tapdeck/internal/config"
+	"tapdeck/internal/vbcable"
 	"testing"
 	"time"
 
@@ -33,26 +34,30 @@ func TestVoiceProfileEditorUI(t *testing.T) {
 		var mw *walk.MainWindow
 		var scroll *walk.ScrollView
 		var editors [config.VoiceProfileCount]voiceProfileEditor
+		var environment *walk.GroupBox
+		var cableStatus *walk.TextLabel
+		var level *walk.Label
 		profiles := config.DefaultVoiceProfiles()
 		widget := voiceProfileWidgets(func() walk.Form { return mw }, &editors, profiles).(d.ScrollView)
 		widget.AssignTo = &scroll
-		if err := (d.MainWindow{AssignTo: &mw, Title: "TapDeck · 语音配置验证", Size: d.Size{Width: size.Width, Height: size.Height}, Font: d.Font{Family: "Microsoft YaHei UI", PointSize: 9}, Layout: d.VBox{}, Children: []d.Widget{
+		environmentWidget := voiceEnvironmentWidgets(voiceEnvironmentOptions{cableStatus: &cableStatus, level: &level,
+			deviceNames: []string{"自动选择 CABLE Input"}, initialGain: 1,
+			install: func() {}, detect: func() {}, website: func() {}, license: func() {}, refresh: func() {}, settings: func() {},
+		})
+		environmentWidget.AssignTo = &environment
+		if err := (d.MainWindow{AssignTo: &mw, Title: "TapDeck · 语音配置验证", Size: d.Size{Width: size.Width, Height: size.Height}, Font: d.Font{Family: "Microsoft YaHei UI", PointSize: 9}, Layout: d.VBox{Margins: d.Margins{Left: 16, Top: 12, Right: 16, Bottom: 12}}, Children: []d.Widget{
 			d.Label{Text: "已连接：布局验证设备"},
 			d.TabWidget{Pages: []d.TabPage{{Title: "语音", Layout: d.VBox{}, Children: []d.Widget{
-				voiceRoutingHint(),
-				d.Label{Text: "VB-CABLE 可用：CABLE Input / CABLE Output 均已就绪"},
-				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.PushButton{Text: "安装虚拟声卡", Enabled: false}, d.PushButton{Text: "重新检测"}, d.PushButton{Text: "VB-Audio 官网"}, d.PushButton{Text: "原包许可"}}},
-				d.Label{Text: cableAttributionText},
-				audioDeviceRow(nil, []string{"自动选择 CABLE Input"}, 0, func() {}, func() {}),
-				d.Label{Text: "CABLE Input (VB-Audio Virtual Cable) · 输入电平 0%"},
-				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.Label{Text: "音量倍率（0–3）"}, d.NumberEdit{Value: float64(1), MinValue: 0, MaxValue: 3, Decimals: 2}}},
-				horizontalRule(), d.Label{Text: "名称：最多 8 个汉字 / 16 个英文字符。热键：留空仅传音。"}, widget,
-				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.Label{Text: "尾音结束延迟 ms"}, d.NumberEdit{Value: float64(200), MinValue: 0, MaxValue: 1000}}},
+				environmentWidget,
+				settingsSection("语音快捷键设置", 1, d.Label{Text: "名称：最多 8 个汉字 / 16 个英文字符。热键：留空仅传音。"}, widget,
+					d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.Label{Text: "尾音结束延迟 ms"}, d.NumberEdit{Value: float64(200), MinValue: 0, MaxValue: 1000}}}),
 			}}}}, d.PushButton{Text: "保存并同步配置"},
 		}}).Create(); err != nil {
 			t.Fatal(err)
 		}
 		placeTestWindow(mw, size)
+		cableStatus.SetText(cableStatusText(vbcable.Status{State: vbcable.Ready}, nil))
+		level.SetText("输入电平 100%")
 		mw.Show()
 		var failure error
 		capture := func(label string) {
@@ -91,6 +96,9 @@ func TestVoiceProfileEditorUI(t *testing.T) {
 		go func() {
 			time.Sleep(600 * time.Millisecond)
 			mw.Synchronize(func() {
+				if mw.Size().Width != size.Width || mw.Size().Height != size.Height {
+					failure = fmt.Errorf("layout enlarged requested window: %+v, wanted %+v", mw.Size(), size)
+				}
 				capture("top")
 				for i := range editors {
 					if editors[i].body.Visible() != profiles[i].Enabled {
@@ -98,11 +106,11 @@ func TestVoiceProfileEditorUI(t *testing.T) {
 					}
 				}
 				e := &editors[0]
-				e.setExpanded(false)
-				if e.body.Visible() || !e.enabled.Checked() {
-					failure = fmt.Errorf("collapse changed enable state")
+				e.enabled.SetChecked(false)
+				if e.body.Visible() || !e.name.Visible() || !e.mode.Visible() {
+					failure = fmt.Errorf("disabling must hide only hotkeys")
 				}
-				e.setExpanded(true)
+				e.enabled.SetChecked(true)
 				if e.holdPanel.Visible() || !e.togglePanel.Visible() {
 					failure = fmt.Errorf("incorrect toggle visibility")
 				}
@@ -119,8 +127,17 @@ func TestVoiceProfileEditorUI(t *testing.T) {
 			})
 			time.Sleep(200 * time.Millisecond)
 			mw.Synchronize(func() {
+				if err := checkHorizontalRow(environment.Children().At(environment.Children().Len() - 1).(*walk.Composite)); err != nil {
+					failure = err
+				}
 				for i := range editors {
 					e := &editors[i]
+					if e.enabled.Parent() != e.name.Parent() || e.mode.Parent() != e.name.Parent() {
+						failure = fmt.Errorf("enable/name/type must share a row")
+					}
+					if err := checkHorizontalRow(e.name.Parent().(*walk.Composite)); err != nil {
+						failure = err
+					}
 					if e.body.Visible() {
 						panel := e.holdPanel
 						if e.mode.CurrentIndex() == 1 {
@@ -144,22 +161,22 @@ func TestVoiceProfileEditorUI(t *testing.T) {
 				for i := range editors {
 					editors[i].name.SetText("八个汉字名称测试")
 					editors[i].mode.SetCurrentIndex(1)
-					editors[i].setExpanded(true)
+					editors[i].enabled.SetChecked(true)
 				}
 			})
 			time.Sleep(200 * time.Millisecond)
 			mw.Synchronize(func() {
 				capture("bottom")
 				for i := range editors {
-					editors[i].setExpanded(false)
+					editors[i].enabled.SetChecked(false)
 				}
 			})
 			time.Sleep(200 * time.Millisecond)
 			mw.Synchronize(func() {
-				capture("collapsed")
+				capture("disabled")
 				for i := range editors {
-					if editors[i].title.Text() != "八个汉字名称测试" {
-						failure = fmt.Errorf("collapsed title did not update")
+					if editors[i].name.Text() != "八个汉字名称测试" || editors[i].body.Visible() {
+						failure = fmt.Errorf("disabled name/hotkeys not preserved")
 					}
 				}
 				t.Logf("%dx%d, DPI %d, scroll viewport %+v", size.Width, size.Height, mw.DPI(), scroll.SizePixels())

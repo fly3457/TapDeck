@@ -22,11 +22,11 @@ Android 0.3.16 可分别配对多台 PC。点击应用顶部电脑名称切换�
 4. 从接收端版本生成 Windows 清单与 VERSIONINFO 资源，运行 Go 测试、`go vet`，构建带版本号的 EXE，并校验文件版本及产品版本。
 5. 从两个接收端 EXE 读取 `--apk-info`，核对实际内嵌 APK 版本、code、名称、大小与哈希，生成 `release-manifest.json` 和 `SHA256SUMS.txt`。APK 缺失、Android 失败、哈希或版本信息不一致均终止交付。
 
-当前接收端为 `0.3.16`，Android `versionName=0.3.16`、`versionCode=19`，均来自根目录 `version.properties`，两端版本允许不同。保留 `com.yuncii.tapdeck` 及本机原有开发签名。APK 文件名为 `TapDeck-0.3.16.apk`；独立 Android 构建、Windows 交付目录和内嵌下载均使用 Android 版本命名，另保留 `TapDeck-debug.apk` 兼容副本。手机“连接与设置”标题下显示安装版本，网页和 PC 显示内嵌版本及完整 SHA-256。`TapDeck-debug.exe --version` 输出接收端版本，`--apk-info` 可分别核对两端版本、下载文件名和内嵌哈希。每次迭代的修改位置和固定步骤见 [版本管理](versioning.md)。
+当前接收端为 `0.3.17`，Android `versionName=0.3.17`、`versionCode=20`，均来自根目录 `version.properties`，两端版本允许不同。保留 `com.yuncii.tapdeck` 及本机原有开发签名。APK 文件名为 `TapDeck-0.3.17.apk`；独立 Android 构建、Windows 交付目录和内嵌下载均使用 Android 版本命名，另保留 `TapDeck-debug.apk` 兼容副本。手机“连接与设置”标题下显示安装版本，网页和 PC 显示内嵌版本及完整 SHA-256。`TapDeck-debug.exe --version` 输出接收端版本，`--apk-info` 可分别核对两端版本、下载文件名和内嵌哈希。每次迭代的修改位置和固定步骤见 [版本管理](versioning.md)。
 
-换构建机时必须保留相同签名密钥，才能覆盖已有安装。主界面说明见 [android-ui.md](android-ui.md)，本次单 EXE 输出至 `dist/0.3.16`。更新时退出旧托盘程序后启动新版 EXE，再覆盖安装 Android APK。连接不支持双指缩放和三指窗口操作的旧电脑端时，App 会提示新手势需要升级。
+换构建机时必须保留相同签名密钥，才能覆盖已有安装。主界面说明见 [android-ui.md](android-ui.md)，本次单 EXE 输出至 `dist/0.3.17`。更新时退出旧托盘程序后启动新版 EXE，再覆盖安装 Android APK。连接不支持双指缩放和三指窗口操作的旧电脑端时，App 会提示新手势需要升级。
 
-Windows 主程序为 `TapDeck-0.3.16.exe`，控制台诊断版为 `TapDeck-debug-0.3.16.exe`，HID 工具为 `TapDeck-hidprobe-0.3.16.exe`。三者的文件版本与产品版本均显示 `0.3.16`，Windows 数字版本为 `0.3.16.0`。构建仍保留 `TapDeck.exe`、`TapDeck-debug.exe` 和 `TapDeck-hidprobe.exe`，分别与带版本号的文件完全相同。资源生成器保留原有 Common Controls、DPI 和管理员权限清单。
+Windows 主程序为 `TapDeck-0.3.17.exe`，控制台诊断版为 `TapDeck-debug-0.3.17.exe`，HID 工具为 `TapDeck-hidprobe-0.3.17.exe`。三者的文件版本与产品版本均显示 `0.3.17`，Windows 数字版本为 `0.3.17.0`。构建仍保留 `TapDeck.exe`、`TapDeck-debug.exe` 和 `TapDeck-hidprobe.exe`，分别与带版本号的文件完全相同。资源生成器保留原有 Common Controls、DPI 和管理员权限清单。
 
 ## 虚拟键盘启动检测
 
@@ -66,7 +66,9 @@ b950e39f01af1d04ea623c8f6d8eb9b6ea5c477c637295fabf20631c85116bfb
 - 系统音频输入或目标输入法的麦克风选择 **CABLE Output**。
 - TapDeck 不自动更改 Windows 默认麦克风。
 
-语音页顶部将上述音频路由显示为红色。新增“系统音频输入设置”按钮，直接打开 Windows“声音 → 录制”设备列表，可选中 CABLE Output 并按需设为默认输入设备；若控制面板启动失败，则尝试 [Windows 默认麦克风设置](https://learn.microsoft.com/en-us/windows/apps/develop/launch/launch-settings#sound)。入口只打开设置，不自动切换麦克风。原有“刷新音频设备”仍用于更新 TapDeck 的输出设备列表。
+PC“快捷键”页分为“键盘环境”和“快捷键设置”；键盘发送方式、驱动检测与安装位于上方。PC“语音”页分为“语音输入环境”和“语音快捷键设置”。环境板块以红色单行显示上述路由，VB-CABLE 就绪状态与 donationware／VB-Audio 说明同排。最后一行依次为输入电平、音频设备选择、“刷新音频设备”和“系统音频输入设置”；电平前不再重复设备名称。语音配置的启用、名称和类型同排，勾选展开热键，取消勾选收起热键并保留字段；长按类型的字段显示“长按热键”。手机单击语音方块空闲时显示“开始”，准备、传音和停止阶段显示“结束”。
+
+“系统音频输入设置”直接打开 Windows“声音 → 录制”设备列表，可选中 CABLE Output 并按需设为默认输入设备；若控制面板启动失败，则尝试 [Windows 默认麦克风设置](https://learn.microsoft.com/en-us/windows/apps/develop/launch/launch-settings#sound)。入口只打开设置，不自动切换麦克风。“刷新音频设备”用于更新 TapDeck 的输出设备列表。
 
 VB-CABLE 来自 [VB-Audio / Vincent Burel](https://vb-audio.com/Cable/)，是 donationware。完整原包许可保留在 ZIP 和 EXE 内，当前公开分发依据见[官方分发条件](https://vb-audio.com/Services/licensing.htm)及 [第三方声明](../THIRD_PARTY_NOTICES.md)。企业部署不属于本次默认用途。
 
@@ -74,6 +76,6 @@ VB-CABLE 来自 [VB-Audio / Vincent Burel](https://vb-audio.com/Cable/)，是 do
 
 自动测试覆盖旧格式迁移及备份失败、保存失败保留授权、同名离线设备、在线单设备解绑、待处理请求取消、并发重连、旧 secret 不能自动授权、已有凭据重连、按会话键盘队列清理、鼠标共享持有、另一台设备录音隔离，以及模拟安装结果和完整原包解出后的签名验证。APK 验证包含内嵌／HTTP 内容哈希、版本及 Range 下载。Kotlin 测试覆盖凭据继承、地址变化、不同电脑身份隔离及旧凭据撤销匹配。
 
-0.3.16 官方 Windows 构建完成 59 项 Kotlin 单元测试、29 项版本检查、Go 测试和 `go vet`，两个接收端内嵌的 APK 与独立交付包哈希相同。默认自动构建跳过会实际修改本机音量、开机自启注册表的两项测试。API 34 隔离模拟器通过五种尺寸／字体配置共 49 项回归、2 项扫码回归及 3 项多电脑专项测试；三个独立身份的临时接收端验证快速切换、输入释放、离线重试、凭据重连和撤销重配对。本轮未重复运行 PC 原生界面和驱动安装向导。
+0.3.17 官方 Windows 构建完成 59 项 Kotlin 单元测试、29 项版本检查、Go 测试和 `go vet`，两个接收端内嵌的 APK 与独立交付包哈希相同。默认自动构建跳过会实际修改本机音量、开机自启注册表的两项测试。本轮在 96 DPI 下验证 PC 默认 740×800、最小 680×700 窗口的两页分组、单行提示、字段边界和启用展开；API 34 隔离模拟器在普通屏、小屏大字体下完成 6 项语音回归。0.3.16 的五种尺寸／字体矩阵、扫码及三个独立接收端多电脑链路结果保留在历史记录；本轮未重复驱动安装向导。
 
 仍需在干净 Windows 11 x64 环境人工验证离线安装、UAC 取消、重启后端点可用，以及新版手机传音进入 CABLE Output。本机无可用干净虚拟机和已连接实体手机，新版 APK 真机覆盖升级、凭据保留、系统扫码／网页唤起，以及一部手机与两台真实 PC 的反复切换和录音限制仍待验收。构建继续使用相同包名和签名，versionCode 递增；模拟器结果不代表实体手机端到端验收。详情见 [verification.md](verification.md)。

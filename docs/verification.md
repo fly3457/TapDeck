@@ -1,6 +1,37 @@
 # TapDeck 原型验证记录
 
-测试日期：2026-10-06 至 2026-10-08。本记录区分已观察到的结果与尚未完成的验收，不把目标数值当作实测结果。
+测试日期：2026-10-06 至 2026-10-09。本记录区分已观察到的结果与尚未完成的验收，不把目标数值当作实测结果。
+
+## 0.3.17 PC 输入设置分组与 Android 单击语音文案
+
+2026-10-09 以已提交的 0.3.16 为基线完成。PC“快捷键”页分为“键盘环境”“快捷键设置”，键盘发送方式、虚拟键盘检测与安装集中在上方。PC“语音”页分为“语音输入环境”“语音快捷键设置”：音频路由单行显示，VB-CABLE 就绪与 donationware／VB-Audio 来源同排，最后一行为输入电平、音频设备选择、刷新及系统音频输入设置；设备全名不再重复显示在电平前，诊断状态保留在电平提示中。
+
+每组语音配置将启用、名称和类型放在一行，移除折叠箭头；勾选展开热键，取消勾选只收起热键，名称和类型仍可编辑。隐藏字段和切换类型前的热键保留，“触发热键”改为“长按热键”。Android 单击方块空闲显示“开始”，准备、传音、停止阶段显示“结束”，禁用状态继续显示“禁用”。语音手势和控制协议保持原规则。
+
+| 验证项 | 结果 |
+|---|---|
+| PC 原生界面 | `TestKeyboardSectionsUI`、`TestVoiceProfileEditorUI` 使用正式页面构造函数，在默认 740×800 和最小 680×700 窗口各完成一次，共 4 个窗口用例通过；实际 DPI 为 96。分组无重叠，八个快捷键横排及语音启用／名称／类型同排，音频操作行未越界；就绪状态和路由提示完整单行显示，未把最小窗口扩大 |
+| 表单行为 | 取消启用只隐藏热键，名称和类型仍可编辑；重新启用恢复对应类型字段。类型往返保留长按／开始／结束热键，所有组关闭后仍保留名称和隐藏字段；默认第三组未启用，滚动后可访问 |
+| Android 回归 | API 34 隔离模拟器：1080×2400 / 420 DPI / 字体 100%、640×960 / 320 DPI / 字体 130%，各通过配置轮换／禁用／录音冻结、单击停止消费鼠标点击、协议请求快照与空格语音 3 项，共 6 项通过。配置回归复核当前阶段及电平，截图前等待界面绘制完成 |
+| 截图检查 | 检查两种 PC 尺寸的快捷键与语音页面，以及语音全部关闭后的表单。普通屏、小屏大字体下，方块“开始／结束”完整显示；准备为橙色、传音为绿色并显示 42% 电平、停止为灰色，阶段截图正确区分 |
+| 构建与基础回归 | 官方 `scripts/build-windows.ps1 -OutputDirectory dist/0.3.17` 完成 29 项版本规则检查、59 项 Kotlin JVM 测试、Go 测试、`go vet` 和三个 Windows EXE 构建。沿用构建脚本对实际修改本机音量、开机自启注册表两个用例的排除；测试 APK 使用项目 JDK 17 构建成功 |
+| 版本与内嵌 | 一次 `-Target All` 升版后接收端 0.3.17、Android 0.3.17 / code 20。三个 EXE 的文件／产品版本、两个接收端 `--apk-info`、APK 内部版本均一致；最终核对清单全部 8 个产物的大小／SHA-256，以及 Gradle、交付和内嵌 APK 哈希 |
+| 签名与升级 | `apksigner verify --print-certs` 通过，继续使用原开发签名，证书 SHA-256 `7a73774806a038cf5ac53dff3aa4332390158c2ecbf55bebd5c01811ae543e30`；隔离模拟器覆盖安装成功 |
+
+本地交付目录 `dist/0.3.17`，包含带版本号产物、两个 `.apk-info.json`、`release-manifest.json` 和 `SHA256SUMS.txt`。构建成功后未修改生产代码；仅补充截图同步等待及文档。
+
+| 产物 | 字节数 | SHA-256 |
+|---|---:|---|
+| `TapDeck-0.3.17.apk` | 11,507,764 | `e4ef17a34e15193b8dcca9ccbe9a58f622c686197276893e01bb04f8ef10689b` |
+| `TapDeck-0.3.17.exe` | 26,667,520 | `ef69e5b4ed7492b70a41169ef3e80c6d9461bff2439e76efd2d2d52c20f2a9ed` |
+| `TapDeck-debug-0.3.17.exe` | 32,177,152 | `d0f75a05e115732f25d85df41904fcb2943835cde4adfe1836d2dc412c7ebc22` |
+| `TapDeck-hidprobe-0.3.17.exe` | 8,048,128 | `f282b1576a82925c162ef2dc8f33c92214198263ccfc03779116c93cfab119de` |
+
+构建日志 `.tools/ui-validation/windows-0.3.17-build.log`，PC 原生界面日志 `.tools/ui-validation/pc-0.3.17-ui.log`，Android 日志 `.tools/ui-validation/android-0.3.17-ui.log` 和 `dist/0.3.17/screenshots/{phone-100,small-130}.log`。本轮只重新运行普通屏和小屏大字体的语音回归，0.3.16 的完整矩阵及多 PC 链路结果保留在下面的历史记录。
+
+代表性截图：[默认快捷键](screenshots/0.3.17/pc-shortcuts-740x800-96dpi.png)、[最小快捷键](screenshots/0.3.17/pc-shortcuts-680x700-96dpi.png)、[默认语音](screenshots/0.3.17/pc-voice-740x800-96dpi-top.png)、[最小语音](screenshots/0.3.17/pc-voice-680x700-96dpi-top.png)、[取消启用后的表单](screenshots/0.3.17/pc-voice-680x700-96dpi-disabled.png)、[默认第三组](screenshots/0.3.17/pc-voice-740x800-96dpi-defaults-bottom.png)、[手机开始](screenshots/0.3.17/phone-100-voice-toggle-idle.png)、[手机结束](screenshots/0.3.17/phone-100-voice-toggle-transmitting.png)、[小屏开始](screenshots/0.3.17/small-130-voice-toggle-idle.png)、[小屏准备](screenshots/0.3.17/small-130-voice-toggle-preparing.png)、[小屏传音](screenshots/0.3.17/small-130-voice-toggle-transmitting.png)、[小屏停止](screenshots/0.3.17/small-130-voice-toggle-stopping.png)。PC 截图为独立原生页面及注入的就绪状态，Android 连接与录音状态为测试数据，不作为实际设备检测、传音或输入法识别证明。
+
+本轮没有已连接的实体手机，未重复真实 AudioRecord → CABLE Output → 输入法识别、两台真实 PC 切换及干净系统驱动安装。实体手机覆盖升级与上述链路继续列为待验收；PC 高 DPI 布局本轮未验收。模拟器尺寸、密度和字体已恢复至 1080×2400 / 420 DPI / 100%，隔离 AVD 已关闭。本轮只生成本地交付包，公开 0.3.6 Release 链接保持不变。
 
 ## 0.3.16 Android 多 PC 配对与顶部切换
 

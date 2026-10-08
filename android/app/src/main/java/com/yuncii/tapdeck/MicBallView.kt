@@ -174,11 +174,13 @@ class MicBallView(
             }
         }
         paint.color = Color.WHITE
-        val caption = when (status) {
+        val caption = if (gestureMode == MODE_TOGGLE && (voiceEnabled || status != "idle")) {
+            if (status == "idle") "开始" else "结束"
+        } else when (status) {
             "preparing" -> "准备"
             "stopping" -> "结束"
-            "transmitting" -> if (mode == MODE_TOGGLE) "单击" else "长按"
-            else -> if (!voiceEnabled) "禁用" else if (gestureMode == MODE_TOGGLE) "轻点" else "长按"
+            "transmitting" -> "长按"
+            else -> if (!voiceEnabled) "禁用" else "长按"
         }
         label(c, caption, cx, cy + radius() * 0.17f, captionSize(caption), radius() * 1.7f)
         // Keep the instruction and drag hint (or recording level) on one line.

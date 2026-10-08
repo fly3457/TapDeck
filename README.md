@@ -8,7 +8,7 @@ TapDeck 将手机麦克风的声音传到 Windows，配合电脑上的语音输�
 
 **[下载 Windows EXE](https://github.com/fly3457/TapDeck/releases/download/v0.3.6/TapDeck.exe) · [下载 Android APK](https://github.com/fly3457/TapDeck/releases/download/v0.3.6/TapDeck-debug.apk) · [查看完整发布包](https://github.com/fly3457/TapDeck/releases/tag/v0.3.6)**
 
-以上为 0.3.6 公开下载链接。当前接收端与 Android 源码版本为 0.3.16 / Android code 19：手机可保存多台 PC，从顶部电脑名称切换当前控制目标，并设置备注名或单独忘记配对；录音期间禁止切换，离线时只重试选中的电脑。语音方案按 PC 分别记忆，旧单电脑配对自动迁移。统一版本清单支持两端独立升版，EXE 内嵌本次构建的最新 APK。使用说明见 [多 PC 配对与切换](docs/multi-pc.md)。
+以上为 0.3.6 公开下载链接。当前接收端与 Android 源码版本为 0.3.17 / Android code 20：PC 快捷键页分为“键盘环境”“快捷键设置”，语音页分为“语音输入环境”“语音快捷键设置”；勾选启用展开热键，名称和类型始终可编辑。Android 单击语音方块显示“开始／结束”。手机继续支持多 PC 配对与顶部切换，语音方案按 PC 记忆。EXE 内嵌本次构建的最新 APK。使用说明见 [语音配置](docs/voice-profiles.md)与[多 PC 配对与切换](docs/multi-pc.md)。
 
 ## 为 Vibe Coding 准备的功能
 
@@ -55,7 +55,7 @@ TapDeck 将手机麦克风的声音传到 Windows，配合电脑上的语音输�
 
 ## 下载与安装
 
-下表公开下载包为 **0.3.6（测试版）**，Android `versionCode=9`；接收端源码及本地构建为 **0.3.16**，内嵌 Android **0.3.16** / code `19`。支持 **Windows 11 x64**、**Android 8 / API 26 及以上**；手机与电脑需要处于可互通的局域网。
+下表公开下载包为 **0.3.6（测试版）**，Android `versionCode=9`；接收端源码及本地构建为 **0.3.17**，内嵌 Android **0.3.17** / code `20`。支持 **Windows 11 x64**、**Android 8 / API 26 及以上**；手机与电脑需要处于可互通的局域网。
 
 | 文件 | 用途 |
 |---|---|
@@ -126,15 +126,15 @@ $releaseVersions = Get-TapDeckVersions (Get-Location).Path
 
 每次新迭代先运行 `scripts/bump-version.ps1`，默认同时递增两端补丁版本和 Android code；可选 `-Target Receiver` 或 `-Target Android`，后者也递增接收端补丁版本以交付最新内嵌包。重复编译不重复升版。根目录 [version.properties](version.properties) 是唯一版本来源，详细的修改位置、强制交付步骤及 iOS 等未来端规划见 [版本管理](docs/versioning.md)。
 
-该入口先运行版本规则测试、构建 Android 并运行 Kotlin 测试，核验 Gradle 元数据和 APK 内部版本，再从本次 Gradle 输出复制 `TapDeck-0.3.16.apk`、核对 SHA-256，然后运行 Go 测试、`go vet` 和 Windows 构建。接收端与 Android 版本可不同。构建后读取两个接收端 EXE 的 `--apk-info`，核对实际内嵌的版本、code、文件名、大小及哈希，生成 `release-manifest.json` 和 `SHA256SUMS.txt`。任何检查失败均终止，不沿用旧 APK。签名密钥不随源码分发；覆盖既有 Android 安装须使用相同签名。
+该入口先运行版本规则测试、构建 Android 并运行 Kotlin 测试，核验 Gradle 元数据和 APK 内部版本，再从本次 Gradle 输出复制 `TapDeck-0.3.17.apk`、核对 SHA-256，然后运行 Go 测试、`go vet` 和 Windows 构建。接收端与 Android 版本可不同。构建后读取两个接收端 EXE 的 `--apk-info`，核对实际内嵌的版本、code、文件名、大小及哈希，生成 `release-manifest.json` 和 `SHA256SUMS.txt`。任何检查失败均终止，不沿用旧 APK。签名密钥不随源码分发；覆盖既有 Android 安装须使用相同签名。
 
-Windows 生成 `TapDeck-0.3.16.exe`、`TapDeck-debug-0.3.16.exe` 和 `TapDeck-hidprobe-0.3.16.exe`；文件名、程序内版本与“属性 → 详细信息”中的文件版本／产品版本均自动取自接收端版本。无版本号的 EXE 及 `TapDeck-debug.apk` 作为兼容副本保留，对外交付使用带版本号文件。
+Windows 生成 `TapDeck-0.3.17.exe`、`TapDeck-debug-0.3.17.exe` 和 `TapDeck-hidprobe-0.3.17.exe`；文件名、程序内版本与“属性 → 详细信息”中的文件版本／产品版本均自动取自接收端版本。无版本号的 EXE 及 `TapDeck-debug.apk` 作为兼容副本保留，对外交付使用带版本号文件。
 
 Android 单独开发可用 [build-android.ps1](scripts/build-android.ps1)，模拟器矩阵可用 [test-android-ui.ps1](scripts/test-android-ui.ps1)。国际依赖连接失败时，先检查 Clash Verge 和 Anycast，Android 构建可加 `-UseLocalProxy` 使用本机 SOCKS5 1080。构建与内嵌规则见 [APK 分发说明](docs/apk-download.md)。
 
 ## 验证与当前范围
 
-0.3.16 已通过 59 项 Kotlin 单元测试、29 项版本规则检查、Go 测试、`go vet` 和官方 Windows 构建。API 34 隔离模拟器完成五种尺寸／字体配置共 49 项回归、2 项扫码入口回归，以及 3 项多电脑专项测试；三个独立身份的临时接收端验证了快速切换、重连、输入归属和撤销重配对。交付 APK 与两个接收端 EXE 内嵌版本和 SHA-256 一致。截图、详细范围及“一部实体手机 + 两台真实 PC”待验收项见 [验证记录](docs/verification.md)。
+0.3.17 已通过 59 项 Kotlin 单元测试、29 项版本规则检查、Go 测试、`go vet` 和官方 Windows 构建。PC 默认／最小窗口完成快捷键、语音分组及启用展开验证；API 34 隔离模拟器在普通屏和小屏大字体下完成 6 项语音回归。交付 APK 与两个接收端 EXE 内嵌版本和 SHA-256 一致。截图、本轮验证及历史多 PC 链路结果见 [验证记录](docs/verification.md)。
 
 当前 Android 使用竖屏布局，Windows 运行文件为未签名测试构建，APK 使用现有开发签名。用户已确认其手机在关闭系统震动开关后仍可使用 App 震动；其他机型表现、覆盖升级及原配对重连，以及手机语音转换成目标输入框文字的完整链路，按验证记录逐项验收。多设备共享键鼠，语音一次只由一台设备传送。
 

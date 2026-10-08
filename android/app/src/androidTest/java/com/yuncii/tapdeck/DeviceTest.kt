@@ -257,6 +257,9 @@ class DeviceTest {
 
     private fun saveUiScreenshot(name: String) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.waitForIdleSync()
+        // Let the rendered frame reach the screenshot surface after a state update.
+        SystemClock.sleep(200)
         val bitmap = instrumentation.uiAutomation.takeScreenshot() ?: error("Screenshot unavailable")
         val dir = File(instrumentation.targetContext.getExternalFilesDir(null), "ui-validation").apply { mkdirs() }
         val label = InstrumentationRegistry.getArguments().getString("uiLabel") ?: "default"
@@ -1020,9 +1023,14 @@ class DeviceTest {
                     val current = uiState(activity).value
                     uiState(activity).value = current.copy(mic = phase, micMode = profile.mode, activeVoiceProfile = profile, level = if (phase == "transmitting") 0.42f else 0f, config = current.config.copy(voice = Voice(profiles = all.map { it.copy(enabled = false) })))
                 }
-                SystemClock.sleep(80)
+                await {
+                    var updated = false
+                    scenario.onActivity { updated = mic.status == phase && mic.gestureMode == profile.mode }
+                    updated
+                }
                 assertEquals(profile.name, mic.profileName)
                 assertEquals(profile.mode, mic.gestureMode)
+                assertEquals(if (phase == "transmitting") 0.42f else 0f, mic.level, 0f)
                 assertTrue(mic.available)
                 assertFalse(mic.switchAvailable)
                 tapSwitch(); assertEquals(5, feedback.size)

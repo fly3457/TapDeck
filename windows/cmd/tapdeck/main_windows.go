@@ -19,7 +19,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"tapdeck/internal/apkdist"
@@ -264,7 +263,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 	var pairedTable *walk.TableView
 	var unpairButton *walk.PushButton
 	paired := &pairedModel{}
-	var cableLabel *walk.Label
+	var cableLabel *walk.TextLabel
 	var cableButton *walk.PushButton
 	var cableInstalling atomic.Bool
 	cableManager := vbcable.NewManager()
@@ -313,13 +312,6 @@ func window(s *server.Server, dir string, startHidden bool) error {
 		if old != nil {
 			old.Dispose()
 		}
-	}
-	shortcutRows := []d.Widget{d.Label{Text: "勾选 1–8 个快捷键。可直接编辑、录入组合键，或选择左右修饰键。"}}
-	for i := 0; i < config.ShortcutCount; i++ {
-		j := i
-		row := []d.Widget{d.CheckBox{AssignTo: &enabled[j], Text: strconv.Itoa(j + 1), Checked: cfg.Shortcuts[j].Enabled}, d.LineEdit{AssignTo: &labels[j], Text: cfg.Shortcuts[j].Label, MinSize: d.Size{Width: 90}, MaxSize: d.Size{Width: 140}}}
-		row = append(row, keyWidgets(func() walk.Form { return mw }, &keys[j], cfg.Shortcuts[j].Chord)...)
-		shortcutRows = append(shortcutRows, d.Composite{Layout: d.HBox{}, Children: row})
 	}
 	refreshAudio := func() {
 		items, err := audio.Devices()
@@ -412,11 +404,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 		if cableInstalling.Load() {
 			return
 		}
-		if cableErr != nil {
-			_ = cableLabel.SetText("VB-CABLE 检测失败：" + cableErr.Error())
-		} else {
-			_ = cableLabel.SetText(cable.Text())
-		}
+		_ = cableLabel.SetText(cableStatusText(cable, cableErr))
 		cableButton.SetEnabled(cableErr == nil && cable.State == vbcable.Missing && !cable.RestartRequired)
 	}
 	redetectCable := func() {
@@ -532,30 +520,26 @@ func window(s *server.Server, dir string, startHidden bool) error {
 					}},
 				}},
 			}...)},
-			{Title: "快捷键", Layout: d.VBox{}, Children: append([]d.Widget{
-				d.Label{Text: "键盘发送方式"}, d.ComboBox{AssignTo: &backend, Model: backendNames, CurrentIndex: selectedBackend},
-				d.Label{AssignTo: &keyboardLabel, Text: "正在检测虚拟键盘…"},
-				d.Composite{Layout: d.HBox{}, Children: []d.Widget{
-					d.PushButton{AssignTo: &driverButton, Text: "安装 / 修复虚拟键盘", OnClicked: installKeyboard},
-					d.PushButton{Text: "重新检测", OnClicked: redetectKeyboard},
-				}},
-			}, append(shortcutRows, d.VSpacer{})...)},
+			{Title: "快捷键", Layout: d.VBox{}, Children: []d.Widget{
+				keyboardEnvironmentWidgets(&backend, backendNames, selectedBackend, &keyboardLabel, &driverButton, installKeyboard, redetectKeyboard),
+				shortcutSettingsWidgets(func() walk.Form { return mw }, &labels, &keys, &enabled, cfg.Shortcuts),
+			}},
 			{Title: "语音", Layout: d.VBox{}, Children: []d.Widget{
-				voiceRoutingHint(),
-				d.Label{AssignTo: &cableLabel, Text: "正在检测 VB-CABLE…"},
-				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.PushButton{AssignTo: &cableButton, Text: "安装虚拟声卡", OnClicked: installCable}, d.PushButton{Text: "重新检测", OnClicked: redetectCable}, d.PushButton{Text: "VB-Audio 官网", OnClicked: func() { open(vbcable.Website) }}, d.PushButton{Text: "原包许可", OnClicked: func() { open(cableLicense) }}}},
-				d.Label{Text: cableAttributionText},
-				audioDeviceRow(&devices, deviceNames, selectedDevice, refreshAudio, func() {
-					if err := launchSoundInputSettings(shellOpen); err != nil {
-						walk.MsgBox(mw, "音频输入设置", err.Error(), walk.MsgBoxIconError)
-					}
+				voiceEnvironmentWidgets(voiceEnvironmentOptions{
+					cableStatus: &cableLabel, cableButton: &cableButton, level: &audioStatus, devices: &devices, gain: &gain,
+					deviceNames: deviceNames, selectedDevice: selectedDevice, initialGain: cfg.Gain,
+					install: installCable, detect: redetectCable, website: func() { open(vbcable.Website) }, license: func() { open(cableLicense) },
+					refresh: refreshAudio, settings: func() {
+						if err := launchSoundInputSettings(shellOpen); err != nil {
+							walk.MsgBox(mw, "音频输入设置", err.Error(), walk.MsgBoxIconError)
+						}
+					},
 				}),
-				d.Label{AssignTo: &audioStatus, Text: "正在检查音频设备"},
-				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.Label{Text: "音量倍率（0–3）"}, d.NumberEdit{AssignTo: &gain, Value: cfg.Gain, MinValue: 0, MaxValue: 3, Decimals: 2, Increment: 0.1}}},
-				horizontalRule(),
-				d.Label{Text: "名称：最多 8 个汉字 / 16 个英文字符。热键：留空仅传音。"},
-				voiceProfileWidgets(func() walk.Form { return mw }, &voiceEditors, cfg.Voice.Profiles),
-				d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.Label{Text: "尾音结束延迟 ms"}, d.NumberEdit{AssignTo: &delay, Value: float64(cfg.Voice.StopDelayMS), MinValue: 0, MaxValue: 1000}}},
+				settingsSection("语音快捷键设置", 1,
+					d.Label{Text: "名称：最多 8 个汉字 / 16 个英文字符。热键：留空仅传音。"},
+					voiceProfileWidgets(func() walk.Form { return mw }, &voiceEditors, cfg.Voice.Profiles),
+					d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.Label{Text: "尾音结束延迟 ms"}, d.NumberEdit{AssignTo: &delay, Value: float64(cfg.Voice.StopDelayMS), MinValue: 0, MaxValue: 1000}}},
+				),
 			}},
 			{Title: "设置与状态", Layout: d.VBox{}, Children: []d.Widget{d.Label{Text: "HTTP / WSS / UDP 端口（修改后重启连接）"}, d.NumberEdit{AssignTo: &httpPort, Value: float64(cfg.HTTPPort), MinValue: 1024, MaxValue: 65535}, d.NumberEdit{AssignTo: &wssPort, Value: float64(cfg.WSSPort), MinValue: 1024, MaxValue: 65535}, d.NumberEdit{AssignTo: &udpPort, Value: float64(cfg.UDPPort), MinValue: 1024, MaxValue: 65535}, d.Label{Text: "触控板灵敏度：在各 Android 设备触控板左上角设置（0.5–3 倍）"}, d.Label{Text: "手机震动开关：Android 顶部连接图标 → 连接与设置"}, d.CheckBox{AssignTo: &natural, Text: "自然滚动", Checked: cfg.NaturalScroll}, d.CheckBox{AssignTo: &autostartBox, Text: "随 Windows 登录自动启动接收端", Checked: autostartEnabled(), OnCheckedChanged: func() {
 				on, err := autostart.Set(autostartBox.Checked())
@@ -595,6 +579,9 @@ func window(s *server.Server, dir string, startHidden bool) error {
 	for i := range enabled {
 		enabled[i].SetChecked(cfg.Shortcuts[i].Enabled)
 	}
+	for i := range voiceEditors {
+		voiceEditors[i].syncEnabled()
+	}
 	natural.SetChecked(cfg.NaturalScroll)
 	updateSaveVisibility(tabs, saveButton)
 	defer mw.Dispose()
@@ -632,7 +619,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 	showSettings := func() {
 		if !mw.Visible() {
 			for i := range voiceEditors {
-				voiceEditors[i].setExpanded(voiceEditors[i].enabled.Checked())
+				voiceEditors[i].syncEnabled()
 			}
 		}
 		restoreSettingsWindow(mw)
@@ -717,7 +704,8 @@ func window(s *server.Server, dir string, startHidden bool) error {
 					}
 					_ = status.SetText(text)
 					applyKeyboardStatus()
-					_ = audioStatus.SetText(fmt.Sprintf("%s · 输入电平 %.0f%%", v.AudioStatus, v.Level*100))
+					_ = audioStatus.SetText(fmt.Sprintf("输入电平 %.0f%%", v.Level*100))
+					_ = audioStatus.SetToolTipText(v.AudioStatus)
 					_ = stats.SetText(fmt.Sprintf("鼠标包 %d · 音频包 %d · 注入 p95 %.3f ms\n音频缓冲 %d/6 帧 · 历史最大 %d 帧 · 补静音帧 %d", v.MousePackets, v.AudioPackets, v.InjectionP95MS, v.BufferedFrames, v.MaxBufferedFrames, v.Concealed))
 					if address.Text() != v.URL {
 						_ = address.SetText(v.URL)

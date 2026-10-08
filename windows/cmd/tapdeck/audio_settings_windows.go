@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"tapdeck/internal/vbcable"
 	"unsafe"
 
 	"github.com/lxn/walk"
@@ -13,11 +15,19 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-const voiceRoutingText = "TapDeck 输出选择 CABLE Input；\n系统音频输入或目标输入法的麦克风选择 CABLE Output。"
-const cableAttributionText = "VB-CABLE 来自 VB-Audio，是 donationware。"
+const voiceRoutingText = "TapDeck 输出选择 CABLE Input；系统音频输入或目标输入法的麦克风选择 CABLE Output。"
+const cableAttributionText = "VB-CABLE 是 donationware 来自 VB-Audio。"
 
-func audioDeviceRow(devices **walk.ComboBox, names []string, selected int, refresh, settings func()) d.Composite {
+func cableStatusText(status vbcable.Status, err error) string {
+	if err != nil {
+		return "VB-CABLE 检测失败：" + err.Error() + "。" + cableAttributionText
+	}
+	return strings.Replace(status.Text(), "可用：", "可用；", 1) + "。" + cableAttributionText
+}
+
+func audioDeviceRow(level **walk.Label, devices **walk.ComboBox, names []string, selected int, refresh, settings func()) d.Composite {
 	return d.Composite{Layout: d.HBox{MarginsZero: true}, Children: []d.Widget{
+		d.Label{AssignTo: level, Text: "输入电平 0%", MinSize: d.Size{Width: 88}, MaxSize: d.Size{Width: 88}},
 		d.ComboBox{AssignTo: devices, Model: names, CurrentIndex: selected, StretchFactor: 1, MinSize: d.Size{Width: 180}},
 		// Allocate the fixed actions first so Walk gives the readonly selector
 		// all remaining width (its ComboBox is growable but not greedy).
@@ -29,8 +39,8 @@ func audioDeviceRow(devices **walk.ComboBox, names []string, selected int, refre
 	}}
 }
 
-func voiceRoutingHint() d.TextLabel {
-	return d.TextLabel{Text: voiceRoutingText, TextColor: walk.RGB(200, 35, 35), MinSize: d.Size{Width: 100}}
+func voiceRoutingHint() d.Label {
+	return d.Label{Text: voiceRoutingText, TextColor: walk.RGB(200, 35, 35)}
 }
 
 // Start with the recording-device list, where users can select CABLE Output
