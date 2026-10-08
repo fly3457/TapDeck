@@ -1,6 +1,9 @@
 param([switch]$Console,[string]$JavaHome,[string]$SdkRoot,[switch]$UseLocalProxy,[string]$OutputDirectory)
 $ErrorActionPreference = 'Stop'
 $taskProjectRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'versioning.ps1')
+$taskVersions = Get-TapDeckVersions $taskProjectRoot
+$taskVersionHash = (Get-FileHash -LiteralPath (Join-Path $taskProjectRoot 'version.properties') -Algorithm SHA256).Hash
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $taskProjectRoot 'dist' }
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 $taskAndroidArguments = @{}
@@ -8,6 +11,7 @@ if ($JavaHome) { $taskAndroidArguments.JavaHome = $JavaHome }
 if ($SdkRoot) { $taskAndroidArguments.SdkRoot = $SdkRoot }
 if ($UseLocalProxy) { $taskAndroidArguments.UseLocalProxy = $true }
 # A PC release always starts with this source tree's Android build.
+& (Join-Path $PSScriptRoot 'test-versioning.ps1')
 & (Join-Path $PSScriptRoot 'build-android.ps1') @taskAndroidArguments
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $env:CGO_ENABLED = '0'
@@ -19,28 +23,19 @@ Push-Location (Join-Path $taskProjectRoot 'windows')
 try {
     # 把编译好的 Android 安装包放进 embed 目录，接收端就能在配对网页上给出下载二维码。
     $taskApkDir = Join-Path $taskProjectRoot 'windows\internal\apkdist\assets'
+    $taskApk = Get-TapDeckAndroidBuild $taskProjectRoot $taskVersions
     New-Item -ItemType Directory -Force -Path $taskApkDir | Out-Null
     Get-ChildItem -LiteralPath $taskApkDir -Filter *.apk -ErrorAction SilentlyContinue | Remove-Item -Force
-    $taskApkOutput = Join-Path $taskProjectRoot 'android\app\build\outputs\apk\debug'
-    $taskApkSource = Join-Path $taskApkOutput 'app-debug.apk'
-    if (-not (Test-Path -LiteralPath $taskApkSource)) { throw 'Android build did not produce app-debug.apk' }
-    $taskApkMetadata = Get-Content -LiteralPath (Join-Path $taskApkOutput 'output-metadata.json') -Raw | ConvertFrom-Json
-    $taskApkElement = @($taskApkMetadata.elements | Where-Object { $_.outputFile -eq 'app-debug.apk' })
-    if ($taskApkElement.Count -ne 1) { throw 'Android APK version metadata missing or ambiguous' }
-    $taskVersion = $taskApkElement[0].versionName
-    if ($taskVersion -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') { throw 'Invalid release version' }
+    $taskVersion = $taskVersions.ReceiverVersion
     go run ./cmd/winresources -version $taskVersion
     if ($LASTEXITCODE -ne 0) { throw 'Windows resource compilation failed' }
-    $taskApkName = 'TapDeck-' + $taskVersion + '.apk'
-    $taskApkHash = (Get-FileHash -LiteralPath $taskApkSource -Algorithm SHA256).Hash.ToLowerInvariant()
-    $taskEmbeddedApk = Join-Path $taskApkDir $taskApkName
-    Copy-Item -LiteralPath $taskApkSource -Destination $taskEmbeddedApk -Force
-    if ((Get-FileHash -LiteralPath $taskEmbeddedApk -Algorithm SHA256).Hash.ToLowerInvariant() -ne $taskApkHash) { throw 'Embedded APK hash mismatch' }
-    $taskEmbeddedMetadata = @{ version_name = $taskApkElement[0].versionName; version_code = $taskApkElement[0].versionCode; sha256 = $taskApkHash } | ConvertTo-Json
+    $taskEmbeddedMetadata = @{ version_name = $taskApk.VersionName; version_code = $taskApk.VersionCode; sha256 = $taskApk.SHA256 } | ConvertTo-Json
     [IO.File]::WriteAllText((Join-Path $taskApkDir 'apk.json'),$taskEmbeddedMetadata,[Text.UTF8Encoding]::new($false))
-    Copy-Item -LiteralPath $taskApkSource -Destination (Join-Path $OutputDirectory 'TapDeck-debug.apk') -Force
-    Copy-Item -LiteralPath $taskApkSource -Destination (Join-Path $OutputDirectory $taskApkName) -Force
-    Write-Host ('内嵌 Android {0}（code {1}）：SHA-256 {2}' -f $taskApkElement[0].versionName,$taskApkElement[0].versionCode,$taskApkHash)
+    foreach ($taskApkCopy in @((Join-Path $taskApkDir $taskApk.Name), (Join-Path $OutputDirectory 'TapDeck-debug.apk'), (Join-Path $OutputDirectory $taskApk.Name))) {
+        Copy-Item -LiteralPath $taskApk.Path -Destination $taskApkCopy -Force
+        if ((Get-FileHash -LiteralPath $taskApkCopy -Algorithm SHA256).Hash.ToLowerInvariant() -cne $taskApk.SHA256) { throw 'Embedded or distribution APK hash mismatch' }
+    }
+    Write-Host ('接收端 {0} 内嵌 Android {1}（code {2}）：SHA-256 {3}' -f $taskVersion,$taskApk.VersionName,$taskApk.VersionCode,$taskApk.SHA256)
     go test ./... -skip '^(TestVolumeControlChangesEndpoint|TestEnableDisableRoundTrip)$'
     if ($LASTEXITCODE -ne 0) { throw 'Go tests failed' }
     go vet ./...
@@ -58,15 +53,48 @@ try {
     go build -trimpath -o (Join-Path $OutputDirectory $taskProbeName) ./cmd/hidprobe
     if ($LASTEXITCODE -ne 0) { throw 'HID diagnostic build failed' }
     # Verify the Explorer Details fields, then keep stable names for existing scripts.
-    foreach ($taskArtifact in @(
+    $taskArtifacts = @(
         @{ Name = $taskReceiverName; Alias = 'TapDeck.exe' },
         @{ Name = $taskDebugName; Alias = 'TapDeck-debug.exe' },
         @{ Name = $taskProbeName; Alias = 'TapDeck-hidprobe.exe' }
-    )) {
+    )
+    $taskFiles = @($taskApk.Name, 'TapDeck-debug.apk')
+    foreach ($taskArtifact in $taskArtifacts) {
         $taskArtifactPath = Join-Path $OutputDirectory $taskArtifact.Name
         $taskFileVersion = (Get-Item -LiteralPath $taskArtifactPath).VersionInfo
         if ($taskFileVersion.FileVersion -ne $taskVersion -or $taskFileVersion.ProductVersion -ne $taskVersion) { throw ('Windows version metadata mismatch: ' + $taskArtifact.Name) }
         Copy-Item -LiteralPath $taskArtifactPath -Destination (Join-Path $OutputDirectory $taskArtifact.Alias) -Force
+        if ((Get-FileHash -LiteralPath $taskArtifactPath -Algorithm SHA256).Hash -ne
+            (Get-FileHash -LiteralPath (Join-Path $OutputDirectory $taskArtifact.Alias) -Algorithm SHA256).Hash) { throw ('Windows compatibility copy mismatch: ' + $taskArtifact.Alias) }
+        $taskFiles += @($taskArtifact.Name, $taskArtifact.Alias)
         Write-Host ('Windows 程序：' + $taskArtifactPath)
     }
+    # Read back the APK actually linked into BOTH receiver executables, without starting a server.
+    foreach ($taskReceiver in @($taskReceiverName, $taskDebugName)) {
+        $taskInfoPath = Join-Path $OutputDirectory ($taskReceiver + '.apk-info.json')
+        $taskErrorPath = Join-Path $OutputDirectory ($taskReceiver + '.apk-info.log')
+        $taskProcess = Start-Process -FilePath (Join-Path $OutputDirectory $taskReceiver) -ArgumentList '--apk-info' -WindowStyle Hidden -PassThru -RedirectStandardOutput $taskInfoPath -RedirectStandardError $taskErrorPath
+        try {
+            if (-not $taskProcess.WaitForExit(30000)) { $taskProcess.Kill(); throw 'Timed out verifying embedded APK' }
+            if ($taskProcess.ExitCode -ne 0) { throw ('Embedded APK verification failed: ' + (Get-Content -LiteralPath $taskErrorPath -Raw)) }
+        } finally { $taskProcess.Dispose() }
+        Assert-TapDeckApkInfo (Get-Content -LiteralPath $taskInfoPath -Raw | ConvertFrom-Json) $taskVersions $taskApk
+    }
+    $taskReportedVersion = (& (Join-Path $OutputDirectory $taskDebugName) --version | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $taskReportedVersion -cne ('TapDeck ' + $taskVersion)) { throw 'Receiver runtime version mismatch' }
+    if ((Get-FileHash -LiteralPath (Join-Path $taskProjectRoot 'version.properties') -Algorithm SHA256).Hash -ne $taskVersionHash) { throw 'Version configuration changed during receiver build' }
+    $taskFileRecords = @($taskFiles | ForEach-Object {
+        $taskFilePath = Join-Path $OutputDirectory $_
+        @{ filename = $_; bytes = (Get-Item -LiteralPath $taskFilePath).Length; sha256 = (Get-FileHash -LiteralPath $taskFilePath -Algorithm SHA256).Hash.ToLowerInvariant() }
+    })
+    $taskRelease = [ordered]@{
+        schema = 1
+        built_at = [DateTime]::UtcNow.ToString('o')
+        receiver_version = $taskVersion
+        controllers = @(@{ platform = 'android'; version = $taskApk.VersionName; version_code = $taskApk.VersionCode; filename = $taskApk.Name; sha256 = $taskApk.SHA256; bytes = $taskApk.Bytes })
+        artifacts = $taskFileRecords
+    }
+    [IO.File]::WriteAllText((Join-Path $OutputDirectory 'release-manifest.json'), ($taskRelease | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllLines((Join-Path $OutputDirectory 'SHA256SUMS.txt'), [string[]]@($taskFileRecords | ForEach-Object { $_.sha256 + '  ' + $_.filename }), [Text.UTF8Encoding]::new($false))
+    Write-Host ('版本、内嵌 APK 及产物清单校验通过：' + (Join-Path $OutputDirectory 'release-manifest.json'))
 } finally { Pop-Location }

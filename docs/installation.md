@@ -10,16 +10,17 @@ App 内扫码使用 [ZXing Android Embedded](https://github.com/journeyapps/zxin
 
 发布统一使用根目录的 `scripts/build-windows.ps1`，默认产物位于 `dist`。可传 `-OutputDirectory` 输出到独立目录，方便在已有接收端运行时验证新版本。
 
-1. 先调用 Android 构建和 Kotlin 单元测试。
+1. 从 `version.properties` 读取接收端和 Android 独立版本，运行版本规则测试，再调用 Android 构建和 Kotlin 单元测试。
 2. 从 `android/app/build/outputs/apk/debug/app-debug.apk` 复制该次 Gradle 产物，不读取旧 `dist` APK。
-3. 对比复制前后的 SHA-256，从 Gradle `output-metadata.json` 生成内嵌版本清单。
-4. 从同一版本生成 Windows 清单与 VERSIONINFO 资源，运行 Go 测试、`go vet`，构建带版本号的 EXE，并校验文件版本及产品版本。APK 缺失、Android 失败、哈希或版本信息不一致均终止发布。
+3. 验证 Gradle `output-metadata.json` 与 APK 内部版本均匹配 Android 版本清单，对比复制前后的 SHA-256，生成内嵌版本清单。
+4. 从接收端版本生成 Windows 清单与 VERSIONINFO 资源，运行 Go 测试、`go vet`，构建带版本号的 EXE，并校验文件版本及产品版本。
+5. 从两个接收端 EXE 读取 `--apk-info`，核对实际内嵌 APK 版本、code、名称、大小与哈希，生成 `release-manifest.json` 和 `SHA256SUMS.txt`。APK 缺失、Android 失败、哈希或版本信息不一致均终止交付。
 
-当前 Android `versionName=0.3.12`、`versionCode=15`，保留 `com.yuncii.tapdeck` 及本机原有开发签名。APK 文件名为 `TapDeck-0.3.12.apk`；独立 Android 构建、Windows 交付目录和内嵌下载均使用这一命名，另保留 `TapDeck-debug.apk` 兼容副本。手机“连接与设备设置”标题下显示安装版本，网页和 PC 显示内嵌版本及完整 SHA-256。`TapDeck-debug.exe --version` 输出 PC 版本，`--apk-info` 可核对两端版本、下载文件名和内嵌哈希。Windows 构建从同一份 Gradle 元数据注入版本，避免两端手工维护产生差异。
+当前接收端为 `0.3.13`，Android `versionName=0.3.13`、`versionCode=16`，均来自根目录 `version.properties`，两端版本允许不同。保留 `com.yuncii.tapdeck` 及本机原有开发签名。APK 文件名为 `TapDeck-0.3.13.apk`；独立 Android 构建、Windows 交付目录和内嵌下载均使用 Android 版本命名，另保留 `TapDeck-debug.apk` 兼容副本。手机“连接与设备设置”标题下显示安装版本，网页和 PC 显示内嵌版本及完整 SHA-256。`TapDeck-debug.exe --version` 输出接收端版本，`--apk-info` 可分别核对两端版本、下载文件名和内嵌哈希。每次迭代的修改位置和固定步骤见 [版本管理](versioning.md)。
 
-换构建机时必须保留相同签名密钥，才能覆盖已有安装。主界面说明见 [android-ui.md](android-ui.md)，本次单 EXE 输出至 `dist/0.3.12`。更新时退出旧托盘程序后启动新版 EXE，再覆盖安装 Android APK。连接不支持双指缩放和三指窗口操作的旧电脑端时，App 会提示新手势需要升级。
+换构建机时必须保留相同签名密钥，才能覆盖已有安装。主界面说明见 [android-ui.md](android-ui.md)，本次单 EXE 输出至 `dist/0.3.13`。更新时退出旧托盘程序后启动新版 EXE，再覆盖安装 Android APK。连接不支持双指缩放和三指窗口操作的旧电脑端时，App 会提示新手势需要升级。
 
-Windows 主程序为 `TapDeck-0.3.12.exe`，控制台诊断版为 `TapDeck-debug-0.3.12.exe`，HID 工具为 `TapDeck-hidprobe-0.3.12.exe`。三者的文件版本与产品版本均显示 `0.3.12`，Windows 数字版本为 `0.3.12.0`。构建仍保留 `TapDeck.exe`、`TapDeck-debug.exe` 和 `TapDeck-hidprobe.exe`，分别与带版本号的文件完全相同。资源生成器保留原有 Common Controls、DPI 和管理员权限清单。
+Windows 主程序为 `TapDeck-0.3.13.exe`，控制台诊断版为 `TapDeck-debug-0.3.13.exe`，HID 工具为 `TapDeck-hidprobe-0.3.13.exe`。三者的文件版本与产品版本均显示 `0.3.13`，Windows 数字版本为 `0.3.13.0`。构建仍保留 `TapDeck.exe`、`TapDeck-debug.exe` 和 `TapDeck-hidprobe.exe`，分别与带版本号的文件完全相同。资源生成器保留原有 Common Controls、DPI 和管理员权限清单。
 
 ## PC 关于与手机输入测试
 

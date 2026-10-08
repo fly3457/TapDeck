@@ -35,7 +35,7 @@ import (
 	"unsafe"
 )
 
-// Official builds inject the release version from the verified Android metadata.
+// Official builds inject receiver.version from the root version.properties.
 var appVersion = "dev"
 
 func main() {

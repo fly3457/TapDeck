@@ -1,6 +1,9 @@
 param([int]$BrowserPort = 9326, [string]$OutputDirectory)
 $ErrorActionPreference = 'Stop'
 $taskProjectRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'versioning.ps1')
+$taskVersions = Get-TapDeckVersions $taskProjectRoot
+$taskGestureLog = 'native-gestures-' + $taskVersions.ReceiverVersion + '.log'
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $taskProjectRoot '.tools\ui-validation' }
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
@@ -38,10 +41,10 @@ try {
     $env:TAPDECK_NATIVE_EDGE_IMAGE = $taskImage
     Push-Location (Join-Path $taskProjectRoot 'windows')
     try {
-        & go test ./internal/keyboard -run '^TestNative' -count=1 -v *> (Join-Path $OutputDirectory 'native-gestures-0.3.3.log')
+        & go test ./internal/keyboard -run '^TestNative' -count=1 -v *> (Join-Path $OutputDirectory $taskGestureLog)
         $taskResult = $LASTEXITCODE
     } finally { Pop-Location }
-    Get-Content -LiteralPath (Join-Path $OutputDirectory 'native-gestures-0.3.3.log')
+    Get-Content -LiteralPath (Join-Path $OutputDirectory $taskGestureLog)
     if ($taskResult -ne 0) { throw 'Native gesture acceptance failed' }
 } finally {
     $env:TAPDECK_NATIVE_GESTURE_TEST = $taskPreviousGesture

@@ -8,7 +8,7 @@ TapDeck 将手机麦克风的声音传到 Windows，配合电脑上的语音输�
 
 **[下载 Windows EXE](https://github.com/fly3457/TapDeck/releases/download/v0.3.6/TapDeck.exe) · [下载 Android APK](https://github.com/fly3457/TapDeck/releases/download/v0.3.6/TapDeck-debug.apk) · [查看完整发布包](https://github.com/fly3457/TapDeck/releases/tag/v0.3.6)**
 
-以上为 0.3.6 公开下载链接。当前源码版本为 0.3.12：第三组默认名称改为“自定义语音输入”，所有热键留空；PC 语音页移除独立“捐赠 / 购买”按钮，保留官网、原包许可及 donationware 说明。已有配置继续保留。
+以上为 0.3.6 公开下载链接。当前接收端与 Android 源码版本为 0.3.13 / Android code 16：统一版本清单已支持两端独立升版，构建核验包内版本及 EXE 实际内嵌的最新 APK。第三组语音默认名称为“自定义语音输入”，所有热键留空；已有配置继续保留。
 
 ## 为 Vibe Coding 准备的功能
 
@@ -54,7 +54,7 @@ TapDeck 将手机麦克风的声音传到 Windows，配合电脑上的语音输�
 
 ## 下载与安装
 
-下表公开下载包为 **0.3.6（测试版）**，Android `versionCode=9`；源码及本地构建已更新到 **0.3.12** / code `15`。支持 **Windows 11 x64**、**Android 8 / API 26 及以上**；手机与电脑需要处于可互通的局域网。
+下表公开下载包为 **0.3.6（测试版）**，Android `versionCode=9`；接收端源码及本地构建为 **0.3.13**，内嵌 Android **0.3.13** / code `16`。支持 **Windows 11 x64**、**Android 8 / API 26 及以上**；手机与电脑需要处于可互通的局域网。
 
 | 文件 | 用途 |
 |---|---|
@@ -116,20 +116,24 @@ Android 使用 Kotlin，Windows 接收端使用 Go，控制协议为 v2。当前
 在仓库根目录的 PowerShell 执行官方发布入口：
 
 ```powershell
-.\scripts\build-windows.ps1 -OutputDirectory 'dist\0.3.12'
+. .\scripts\versioning.ps1
+$releaseVersions = Get-TapDeckVersions (Get-Location).Path
+.\scripts\build-windows.ps1 -OutputDirectory (Join-Path 'dist' $releaseVersions.ReceiverVersion)
 # 自行指定 JDK 和 Android SDK 时：
-.\scripts\build-windows.ps1 -OutputDirectory 'dist\0.3.12' -JavaHome 'C:\path\to\jdk17' -SdkRoot "$env:LOCALAPPDATA\Android\Sdk"
+.\scripts\build-windows.ps1 -JavaHome 'C:\path\to\jdk17' -SdkRoot "$env:LOCALAPPDATA\Android\Sdk"
 ```
 
-该入口先构建 Android 并运行 Kotlin 测试，从本次 Gradle 输出复制 `TapDeck-0.3.12.apk`、核对 SHA-256，再运行 Go 测试、`go vet` 和 Windows 构建。两端版本与 APK 文件名来自同一份 Gradle 元数据，同时保留 `TapDeck-debug.apk` 兼容副本。Android 失败、APK 缺失或哈希不一致时终止，不沿用旧 APK。签名密钥不随源码分发；覆盖既有 Android 安装须使用相同签名。
+每次新迭代先运行 `scripts/bump-version.ps1`，默认同时递增两端补丁版本和 Android code；可选 `-Target Receiver` 或 `-Target Android`，后者也递增接收端补丁版本以交付最新内嵌包。重复编译不重复升版。根目录 [version.properties](version.properties) 是唯一版本来源，详细的修改位置、强制交付步骤及 iOS 等未来端规划见 [版本管理](docs/versioning.md)。
 
-Windows 生成 `TapDeck-0.3.12.exe`、`TapDeck-debug-0.3.12.exe` 和 `TapDeck-hidprobe-0.3.12.exe`；文件名、程序内版本与“属性 → 详细信息”中的文件版本／产品版本均自动取自同一份版本信息。不带版本号的 EXE 作为兼容副本保留，供现有脚本使用。
+该入口先运行版本规则测试、构建 Android 并运行 Kotlin 测试，核验 Gradle 元数据和 APK 内部版本，再从本次 Gradle 输出复制 `TapDeck-0.3.13.apk`、核对 SHA-256，然后运行 Go 测试、`go vet` 和 Windows 构建。接收端与 Android 版本可不同。构建后读取两个接收端 EXE 的 `--apk-info`，核对实际内嵌的版本、code、文件名、大小及哈希，生成 `release-manifest.json` 和 `SHA256SUMS.txt`。任何检查失败均终止，不沿用旧 APK。签名密钥不随源码分发；覆盖既有 Android 安装须使用相同签名。
+
+Windows 生成 `TapDeck-0.3.13.exe`、`TapDeck-debug-0.3.13.exe` 和 `TapDeck-hidprobe-0.3.13.exe`；文件名、程序内版本与“属性 → 详细信息”中的文件版本／产品版本均自动取自接收端版本。无版本号的 EXE 及 `TapDeck-debug.apk` 作为兼容副本保留，对外交付使用带版本号文件。
 
 Android 单独开发可用 [build-android.ps1](scripts/build-android.ps1)，模拟器矩阵可用 [test-android-ui.ps1](scripts/test-android-ui.ps1)。国际依赖连接失败时，先检查 Clash Verge 和 Anycast，Android 构建可加 `-UseLocalProxy` 使用本机 SOCKS5 1080。构建与内嵌规则见 [APK 分发说明](docs/apk-download.md)。
 
 ## 验证与当前范围
 
-0.3.8 已通过 51 项 Kotlin 单元测试和官方流程中的 Go 测试、`go vet`、两端构建；连接设置和扫码回填在普通屏幕及小屏大字体的 Android 14 模拟器上回归。交付 APK 与 EXE 内嵌 APK 的版本和 SHA-256 一致。详细结果、硬件测试排除项和历史真机记录见 [验证记录](docs/verification.md)。
+0.3.13 已通过 54 项 Kotlin 单元测试和官方流程中的 Go 测试、`go vet`、两端构建；版本规则测试覆盖独立升版、无效版本、失败保留原值及旧包／内嵌包不一致拦截。交付 APK 与两个接收端 EXE 内嵌 APK 的版本和 SHA-256 一致。此轮针对版本与构建流程，没有重跑设备 UI；详细结果、硬件测试排除项和历史真机记录见 [验证记录](docs/verification.md)。
 
 当前 Android 使用竖屏布局，Windows 运行文件为未签名测试构建，APK 使用现有开发签名。用户已确认其手机在关闭系统震动开关后仍可使用 App 震动；其他机型表现、覆盖升级及原配对重连，以及手机语音转换成目标输入框文字的完整链路，按验证记录逐项验收。多设备共享键鼠，语音一次只由一台设备传送。
 
@@ -142,6 +146,7 @@ Android 单独开发可用 [build-android.ps1](scripts/build-android.ps1)，模�
 | 配对、驱动与设备管理 | [安装引导](docs/installation.md)、[多个控制端](docs/multi-controller.md) |
 | 快捷键与语音热键 | [支持的按键](docs/special-keys.md)、[语音热键](docs/voice-hotkey.md) |
 | 自动连接 | [自动重连与后台自启](docs/auto-connect.md) |
+| 版本及打包规则 | [版本管理与每轮必做事项](docs/versioning.md)、[APK 分发](docs/apk-download.md) |
 | 验证及通信协议 | [验证记录](docs/verification.md)、[协议说明](protocol/README.md) |
 
 TapDeck 源码采用 [MIT 许可证](LICENSE)。第三方组件按各自许可分发，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。内嵌 VB-CABLE 来自 VB-Audio，适用其专有许可及 donationware 条件；程序保留来源、许可、donationware 说明和官网入口，可经官网捐赠或购买许可；完整交付包保留相关声明。

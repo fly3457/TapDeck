@@ -2,6 +2,19 @@
 
 测试日期：2026-10-06 至 2026-10-08。本记录区分已观察到的结果与尚未完成的验收，不把目标数值当作实测结果。
 
+## 0.3.13 版本长期规则与最新控制端内嵌校验
+
+2026-10-08 将每次迭代升版、所有平台产物携带版本、接收端每次打包嵌入最新控制端，以及完成后提交 Git 写入 `AGENTS.md` 和 [版本管理](versioning.md)。新增唯一版本来源 `version.properties`，接收端与 Android 可独立演进；本轮通过递增脚本从 0.3.12 / code 15 升至接收端 0.3.13、Android 0.3.13 / code 16。
+
+- `scripts/test-versioning.ps1` 的 29 项检查通过：不同版本组合、接收端独立升版、Android 更新同时递增接收端、major/minor 递增、无效／重复／大小写错误字段、版本及 code 越界、失败保留原文件、过期 Gradle 元数据、缺包／空包，以及最终 EXE 的版本、code、文件名、大小和哈希不一致均拒绝。
+- 官方 `scripts/build-windows.ps1 -OutputDirectory dist/0.3.13` 通过：54 项 Kotlin JVM 测试、Go 测试、`go vet`、Android APK 及三个 Windows EXE 构建；继续排除实际改变系统音量和开机自启注册表的两个测试。
+- APK 内部 Manifest 经 SDK `aapt` 检查，与 Gradle 元数据和统一版本清单一致；`apksigner verify --print-certs` 通过，签名证书与 0.3.12 相同，包名保持 `com.yuncii.tapdeck`。
+- 三个 EXE 的文件版本与产品版本均为 `0.3.13`，数字版本 `0.3.13.0`；诊断版 `--version` 为 `TapDeck 0.3.13`。正式版与诊断版均实际执行 `--apk-info`，核对内嵌 Android 0.3.13 / code 16、文件名、字节数及 SHA-256。
+- Gradle、独立 Android、接收端内嵌及交付目录 APK 哈希一致。三个 EXE 与其兼容副本分别哈希一致；构建自动生成的 `release-manifest.json` 和 `SHA256SUMS.txt` 记录八个交付／兼容文件，实际文件哈希复核通过。
+- Android 截图目录和 Windows 手势日志读取对应端版本，不再维护手写版本路径。此轮未启动设备 UI、实体手机或实际 PC 接收服务；iOS 等未来平台仅记录接入规划，没有生成或声称验证其安装包。
+
+交付目录为 `dist/0.3.13`，包含 `TapDeck-0.3.13.exe`、`TapDeck-debug-0.3.13.exe`、`TapDeck-hidprobe-0.3.13.exe` 和 `TapDeck-0.3.13.apk`。APK 为 11,442,228 字节，SHA-256 为 `5ab4c847c96c88855c0ed573a9e35656089f408312b14b1abe0704e71aa9d647`。构建日志为 `.tools/ui-validation/windows-0.3.13-versioning-build.log`，两份 EXE 内嵌核对结果为交付目录下的 `*.exe.apk-info.json`。本轮仅生成本地交付包，既有公开 0.3.6 下载链接保持原值。
+
 ## 0.3.12 Windows 文件名与文件属性版本
 
 2026-10-08 为 Windows 构建增加版本文件名，沿用本轮应用版本 0.3.12 / Android code 15。正式版、控制台诊断版及 HID 工具分别生成 `TapDeck-0.3.12.exe`、`TapDeck-debug-0.3.12.exe`、`TapDeck-hidprobe-0.3.12.exe`，并保留三个不带版本号的兼容副本。

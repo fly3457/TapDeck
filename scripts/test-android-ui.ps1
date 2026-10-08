@@ -2,6 +2,8 @@ param([string]$Serial = 'emulator-5560', [string]$OutputDirectory, [switch]$Skip
     [ValidateSet('phone-100', 'phone-130', 'small-130', 'tablet-100', 'restricted-100')][string[]]$Variants)
 $ErrorActionPreference = 'Stop'
 $taskProjectRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'versioning.ps1')
+$taskVersions = Get-TapDeckVersions $taskProjectRoot
 $taskAdb = Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe'
 if (-not (Test-Path -LiteralPath $taskAdb)) { throw 'Android platform-tools not found' }
 function Invoke-TapDeckDevice([string[]]$Arguments) {
@@ -12,7 +14,7 @@ function Invoke-TapDeckDevice([string[]]$Arguments) {
 if ((Invoke-TapDeckDevice -Arguments @('shell', 'getprop', 'ro.kernel.qemu') | Out-String).Trim() -ne '1') {
     throw 'This matrix changes display settings and must run on an Android emulator.'
 }
-if (-not $OutputDirectory) { $OutputDirectory = Join-Path $taskProjectRoot 'dist\0.3.12\screenshots' }
+if (-not $OutputDirectory) { $OutputDirectory = Join-Path $taskProjectRoot ('dist\android-' + $taskVersions.AndroidVersion + '\screenshots') }
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 if (-not $SkipBuild) {

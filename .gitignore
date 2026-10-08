@@ -20,6 +20,6 @@ Thumbs.db
 *.key
 *.hprof
 
-# 构建时从 dist 复制进来的 Android 安装包（由 build-windows.ps1 内嵌进接收端，不入库）
+# 构建时从本次 Gradle 输出复制的 Android 安装包（由 build-windows.ps1 内嵌，不入库）
 windows/internal/apkdist/assets/*.apk
 windows/internal/apkdist/assets/apk.json

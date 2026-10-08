@@ -13,7 +13,7 @@ import (
 )
 
 func main() {
-	release := flag.String("version", "", "release version from Android build metadata")
+	release := flag.String("version", "", "receiver release version from version.properties")
 	flag.Parse()
 	if err := generate(*release); err != nil {
 		fmt.Fprintln(os.Stderr, err)

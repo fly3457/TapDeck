@@ -1,8 +1,17 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
 }
+val tapDeckVersions = Properties().apply {
+    rootProject.file("../version.properties").inputStream().use { load(it) }
+}
+val tapDeckAndroidVersion = requireNotNull(tapDeckVersions.getProperty("controller.android.version"))
+val tapDeckAndroidCode = requireNotNull(tapDeckVersions.getProperty("controller.android.versionCode")).toInt()
+require(tapDeckAndroidVersion.matches(Regex("(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)")))
+require(tapDeckAndroidCode in 1..2100000000)
 android {
     namespace = "com.yuncii.tapdeck"
     compileSdk = 37
@@ -10,8 +19,8 @@ android {
         applicationId = "com.yuncii.tapdeck"
         minSdk = 26
         targetSdk = 37
-        versionCode = 15
-        versionName = "0.3.12"
+        versionCode = tapDeckAndroidCode
+        versionName = tapDeckAndroidVersion
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true; buildConfig = true }
