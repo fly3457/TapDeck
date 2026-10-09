@@ -20,7 +20,7 @@ Windows EXE 内嵌本次构建的 Android APK，不必另找安装文件。
 | `/apk` | APK 下载，带版本文件名及 Range 续传 |
 | `/apk/qr.png` | 下载二维码，使用访问网页的主机地址 |
 
-`windows/internal/apkdist` 内嵌 APK 和元数据，启动前校验。官方 `scripts/build-windows.ps1` 先构建和测试 Android，核验 Gradle 与 APK 内部版本，再从本次输出内嵌并比对两个接收端的 `--apk-info`。失败不能复用旧包，见[版本规则](versioning.md)。
+`windows/internal/apkdist` 内嵌 APK 和元数据，启动前校验。官方 `scripts/build-windows.ps1` 先构建和测试 Android release，核验 Gradle、APK 内部版本、不可调试标记和固定签名证书，再从本次输出内嵌并比对两个接收端的 `--apk-info`。失败不能复用旧包，见[版本规则](versioning.md)和[Android 签名](android-release.md)。
 
 构建生成 `release-manifest.json` 和 `SHA256SUMS.txt`；独立 APK 与两个 EXE 内嵌包必须同哈希。源码直接构建缺少有效内嵌包时不能发布。
 

@@ -45,4 +45,4 @@ TapDeck 采用 [MIT 许可证](LICENSE)，第三方组件适用各自许可，�
 
 [使用与开发文档](docs/README.md) · [控制协议](protocol/README.md) · [版本与发布规则](docs/versioning.md)
 
-从仓库根目录构建：`powershell -File scripts/build-windows.ps1`。该流程构建并测试 Android、内嵌最新 APK，再构建和核验 Windows 产物。
+先配置 [Android 发布签名](docs/android-release.md)，再从仓库根目录构建：`powershell -File scripts/build-windows.ps1`。该流程构建并核验不可调试的 Android release APK，再内嵌并核验 Windows 产物。

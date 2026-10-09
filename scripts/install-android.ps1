@@ -6,7 +6,7 @@ $taskAdbPath = if ($taskAdbCommand) { $taskAdbCommand.Source } else { Join-Path 
 if (-not (Test-Path -LiteralPath $taskAdbPath)) { throw 'Android platform-tools (adb) not found' }
 $taskAdbArguments = @()
 if ($Serial) { $taskAdbArguments = @('-s', $Serial) }
-& $taskAdbPath @taskAdbArguments install -r (Join-Path $taskProjectRoot 'dist\TapDeck-debug.apk')
+& $taskAdbPath @taskAdbArguments install -r (Join-Path $taskProjectRoot 'dist\TapDeck.apk')
 if ($LASTEXITCODE -ne 0) { throw 'APK install failed' }
 # Some BOOX firmware disables newly sideloaded applications; enable only this package.
 & $taskAdbPath @taskAdbArguments shell pm enable com.yuncii.tapdeck

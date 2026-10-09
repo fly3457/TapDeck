@@ -122,7 +122,8 @@ func main() {
 		if err := apkdist.Verify(); err != nil {
 			log.Fatal(err)
 		}
-		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"pc_version": appVersion, "version_name": apkdist.Version(), "version_code": apkdist.VersionCode(), "filename": apkdist.Name(), "sha256": apkdist.SHA256(), "bytes": len(apkdist.Bytes())})
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"pc_version": appVersion, "version_name": apkdist.Version(), "version_code": apkdist.VersionCode(), "filename": apkdist.Name(), "sha256": apkdist.SHA256(), "bytes": len(apkdist.Bytes()),
+			"build_type": apkdist.BuildType(), "debuggable": apkdist.Debuggable(), "certificate_sha256": apkdist.CertificateSHA256()})
 		return
 	}
 	if *probe > 0 {

@@ -18,15 +18,10 @@ if (-not $OutputDirectory) { $OutputDirectory = Join-Path $taskProjectRoot ('dis
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 if (-not $SkipBuild) {
-    & (Join-Path $PSScriptRoot 'build-android.ps1')
-    Push-Location (Join-Path $taskProjectRoot 'android')
-    try {
-        & .\gradlew.bat assembleDebugAndroidTest --console=plain
-        if ($LASTEXITCODE -ne 0) { throw 'Android UI test build failed' }
-    } finally { Pop-Location }
+    & (Join-Path $PSScriptRoot 'build-android.ps1') -Instrumentation
 }
-$taskApk = Join-Path $taskProjectRoot 'android\app\build\outputs\apk\debug\app-debug.apk'
-$taskTestApk = Join-Path $taskProjectRoot 'android\app\build\outputs\apk\androidTest\debug\app-debug-androidTest.apk'
+$taskApk = Join-Path $taskProjectRoot 'android\app\build\outputs\apk\release\app-release.apk'
+$taskTestApk = Join-Path $taskProjectRoot 'android\app\build\outputs\apk\androidTest\release\app-release-androidTest.apk'
 Invoke-TapDeckDevice -Arguments @('install', '-r', $taskApk)
 Invoke-TapDeckDevice -Arguments @('install', '-r', $taskTestApk)
 $taskSizeBefore = Invoke-TapDeckDevice -Arguments @('shell', 'wm', 'size') | Out-String
@@ -55,6 +50,7 @@ try {
         if ($taskVariant.Full -or $taskVariant.Gestures) { $taskCases += @('gesturesMoveClickScrollDragAndCancel', 'multiFingerZoomSwipeAndPointerIds', 'keyboardShortLongVoiceAndDisposalRelease', 'compactVoiceAndTouchpadPointersStayIndependent', 'shortcutFeedbackOncePerPressAndDisabledDoesNotTrigger') }
         $taskClassList = ($taskCases | ForEach-Object { 'com.yuncii.tapdeck.DeviceTest#' + $_ }) -join ','
         $taskClassList += ',com.yuncii.tapdeck.MultiPcTest#pickerManagementAndRecordingRestrictions'
+        $taskClassList += ',com.yuncii.tapdeck.ReleaseBuildTest#releaseBuildDisablesDebugging'
         if ($taskVariant.Full) { $taskClassList += ',com.yuncii.tapdeck.DeviceTest#microphoneFramesRetainTheirOriginalSessionAndRecording' }
         $taskArgs = @('shell', 'am', 'instrument', '-w', '-e', 'uiLabel', $taskVariant.Name, '-e', 'class', $taskClassList)
         if ($taskVariant.Height) { $taskArgs += @('-e', 'uiHeight', $taskVariant.Height) }
@@ -62,7 +58,7 @@ try {
         $taskResult = Invoke-TapDeckDevice -Arguments $taskArgs | Out-String
         [IO.File]::WriteAllText((Join-Path $OutputDirectory ($taskVariant.Name + '.log')), $taskResult, [Text.UTF8Encoding]::new($false))
         if ($taskResult -notmatch '(?m)^OK \(\d+ tests?\)\s*$') { throw ($taskVariant.Name + ': ' + $taskResult) }
-        Write-Host ($taskVariant.Name + ': passed ' + ($taskCases.Count + 1 + [int]$taskVariant.Full) + ' tests')
+        Write-Host ($taskVariant.Name + ': passed ' + ($taskCases.Count + 2 + [int]$taskVariant.Full) + ' tests')
     }
     Invoke-TapDeckDevice -Arguments @('pull', '/sdcard/Android/data/com.yuncii.tapdeck/files/ui-validation/.', $OutputDirectory)
 } finally {

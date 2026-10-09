@@ -5,6 +5,7 @@ package apkdist
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"testing"
 	"testing/fstest"
 )
@@ -54,7 +55,9 @@ func TestScanIgnoresEmptyAPK(t *testing.T) {
 func TestAPKVerificationRejectsMissingOrStaleMetadata(t *testing.T) {
 	body := []byte("new APK")
 	h := sha256.Sum256(body)
-	meta := Metadata{VersionName: "0.3.0", VersionCode: 3, SHA256: hex.EncodeToString(h[:])}
+	debuggable := false
+	meta := Metadata{VersionName: "0.3.0", VersionCode: 3, SHA256: hex.EncodeToString(h[:]),
+		BuildType: "release", Debuggable: &debuggable, CertificateSHA256: strings.Repeat("a", 64)}
 	if err := verify(body, meta); err != nil {
 		t.Fatal(err)
 	}
@@ -67,5 +70,33 @@ func TestAPKVerificationRejectsMissingOrStaleMetadata(t *testing.T) {
 	meta.VersionName = ""
 	if err := verify(body, meta); err == nil {
 		t.Fatal("missing version accepted")
+	}
+}
+
+func TestAPKVerificationRequiresReleaseSecurityMetadata(t *testing.T) {
+	body := []byte("signed APK fixture")
+	h := sha256.Sum256(body)
+	disabled, enabled := false, true
+	valid := Metadata{VersionName: "0.3.19", VersionCode: 22, SHA256: hex.EncodeToString(h[:]),
+		BuildType: "release", Debuggable: &disabled, CertificateSHA256: strings.Repeat("a", 64)}
+	for _, field := range []string{"build-type", "debuggable", "missing-debuggable", "missing-certificate", "invalid-certificate"} {
+		t.Run(field, func(t *testing.T) {
+			meta := valid
+			switch field {
+			case "build-type":
+				meta.BuildType = "debug"
+			case "debuggable":
+				meta.Debuggable = &enabled
+			case "missing-debuggable":
+				meta.Debuggable = nil
+			case "missing-certificate":
+				meta.CertificateSHA256 = ""
+			case "invalid-certificate":
+				meta.CertificateSHA256 = strings.Repeat("z", 64)
+			}
+			if err := verify(body, meta); err == nil {
+				t.Fatal("unsafe APK metadata accepted")
+			}
+		})
 	}
 }

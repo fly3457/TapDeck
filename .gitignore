@@ -13,6 +13,7 @@ Thumbs.db
 .env.*
 !.env.example
 *.jks
+*.signing.xml
 *.keystore
 *.p12
 *.pfx

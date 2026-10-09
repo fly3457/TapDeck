@@ -14,7 +14,7 @@
 ## 开发与验收
 
 - [Android 布局](android-ui.md)、[控制协议 v2](../protocol/README.md)。
-- [版本与发布](versioning.md)、[验证记录与历史截图](verification.md)。
+- [版本与发布](versioning.md)、[Android release 与签名](android-release.md)、[验证记录与历史截图](verification.md)。
 - [第三方声明](../THIRD_PARTY_NOTICES.md)、[MIT 许可证](../LICENSE)。
 
 使用页描述当前行为；带日期的实测记录保留当时版本与范围。

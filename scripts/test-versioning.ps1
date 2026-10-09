@@ -1,5 +1,6 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'versioning.ps1')
+. (Join-Path $PSScriptRoot 'android-signing.ps1')
 $taskTestParent = [IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $PSScriptRoot) '.tools'))
 $taskTestRoot = Join-Path $taskTestParent ('versioning-test-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $taskTestRoot -Force | Out-Null
@@ -47,12 +48,12 @@ try {
 
     Set-VersionFixture
     $taskVersions = Get-TapDeckVersions $taskTestRoot
-    $taskApkOutput = Join-Path $taskTestRoot 'android\app\build\outputs\apk\debug'
+    $taskApkOutput = Join-Path $taskTestRoot 'android\app\build\outputs\apk\release'
     New-Item -ItemType Directory -Path $taskApkOutput -Force | Out-Null
     $taskMetadataPath = Join-Path $taskApkOutput 'output-metadata.json'
-    $taskApkPath = Join-Path $taskApkOutput 'app-debug.apk'
+    $taskApkPath = Join-Path $taskApkOutput 'app-release.apk'
     [IO.File]::WriteAllText($taskApkPath, 'new controller package fixture')
-    $taskMetadata = @{ applicationId = 'com.yuncii.tapdeck'; elements = @(@{ outputFile = 'app-debug.apk'; versionName = '2.0.2'; versionCode = 22 }) }
+    $taskMetadata = @{ applicationId = 'com.yuncii.tapdeck'; variantName = 'release'; elements = @(@{ outputFile = 'app-release.apk'; versionName = '2.0.2'; versionCode = 22 }) }
     [IO.File]::WriteAllText($taskMetadataPath, ($taskMetadata | ConvertTo-Json -Depth 4))
     Assert-VersionFailure { Get-TapDeckAndroidBuild $taskTestRoot $taskVersions } 'Stale Gradle APK metadata accepted'
     $taskMetadata.elements[0].versionName = '2.0.3'
@@ -60,13 +61,83 @@ try {
     [IO.File]::WriteAllText($taskMetadataPath, ($taskMetadata | ConvertTo-Json -Depth 4))
     $taskApk = Get-TapDeckAndroidBuild $taskTestRoot $taskVersions
     Assert-VersionCheck ($taskApk.Name -eq 'TapDeck-2.0.3.apk') 'APK named using receiver version'
-    $taskGoodInfo = @{ pc_version = '1.2.9'; version_name = '2.0.3'; version_code = 23; filename = $taskApk.Name; sha256 = $taskApk.SHA256; bytes = $taskApk.Bytes }
+    foreach ($taskWrongOutput in @('app-debug.apk', 'app-release-unsigned.apk', '../debug/app-debug.apk')) {
+        $taskMetadata.elements[0].outputFile = $taskWrongOutput
+        [IO.File]::WriteAllText($taskMetadataPath, ($taskMetadata | ConvertTo-Json -Depth 4))
+        Assert-VersionFailure { Get-TapDeckAndroidBuild $taskTestRoot $taskVersions } "Non-release output accepted: $taskWrongOutput"
+    }
+    $taskMetadata.elements[0].outputFile = 'app-release.apk'
+    $taskMetadata.variantName = 'debug'
+    [IO.File]::WriteAllText($taskMetadataPath, ($taskMetadata | ConvertTo-Json -Depth 4))
+    Assert-VersionFailure { Get-TapDeckAndroidBuild $taskTestRoot $taskVersions } 'Debug variant metadata accepted'
+    $taskMetadata.variantName = 'release'
+    [IO.File]::WriteAllText($taskMetadataPath, ($taskMetadata | ConvertTo-Json -Depth 4))
+    $taskBadging = @("package: name='com.yuncii.tapdeck' versionCode='23' versionName='2.0.3'", "application: label='TapDeck'")
+    Assert-TapDeckAndroidManifest $taskBadging $taskVersions
+    $script:taskVersionChecks++
+    Assert-VersionFailure { Assert-TapDeckAndroidManifest ($taskBadging + 'application-debuggable') $taskVersions } 'Debuggable APK accepted'
+    Assert-VersionFailure { Assert-TapDeckAndroidManifest @($taskBadging[0].Replace("versionCode='23'", "versionCode='22'")) $taskVersions } 'Stale APK manifest accepted'
+    Assert-VersionFailure { Assert-TapDeckAndroidManifest @($taskBadging[0].Replace('com.yuncii.tapdeck', 'com.yuncii.tapdeck.debug')) $taskVersions } 'Debug package accepted'
+    $taskCertificate = 'a' * 64
+    $taskSignature = @('Verifies', 'Number of signers: 1', ('Signer #1 certificate SHA-256 digest: ' + $taskCertificate))
+    Assert-TapDeckAndroidSignature $taskSignature $taskCertificate
+    $script:taskVersionChecks++
+    Assert-VersionFailure { Assert-TapDeckAndroidSignature @('DOES NOT VERIFY') $taskCertificate } 'Unsigned APK accepted'
+    Assert-VersionFailure { Assert-TapDeckAndroidSignature $taskSignature ('b' * 64) } 'Unexpected certificate accepted'
+    Assert-VersionFailure { Assert-TapDeckAndroidSignature ($taskSignature + ('Signer #2 certificate SHA-256 digest: ' + $taskCertificate)) $taskCertificate } 'Multiple APK signers accepted'
+    $taskGoodInfo = @{ pc_version = '1.2.9'; version_name = '2.0.3'; version_code = 23; filename = $taskApk.Name; sha256 = $taskApk.SHA256; bytes = $taskApk.Bytes;
+        build_type = 'release'; debuggable = $false; certificate_sha256 = $taskCertificate }
+    Assert-VersionFailure { Assert-TapDeckApkInfo $taskGoodInfo $taskVersions $taskApk } 'Unverified APK embedded'
+    $taskApk.Debuggable = $false
+    $taskApk.CertificateSHA256 = $taskCertificate
+    $taskApk.SignatureVerified = $true
     Assert-TapDeckApkInfo $taskGoodInfo $taskVersions $taskApk
     $script:taskVersionChecks++
-    foreach ($taskField in @('pc_version', 'version_name', 'version_code', 'filename', 'sha256', 'bytes')) {
+    foreach ($taskField in @('pc_version', 'version_name', 'version_code', 'filename', 'sha256', 'bytes', 'build_type', 'debuggable', 'certificate_sha256')) {
         $taskBadInfo = $taskGoodInfo.Clone()
         $taskBadInfo[$taskField] = 'unexpected'
         Assert-VersionFailure { Assert-TapDeckApkInfo $taskBadInfo $taskVersions $taskApk } "Embedded mismatch accepted: $taskField"
+    }
+    $taskDebugInfo = $taskGoodInfo.Clone()
+    $taskDebugInfo.debuggable = $true
+    Assert-VersionFailure { Assert-TapDeckApkInfo $taskDebugInfo $taskVersions $taskApk } 'Debuggable embedded APK accepted'
+    $taskMissingInfo = $taskGoodInfo.Clone()
+    $taskMissingInfo.Remove('debuggable')
+    Assert-VersionFailure { Assert-TapDeckApkInfo $taskMissingInfo $taskVersions $taskApk } 'Missing debuggable attestation accepted'
+    $taskSigningNames = @('STORE_FILE', 'STORE_PASSWORD', 'KEY_ALIAS', 'KEY_PASSWORD', 'SIGNING_CONFIG')
+    $taskSigningPrevious = @{}
+    foreach ($taskName in $taskSigningNames) {
+        $taskSigningPrevious[$taskName] = [Environment]::GetEnvironmentVariable('TAPDECK_ANDROID_' + $taskName, 'Process')
+        [Environment]::SetEnvironmentVariable('TAPDECK_ANDROID_' + $taskName, $null, 'Process')
+    }
+    try {
+        $env:TAPDECK_ANDROID_SIGNING_CONFIG = Join-Path $taskTestRoot 'missing.signing.xml'
+        $taskSigningProbe = @{ Called = $false }
+        Assert-VersionFailure { Invoke-TapDeckAndroidSigning { $taskSigningProbe.Called = $true } } 'Missing signing config accepted'
+        Assert-VersionCheck (-not $taskSigningProbe.Called) 'Build ran without signing configuration'
+        $env:TAPDECK_ANDROID_KEY_ALIAS = 'fixture'
+        Assert-VersionFailure { Invoke-TapDeckAndroidSigning {} } 'Partial signing config accepted'
+        $env:TAPDECK_ANDROID_KEY_ALIAS = $null
+        $taskProtectedConfig = [pscustomobject]@{
+            StoreFile = $taskApkPath; KeyAlias = 'fixture'
+            StorePassword = ConvertTo-SecureString 'test-store-only' -AsPlainText -Force
+            KeyPassword = ConvertTo-SecureString 'test-key-only' -AsPlainText -Force
+        }
+        $env:TAPDECK_ANDROID_SIGNING_CONFIG = Join-Path $taskTestRoot 'fixture.signing.xml'
+        $taskProtectedConfig | Export-Clixml -LiteralPath $env:TAPDECK_ANDROID_SIGNING_CONFIG
+        Assert-VersionFailure { Invoke-TapDeckAndroidSigning {
+            $taskSigningProbe.Called = $true
+            Assert-VersionCheck ($env:TAPDECK_ANDROID_STORE_FILE -ceq $taskApkPath -and $env:TAPDECK_ANDROID_KEY_ALIAS -ceq 'fixture') 'Protected config not loaded'
+            throw 'Simulated Gradle failure'
+        } } 'Build exception swallowed'
+        Assert-VersionCheck $taskSigningProbe.Called 'Protected signing action never ran'
+        foreach ($taskName in @('STORE_FILE', 'STORE_PASSWORD', 'KEY_ALIAS', 'KEY_PASSWORD')) {
+            Assert-VersionCheck ([string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable('TAPDECK_ANDROID_' + $taskName, 'Process'))) 'Signing secret left in environment after failure'
+        }
+    } finally {
+        foreach ($taskName in $taskSigningNames) {
+            [Environment]::SetEnvironmentVariable('TAPDECK_ANDROID_' + $taskName, $taskSigningPrevious[$taskName], 'Process')
+        }
     }
     [IO.File]::WriteAllText($taskApkPath, '')
     Assert-VersionFailure { Get-TapDeckAndroidBuild $taskTestRoot $taskVersions } 'Empty APK accepted'

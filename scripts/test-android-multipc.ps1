@@ -14,15 +14,10 @@ function Invoke-MultiPcDevice([string[]]$Arguments) {
 if ((Invoke-MultiPcDevice @('shell', 'getprop', 'ro.kernel.qemu') | Out-String).Trim() -ne '1') { throw 'An isolated emulator is required' }
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 if (-not $SkipBuild) {
-    & (Join-Path $PSScriptRoot 'build-android.ps1')
-    Push-Location (Join-Path $taskProjectRoot 'android')
-    try {
-        & .\gradlew.bat assembleDebugAndroidTest --console=plain
-        if ($LASTEXITCODE -ne 0) { throw 'Android instrumentation build failed' }
-    } finally { Pop-Location }
+    & (Join-Path $PSScriptRoot 'build-android.ps1') -Instrumentation
 }
-Invoke-MultiPcDevice @('install', '-r', (Join-Path $taskProjectRoot 'android/app/build/outputs/apk/debug/app-debug.apk'))
-Invoke-MultiPcDevice @('install', '-r', (Join-Path $taskProjectRoot 'android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk'))
+Invoke-MultiPcDevice @('install', '-r', (Join-Path $taskProjectRoot 'android/app/build/outputs/apk/release/app-release.apk'))
+Invoke-MultiPcDevice @('install', '-r', (Join-Path $taskProjectRoot 'android/app/build/outputs/apk/androidTest/release/app-release-androidTest.apk'))
 $taskInfo = Join-Path $OutputDirectory ('fixture-' + [guid]::NewGuid().ToString('N') + '.json')
 $taskOldFixtureEnv = $env:TAPDECK_ANDROID_FIXTURE_INFO
 $taskFixtureProcess = $null

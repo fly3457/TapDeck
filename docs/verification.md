@@ -2,7 +2,39 @@
 
 测试日期：2026-10-06 至 2026-10-09。使用页描述当前行为；历史结果按当时版本理解。截图中的示例连接和录音状态不作为实机识别证明。
 
-当前：接收端 **0.3.18**、Android **0.3.18 / code 21** · [安装](installation.md) · [版本规则](versioning.md)
+当前：接收端 **0.3.19**、Android **0.3.19 / code 22** · [安装](installation.md) · [版本规则](versioning.md)
+
+## 0.3.19 Android release 交付与签名检查
+
+2026-10-09 完成。官方 Android 入口改为 `assembleRelease`、`testReleaseUnitTest`，Windows 正式及诊断 EXE 只内嵌本次 release APK。显式关闭调试、JNI 调试和 shell profiling；签名配置缺失、unsigned／debug 输出、可调试标记或固定证书不符都阻止交付。两个接收端 `--apk-info` 及发布清单新增构建类型、debuggable 和签名证书 SHA-256；安装脚本改用本地 `TapDeck.apk` 兼容副本。
+
+为保留既有安装、Keystore 和配对，沿用历史开发证书，未轮换为新的正式证书。本机私钥已迁入工作区外、限制 ACL 的独立签名库，库与私钥使用不同随机密码；配置通过当前 Windows 账户 DPAPI 保护，构建后恢复原环境。公开证书指纹仍为 `7a73774806a038cf5ac53dff3aa4332390158c2ecbf55bebd5c01811ae543e30`。这是不可调试的 release 包，不把旧证书称为新的正式签名；详见 [Android 发布签名](android-release.md)。
+
+| 验证项 | 结果 |
+|---|---|
+| 发布规则与拒绝路径 | 57 项脚本检查通过，覆盖非 release 元数据、unsigned／debug 文件名、可调试 Manifest、签名不符、多签名、缺少安全元数据和签名变量恢复。真实 0.3.18 debug APK 被交付检查拒绝；直接 `assembleRelease` 缺少签名配置时失败；另一个独立生成的证书被 Gradle 固定指纹检查拒绝 |
+| Android release | 60 项 release JVM 测试及 release 构建通过；aapt 核对包名 `com.yuncii.tapdeck`、0.3.19 / code 22、min API 26；apksigner 验证及固定证书检查通过 |
+| 实际不可调试 | API 34 隔离模拟器核对 `BuildConfig.DEBUG=false`、`BUILD_TYPE=release`、无 `FLAG_DEBUGGABLE`、无 `FLAG_TEST_ONLY`、无 `FLAG_ALLOW_BACKUP`；ADB `run-as` 返回 `package not debuggable` |
+| debug → release 覆盖升级 | 同一模拟器保留原应用数据，0.3.18 debug / code 21 直接覆盖为 0.3.19 release / code 22。两个测试电脑的 Keystore 加密凭据、当前选择、备注、各自语音选择、device ID、灵敏度、震动、键盘模式和控件位置均保留；验证后还原测试前偏好。升级准备 1 项、升级与 release 标记 2 项通过 |
+| release 界面回归 | API 34，1080×2400 / 420 dpi / 100% 字体：21 项通过，含键盘间隙、按键释放、手势、语音状态、配对限制和 release 标记。仪器测试 APK 与目标 release 签名匹配，只在隔离模拟器安装，不交付 |
+| release 多 PC 链路 | 3 项通过，含真实 Keystore 迁移、失败保留及三个独立证书／配置接收端的 HTTP、固定指纹 WSS 与加密 UDP，覆盖切换、重连、撤销、重新授权及会话隔离。输入和音频为测试后端 |
+| 官方 Windows 构建 | `scripts/build-windows.ps1 -OutputDirectory dist/0.3.19` 完成 Android release、Go 测试、vet 与三个 EXE。沿用对实际修改本机音量及自启注册表两项测试的排除 |
+| 内嵌与交付 | 两个 EXE 实际 `--apk-info` 均为 Android 0.3.19 / code 22、`build_type=release`、`debuggable=false` 和正确证书指纹；三 EXE 文件／产品版本 0.3.19，Gradle、独立 APK 及内嵌包哈希一致。清单 8 项版本／兼容产物逐项核对大小及 SHA-256 |
+
+官方交付目录 `dist/0.3.19`：
+
+| 产物 | 字节数 | SHA-256 |
+|---|---:|---|
+| `TapDeck-0.3.19.apk` | 8,514,165 | `23b96633960d52465c34125f94e7d563db03a386c7ac17ab1f125729b089c9bd` |
+| `TapDeck-0.3.19.exe` | 23,676,416 | `69c35d2088c51be75ffba39ebd6c35e709dc54070d3ba0357bfc69832072933c` |
+| `TapDeck-debug-0.3.19.exe` | 29,186,560 | `72e171037b39ff51b5e7bd565e22651de4cfd70274956f099095455c5751cd38` |
+| `TapDeck-hidprobe-0.3.19.exe` | 8,048,128 | `14fb46deb92a5c81f178e922451ef50a16bc0ca99d2cccff6dace6bf0d398006` |
+
+日志：`.tools/android-release-0.3.19-build.log`、`android-release-0.3.19-instrumentation.log`、`windows-release-0.3.19-build.log`、`release-0.3.19-no-signing.log`、`release-0.3.19-wrong-certificate.log`、`release-0.3.19-upgrade.log`、`release-0.3.19-ui.log`、`release-0.3.19-multipc.log`；详细仪器结果见 `dist/0.3.19/{screenshots/phone-100.log,multipc/android.log}`。
+
+本轮未改界面外观，README 保留 0.3.18 截图及历史矩阵结果。没有实体手机，本轮覆盖升级和真实协议结果均来自隔离模拟器；实体设备升级、一部手机／两台真实 PC 切换、真实麦克风至输入法识别、Windows 高 DPI 与干净系统驱动安装继续待验收。模拟器显示参数已恢复，临时接收端已退出。
+
+本地构建已完成；本节提交时公开下载仍为 [v0.3.18](https://github.com/fly3457/TapDeck/releases/tag/v0.3.18)，未将本地 0.3.19 构建标作已公开发布。
 
 ## 0.3.18 键盘间隙触控、语音提示与文档整理
 

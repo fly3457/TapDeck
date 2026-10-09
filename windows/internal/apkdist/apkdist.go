@@ -29,9 +29,12 @@ var (
 )
 
 type Metadata struct {
-	VersionName string `json:"version_name"`
-	VersionCode int    `json:"version_code"`
-	SHA256      string `json:"sha256"`
+	VersionName       string `json:"version_name"`
+	VersionCode       int    `json:"version_code"`
+	SHA256            string `json:"sha256"`
+	BuildType         string `json:"build_type"`
+	Debuggable        *bool  `json:"debuggable"`
+	CertificateSHA256 string `json:"certificate_sha256"`
 }
 
 func load() {
@@ -43,8 +46,11 @@ func load() {
 	})
 }
 
-func Version() string  { load(); return metadata.VersionName }
-func VersionCode() int { load(); return metadata.VersionCode }
+func Version() string           { load(); return metadata.VersionName }
+func VersionCode() int          { load(); return metadata.VersionCode }
+func BuildType() string         { load(); return metadata.BuildType }
+func Debuggable() bool          { load(); return metadata.Debuggable == nil || *metadata.Debuggable }
+func CertificateSHA256() string { load(); return metadata.CertificateSHA256 }
 func Verify() error {
 	load()
 	return verify(data, metadata)
@@ -54,6 +60,11 @@ func verify(body []byte, meta Metadata) error {
 	h := sha256.Sum256(body)
 	if len(body) == 0 || meta.VersionName == "" || meta.VersionCode <= 0 || meta.SHA256 != hex.EncodeToString(h[:]) {
 		return fmt.Errorf("内置 APK 或版本清单无效，请用 scripts/build-windows.ps1 重新构建")
+	}
+	certificate, err := hex.DecodeString(meta.CertificateSHA256)
+	if meta.BuildType != "release" || meta.Debuggable == nil || *meta.Debuggable || err != nil || len(certificate) != sha256.Size ||
+		meta.CertificateSHA256 != strings.ToLower(meta.CertificateSHA256) {
+		return fmt.Errorf("内置 APK 缺少有效的 release 签名与不可调试验证，请用 scripts/build-windows.ps1 重新构建")
 	}
 	return nil
 }

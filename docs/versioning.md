@@ -8,11 +8,11 @@
 
 | 字段 | 当前值 | 用途 |
 |---|---|---|
-| `receiver.version` | `0.3.18` | Windows 接收端、诊断版和 HID 工具 |
-| `controller.android.version` | `0.3.18` | Android 内部版本及 APK 文件名 |
-| `controller.android.versionCode` | `21` | Android 覆盖安装序号 |
+| `receiver.version` | `0.3.19` | Windows 接收端、诊断版和 HID 工具 |
+| `controller.android.version` | `0.3.19` | Android 内部版本及 APK 文件名 |
+| `controller.android.versionCode` | `22` | Android 覆盖安装序号 |
 
-两端独立演进。例如只改接收端可发布 `0.3.19` 并内嵌 Android `0.3.18 / code 21`；每次 Android 更新必须同时递增接收端补丁版本并重建 EXE。接收端打包始终重新构建和核验清单指定的 Android。
+两端独立演进。例如只改接收端可发布 `0.3.20` 并内嵌 Android `0.3.19 / code 22`；每次 Android 更新必须同时递增接收端补丁版本并重建 EXE。接收端打包始终重新构建和核验清单指定的 Android。
 
 应用版本为 `major.minor.patch`，默认加 patch；加 minor／major 时后续段归零，各段范围 0–65535。Android code 每次新交付递增，范围 1–2100000000，跨 major／minor 不重置，见 [Android 版本说明](https://developer.android.com/studio/publish/versioning)。
 
@@ -43,7 +43,7 @@
 5. 核验两个接收端的 `--apk-info`、三个 EXE 的文件版本、APK 内部版本及 SHA-256、`release-manifest.json` 和 `SHA256SUMS.txt`。更新[验证记录](verification.md)，注明版本组合、包路径、截图和实测范围。
 6. 运行 `git diff --check`，将实现、版本、文档和验证记录一起提交 Git。构建产物、资源文件、内嵌 APK 和生成清单不提交。
 
-脚本不自动升版；省略输出目录时兼容输出到 `dist`。独立 Android 构建生成带版本 APK 和本地兼容副本。
+脚本不自动升版；省略输出目录时兼容输出到 `dist`。独立 Android 构建生成带版本 APK 和本地兼容副本 `TapDeck.apk`。签名环境先按 [Android 发布构建](android-release.md)配置。
 
 ## 构建与内嵌校验
 
@@ -51,9 +51,9 @@
 
 官方顺序：
 
-版本规则测试 → Android 构建与 Kotlin 测试 → Gradle 元数据和 APK 内部版本核验 → 从本次 Gradle 输出内嵌 → 内嵌／交付副本哈希比对 → 接收端资源生成 → Go 测试和 vet → EXE 构建 → 三个 EXE 文件版本 → 两个接收端 `--apk-info` → 发布清单。
+版本规则测试 → 签名配置与固定证书检查 → Android release 构建与 Kotlin 测试 → Gradle 元数据、APK 内部版本、不可调试与实际签名核验 → 从本次 Gradle release 输出内嵌 → 内嵌／交付副本哈希比对 → 接收端资源生成 → Go 测试和 vet → EXE 构建 → 三个 EXE 文件版本 → 两个接收端 `--apk-info` → 发布清单。
 
-缺包、空包、旧元数据、失败、版本或哈希不一致、构建期间版本清单变化均使交付失败。Gradle 增量构建允许使用，但必须检查当前源码并核验最终包。
+缺包、空包、旧元数据、失败、版本或哈希不一致、构建期间版本清单变化均使交付失败。从 0.3.19 起，debug、unsigned、可调试或签名证书不符的 APK 同样拒绝交付；禁止使用默认开发签名作为配置缺失时的回退。Gradle 增量构建允许使用，但必须检查当前源码并核验最终包。两个 `--apk-info` 与发布清单记录 APK 构建类型、不可调试标记及证书 SHA-256。
 
 | 对外产物 | 内部版本与要求 |
 |---|---|

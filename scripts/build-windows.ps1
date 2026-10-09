@@ -10,6 +10,7 @@ $taskAndroidArguments = @{}
 if ($JavaHome) { $taskAndroidArguments.JavaHome = $JavaHome }
 if ($SdkRoot) { $taskAndroidArguments.SdkRoot = $SdkRoot }
 if ($UseLocalProxy) { $taskAndroidArguments.UseLocalProxy = $true }
+if (-not $SdkRoot) { $SdkRoot = Join-Path $env:LOCALAPPDATA 'Android\Sdk' }
 # A PC release always starts with this source tree's Android build.
 & (Join-Path $PSScriptRoot 'test-versioning.ps1')
 & (Join-Path $PSScriptRoot 'build-android.ps1') @taskAndroidArguments
@@ -24,14 +25,16 @@ try {
     # 把编译好的 Android 安装包放进 embed 目录，接收端就能在配对网页上给出下载二维码。
     $taskApkDir = Join-Path $taskProjectRoot 'windows\internal\apkdist\assets'
     $taskApk = Get-TapDeckAndroidBuild $taskProjectRoot $taskVersions
+    Assert-TapDeckAndroidReleaseApk $taskApk $taskVersions $taskProjectRoot $SdkRoot
     New-Item -ItemType Directory -Force -Path $taskApkDir | Out-Null
     Get-ChildItem -LiteralPath $taskApkDir -Filter *.apk -ErrorAction SilentlyContinue | Remove-Item -Force
     $taskVersion = $taskVersions.ReceiverVersion
     go run ./cmd/winresources -version $taskVersion
     if ($LASTEXITCODE -ne 0) { throw 'Windows resource compilation failed' }
-    $taskEmbeddedMetadata = @{ version_name = $taskApk.VersionName; version_code = $taskApk.VersionCode; sha256 = $taskApk.SHA256 } | ConvertTo-Json
+    $taskEmbeddedMetadata = @{ version_name = $taskApk.VersionName; version_code = $taskApk.VersionCode; sha256 = $taskApk.SHA256;
+        build_type = $taskApk.BuildType; debuggable = $taskApk.Debuggable; certificate_sha256 = $taskApk.CertificateSHA256 } | ConvertTo-Json
     [IO.File]::WriteAllText((Join-Path $taskApkDir 'apk.json'),$taskEmbeddedMetadata,[Text.UTF8Encoding]::new($false))
-    foreach ($taskApkCopy in @((Join-Path $taskApkDir $taskApk.Name), (Join-Path $OutputDirectory 'TapDeck-debug.apk'), (Join-Path $OutputDirectory $taskApk.Name))) {
+    foreach ($taskApkCopy in @((Join-Path $taskApkDir $taskApk.Name), (Join-Path $OutputDirectory 'TapDeck.apk'), (Join-Path $OutputDirectory $taskApk.Name))) {
         Copy-Item -LiteralPath $taskApk.Path -Destination $taskApkCopy -Force
         if ((Get-FileHash -LiteralPath $taskApkCopy -Algorithm SHA256).Hash.ToLowerInvariant() -cne $taskApk.SHA256) { throw 'Embedded or distribution APK hash mismatch' }
     }
@@ -58,7 +61,7 @@ try {
         @{ Name = $taskDebugName; Alias = 'TapDeck-debug.exe' },
         @{ Name = $taskProbeName; Alias = 'TapDeck-hidprobe.exe' }
     )
-    $taskFiles = @($taskApk.Name, 'TapDeck-debug.apk')
+    $taskFiles = @($taskApk.Name, 'TapDeck.apk')
     foreach ($taskArtifact in $taskArtifacts) {
         $taskArtifactPath = Join-Path $OutputDirectory $taskArtifact.Name
         $taskFileVersion = (Get-Item -LiteralPath $taskArtifactPath).VersionInfo
@@ -91,7 +94,8 @@ try {
         schema = 1
         built_at = [DateTime]::UtcNow.ToString('o')
         receiver_version = $taskVersion
-        controllers = @(@{ platform = 'android'; version = $taskApk.VersionName; version_code = $taskApk.VersionCode; filename = $taskApk.Name; sha256 = $taskApk.SHA256; bytes = $taskApk.Bytes })
+        controllers = @(@{ platform = 'android'; version = $taskApk.VersionName; version_code = $taskApk.VersionCode; filename = $taskApk.Name; sha256 = $taskApk.SHA256; bytes = $taskApk.Bytes;
+            build_type = $taskApk.BuildType; debuggable = $taskApk.Debuggable; certificate_sha256 = $taskApk.CertificateSHA256 })
         artifacts = $taskFileRecords
     }
     [IO.File]::WriteAllText((Join-Path $OutputDirectory 'release-manifest.json'), ($taskRelease | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
