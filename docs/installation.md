@@ -1,11 +1,11 @@
 # 安装与配对
 
-支持 Windows 11 x64、Android 8 / API 26 及以上。手机与 PC 需处于可互通的局域网。安装包见 [0.3.18 Release](https://github.com/fly3457/TapDeck/releases/tag/v0.3.18)。
+支持 Windows 11 x64、Android 8 / API 26 及以上。手机与 PC 需处于可互通的局域网。安装包见 [0.3.19 Release](https://github.com/fly3457/TapDeck/releases/tag/v0.3.19)。Android APK 为不可调试的 release 构建，现有官方版可直接覆盖升级，保留配对和手机设置。
 
 ## 连接
 
-1. PC 运行 `TapDeck-0.3.18.exe`，打开“连接”页。
-2. 手机安装 `TapDeck-0.3.18.apk`。也可在浏览器打开 PC 连接网址，从网页下载 EXE 内置 APK。
+1. PC 运行 `TapDeck-0.3.19.exe`，打开“连接”页。
+2. 手机安装 `TapDeck-0.3.19.apk`。也可在浏览器打开 PC 连接网址，从网页下载 EXE 内置 APK。
 3. 手机“连接与设置”扫码填写或手动输入网址，再点击“连接”。
 4. 比较手机与 PC 的校验码，在 PC 弹窗选择允许。关闭／Esc 等同拒绝，已有配对不会被覆盖。
 

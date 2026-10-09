@@ -2,9 +2,11 @@
 
 通过 Wi-Fi 局域网，把 Android 手机变成 Windows 电脑的麦克风、触控板和键盘，方便 Vibe Coding 和日常操作。
 
-**[Windows EXE](https://github.com/fly3457/TapDeck/releases/download/v0.3.18/TapDeck-0.3.18.exe) · [Android APK](https://github.com/fly3457/TapDeck/releases/download/v0.3.18/TapDeck-0.3.18.apk) · [完整下载与校验](https://github.com/fly3457/TapDeck/releases/tag/v0.3.18)**
+**[Windows EXE](https://github.com/fly3457/TapDeck/releases/download/v0.3.19/TapDeck-0.3.19.exe) · [Android APK](https://github.com/fly3457/TapDeck/releases/download/v0.3.19/TapDeck-0.3.19.apk) · [完整下载与校验](https://github.com/fly3457/TapDeck/releases/tag/v0.3.19)**
 
-当前测试版 **0.3.18** · Android **code 21** · Windows 11 x64 · Android 8 及以上 · 同一局域网
+当前测试版 **0.3.19** · Android **code 22** · Windows 11 x64 · Android 8 及以上 · 同一局域网
+
+Android APK 使用不可调试的 release 构建，现有官方版可覆盖升级并保留配对。
 
 ## 功能特色
 
