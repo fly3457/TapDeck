@@ -77,6 +77,13 @@ func NewManager(l Launcher) *Manager { return &Manager{launcher: l, now: time.No
 
 func (m *Manager) Available() bool { return m != nil && m.launcher != nil && m.launcher.Available() }
 
+// Prewarm 在后台预先探测默认画质的编码器，手机首次打开视频模式时不必等待逐个尝试。
+func (m *Manager) Prewarm() {
+	if m.Available() {
+		go func() { _, _ = m.launcher.Prepare(Request{Quality: "smooth"}) }()
+	}
+}
+
 // Start 为 owner 分配新的视频流。同一 owner 的旧流被替换；其他会话持有
 // 未过期的流时返回 ErrBusy。Prepare 可能耗时（首次探测编码器），不持锁执行。
 func (m *Manager) Start(owner uint64, r Request) (*Stream, error) {

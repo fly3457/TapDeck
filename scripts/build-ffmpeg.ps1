@@ -6,7 +6,9 @@ param(
     [string]$SourceDirectory,
     [string]$Proxy = $env:HTTPS_PROXY,
     # 容器内 apt 使用的 HTTP 代理（例如 http://host.docker.internal:7897）；留空则直连 Ubuntu 软件源。
-    [string]$ContainerProxy
+    [string]$ContainerProxy,
+    # Canonical 在 AWS ECR Public 发布的官方 Ubuntu 镜像；国内访问 Docker Hub 不稳定时也可用。
+    [string]$Image = 'public.ecr.aws/ubuntu/ubuntu:24.04'
 )
 $ErrorActionPreference = 'Stop'
 $taskProjectRoot = Split-Path -Parent $PSScriptRoot
@@ -14,11 +16,11 @@ if (-not $SourceDirectory) { $SourceDirectory = Join-Path $taskProjectRoot '.too
 $taskAssets = Join-Path $taskProjectRoot 'windows\internal\video\assets'
 
 $taskFFmpegVersion = '8.1.3'
-$taskNvcodecVersion = '12.0.16.1'   # 兼容 2022 年底以来的 NVIDIA 驱动（522.25+）
+$taskNvcodecVersion = '11.0.10.3'   # Video Codec SDK 11.0：兼容 2020 年底以来的 NVIDIA 驱动（456.71+）
 $taskAmfVersion = '1.5.3'
 $taskSources = @(
     @{ Name = "ffmpeg-$taskFFmpegVersion.tar.xz"; Url = "https://ffmpeg.org/releases/ffmpeg-$taskFFmpegVersion.tar.xz"; Sha256 = '7138d28c96d9d3e3af4ee3d8cad72741f8ffb40da90c1112235dea3ecd3178a3' },
-    @{ Name = "nv-codec-headers-n$taskNvcodecVersion.tar.gz"; Url = "https://github.com/FFmpeg/nv-codec-headers/archive/refs/tags/n$taskNvcodecVersion.tar.gz"; Sha256 = '37e31c7ed0c9bf2da74646a3ec426c38a6d29e60b1fb7bff3e03a99b9412e050' },
+    @{ Name = "nv-codec-headers-n$taskNvcodecVersion.tar.gz"; Url = "https://github.com/FFmpeg/nv-codec-headers/archive/refs/tags/n$taskNvcodecVersion.tar.gz"; Sha256 = 'fb40e98a61038e8a6db0e43a79be552c7cb3db627b4f6825c639034598707d83' },
     @{ Name = "AMF-headers-v$taskAmfVersion.tar.gz"; Url = "https://github.com/GPUOpen-LibrariesAndSDKs/AMF/releases/download/v$taskAmfVersion/AMF-headers-v$taskAmfVersion.tar.gz"; Sha256 = '0f521ad98041f8001147cded4a660127f18b1c27a801a5cd691bda1fa48381be' }
 )
 # FFmpeg release signing key <ffmpeg-devel@ffmpeg.org>
@@ -54,14 +56,18 @@ if ($taskGpg) {
     }
     $taskHome = Join-Path ([IO.Path]::GetTempPath()) ('tapdeck-gpg-' + [guid]::NewGuid())
     New-Item -ItemType Directory -Path $taskHome | Out-Null
+    # Git for Windows 的 gpg 是 MSYS 程序：--homedir 需写成 /c/... 形式；gpg 的提示写在 stderr，不能按 Stop 当作错误。
+    $taskSlash = { param($p) if ($p -match '^([A-Za-z]):(.*)$') { '/' + $Matches[1].ToLowerInvariant() + $Matches[2].Replace('\', '/') } else { $p.Replace('\', '/') } }
+    $taskPrevious = $ErrorActionPreference
     try {
-        $env:GNUPGHOME = $taskHome
-        & $taskGpg.FullName -q --import $taskKeyFile 2>$null
-        $taskStatus = & $taskGpg.FullName --status-fd 1 --verify $taskSignature $taskTarball 2>$null
-        if (-not ($taskStatus -match "VALIDSIG $taskFFmpegKey")) { throw 'FFmpeg 源码包签名校验失败' }
+        $ErrorActionPreference = 'Continue'
+        & $taskGpg.FullName --homedir (& $taskSlash $taskHome) -q --import (& $taskSlash $taskKeyFile) 2>$null | Out-Null
+        $taskStatus = & $taskGpg.FullName --homedir (& $taskSlash $taskHome) --status-fd 1 --verify (& $taskSlash $taskSignature) (& $taskSlash $taskTarball) 2>$null
+        $ErrorActionPreference = $taskPrevious
+        if (-not (@($taskStatus) -match "VALIDSIG $taskFFmpegKey")) { throw 'FFmpeg 源码包签名校验失败' }
         Write-Host 'FFmpeg 源码包签名有效（FCF9 86EA 15E6 E293 A564 4F10 B432 2F04 D676 58D8）'
     } finally {
-        Remove-Item Env:GNUPGHOME -ErrorAction SilentlyContinue
+        $ErrorActionPreference = $taskPrevious
         Remove-Item -Recurse -Force -LiteralPath $taskHome -ErrorAction SilentlyContinue
     }
 } else {
@@ -76,9 +82,13 @@ New-Item -ItemType Directory -Path $taskOut | Out-Null
 try {
     $taskDockerArgs = @('run', '--rm', '-v', "${SourceDirectory}:/src:ro", '-v', "$(Join-Path $PSScriptRoot 'ffmpeg'):/scripts:ro", '-v', "${taskOut}:/out")
     if ($ContainerProxy) { $taskDockerArgs += @('-e', "http_proxy=$ContainerProxy", '-e', "https_proxy=$ContainerProxy") }
-    $taskDockerArgs += @('ubuntu:24.04', 'bash', '/scripts/build.sh', $taskFFmpegVersion, $taskNvcodecVersion, $taskAmfVersion)
-    & docker @taskDockerArgs
-    if ($LASTEXITCODE -ne 0) { throw 'ffmpeg 构建失败' }
+    $taskDockerArgs += @($Image, 'bash', '/scripts/build.sh', $taskFFmpegVersion, $taskNvcodecVersion, $taskAmfVersion)
+    # apt 与编译器的提示写在 stderr；以退出码判断成败。
+    $ErrorActionPreference = 'Continue'
+    & docker @taskDockerArgs 2>&1 | ForEach-Object { Write-Host $_ }
+    $taskDockerExit = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    if ($taskDockerExit -ne 0) { throw 'ffmpeg 构建失败' }
 
     $taskExe = Join-Path $taskOut 'ffmpeg.exe'
     $taskImports = Get-Content -LiteralPath (Join-Path $taskOut 'imports.txt')

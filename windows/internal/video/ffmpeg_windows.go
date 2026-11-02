@@ -43,10 +43,12 @@ type FFmpeg struct {
 	path    string
 	err     error
 	probeMu sync.Mutex
-	probed  map[string]string
+	// works 记录每个“显示器 + 编码器 + 路径”组合的探测结果，与画质无关，
+	// 换档或换手机时不必重新逐个尝试已知失败的组合。
+	works map[string]bool
 }
 
-func NewLauncher() *FFmpeg { return &FFmpeg{probed: map[string]string{}} }
+func NewLauncher() *FFmpeg { return &FFmpeg{works: map[string]bool{}} }
 
 // EmbeddedManifest 返回内嵌 ffmpeg 的清单；没有内嵌时返回错误。
 func EmbeddedManifest() (Manifest, []byte, error) {
@@ -125,29 +127,32 @@ func (f *FFmpeg) Prepare(r Request) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	key := fmt.Sprintf("%d:%d:%dx%d:%dx%d", d.Adapter, d.Output, d.Width, d.Height, base.Width, base.Height)
 	f.probeMu.Lock()
 	defer f.probeMu.Unlock()
-	if enc, ok := f.probed[key]; ok {
-		base.Encoder = enc
-		return base, nil
-	}
 	var failures []string
-	for _, enc := range Encoders {
-		p := base
-		p.Encoder = enc
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		cmd := command(ctx, bin, p.Args(true))
-		var stderr bytes.Buffer
-		cmd.Stderr = &stderr
-		err := cmd.Run()
-		cancel()
-		if err == nil {
-			log.Printf("video: 使用编码器 %s（%dx%d → %dx%d@%d）", enc, d.Width, d.Height, p.Width, p.Height, p.FPS)
-			f.probed[key] = enc
+	for _, p := range base.Variants(r) {
+		enc := p.Encoder + "（" + p.Path.String() + "）"
+		// 缩放与否会影响 GPU / CPU 路径能否建立，原生路径与目标尺寸无关。
+		scaled := p.Path != Native && (p.Width != d.Width || p.Height != d.Height)
+		key := fmt.Sprintf("%d:%d:%dx%d:%s:%d:%v", d.Adapter, d.Output, d.Width, d.Height, p.Encoder, p.Path, scaled)
+		ok, known := f.works[key]
+		if !known {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			cmd := command(ctx, bin, p.Args(true))
+			var stderr bytes.Buffer
+			cmd.Stderr = &stderr
+			err := cmd.Run()
+			cancel()
+			ok = err == nil
+			f.works[key] = ok
+			if !ok {
+				failures = append(failures, enc+": "+lastLine(stderr.String(), err))
+			}
+		}
+		if ok {
+			log.Printf("video: 使用编码器 %s（%dx%d → %dx%d@%d %dkbps）", enc, d.Width, d.Height, p.Width, p.Height, p.FPS, p.Kbps)
 			return p, nil
 		}
-		failures = append(failures, enc+": "+lastLine(stderr.String(), err))
 	}
 	log.Printf("video: 没有可用编码器：%s", strings.Join(failures, "；"))
 	return Plan{}, ErrNoEncoder

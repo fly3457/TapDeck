@@ -36,6 +36,7 @@ type Display struct {
 type Plan struct {
 	Display
 	Encoder       string
+	Path          Path
 	Width, Height int
 	FPS, Kbps     int
 }
@@ -74,16 +75,65 @@ func NewPlan(d Display, r Request, encoder string) (Plan, error) {
 	if fps < 15 {
 		fps = 15
 	}
-	kbps := q.Kbps * w * h / (q.MaxWidth * q.MaxHeight)
+	// 码率按像素数折算，基准不超过 1080p：清晰档在小于 1440p 的屏幕上也不会低于流畅档。
+	ref := min(q.MaxWidth*q.MaxHeight, 1920*1080)
+	kbps := min(q.Kbps, q.Kbps*w*h/ref)
 	kbps = max(kbps, q.Kbps/3) * fps / 60
 	return Plan{Display: d, Encoder: encoder, Width: w, Height: h, FPS: fps, Kbps: max(kbps, 1000)}, nil
 }
+
+// Path 是画面从 ddagrab 到编码器的处理路径。
+type Path int
+
+const (
+	// GPUScale：scale_d3d11 在显存内缩放并转成 NV12，零拷贝交给编码器。
+	GPUScale Path = iota
+	// Native：不缩放，编码器直接读取 ddagrab 的 BGRA 显存纹理（零拷贝）。
+	// 部分旧驱动不支持 scale_d3d11 创建的编码纹理时使用。
+	Native
+	// CPUScale：下载到内存缩放并转换格式，最后的兜底。
+	CPUScale
+)
+
+func (p Path) String() string { return [...]string{"GPU 缩放", "原生分辨率", "CPU 缩放"}[p] }
 
 // Encoders 是按优先级排列的硬件 H.264 编码器；Media Foundation 会选用厂商硬件 MFT，
 // 覆盖 Intel 核显，也是没有独立显卡时的兜底。
 var Encoders = []string{"h264_nvenc", "h264_amf", "h264_mf"}
 
-// Args 生成 ffmpeg 参数：ddagrab 在 GPU 上截屏，按编码器选择 GPU 内缩放或下载后缩放，
+// Variants 返回按优先级排列的探测组合：先所有编码器的 GPU 缩放，再原生分辨率零拷贝，
+// 最后 CPU 缩放。原生分辨率只在不超过手机解码上限、宽高为偶数且不是省流档时提供；
+// 码率按像素数提高，但不超过档位码率的 1.5 倍。
+func (p Plan) Variants(r Request) []Plan {
+	q, ok := qualities[r.Quality]
+	if !ok {
+		q = qualities["smooth"]
+	}
+	var out []Plan
+	add := func(path Path) {
+		for _, enc := range Encoders {
+			v := p
+			v.Encoder, v.Path = enc, path
+			if path == Native {
+				v.Width, v.Height = p.Display.Width, p.Display.Height
+				v.Kbps = min(p.Kbps*v.Width*v.Height/max(1, p.Width*p.Height), q.Kbps*3/2*p.FPS/60)
+			}
+			out = append(out, v)
+		}
+	}
+	add(GPUScale)
+	scaled := p.Width != p.Display.Width || p.Height != p.Display.Height
+	long, short := max(r.MaxWidth, r.MaxHeight), min(r.MaxWidth, r.MaxHeight)
+	fits := r.MaxWidth <= 0 || r.MaxHeight <= 0 || (max(p.Display.Width, p.Display.Height) <= long && min(p.Display.Width, p.Display.Height) <= short)
+	even := p.Display.Width%2 == 0 && p.Display.Height%2 == 0
+	if even && (!scaled || (r.Quality != "saver" && fits)) {
+		add(Native)
+	}
+	add(CPUScale)
+	return out
+}
+
+// Args 生成 ffmpeg 参数：ddagrab 在 GPU 上截屏，按 Path 选择显存内缩放、原生零拷贝或 CPU 缩放；
 // 关闭 B 帧与前瞻，GOP 1 秒，输出 FLV 到标准输出。probe 为真时只编码几帧到 null。
 func (p Plan) Args(probe bool) []string {
 	k := strconv.Itoa(p.Kbps) + "k"
@@ -92,16 +142,19 @@ func (p Plan) Args(probe bool) []string {
 	gop := strconv.Itoa(p.FPS)
 	chain := fmt.Sprintf("ddagrab=output_idx=%d:framerate=%d:draw_mouse=1:dup_frames=1", p.Output, p.FPS)
 	scaled := p.Width != p.Display.Width || p.Height != p.Display.Height
-	gpu := p.Encoder != "h264_mf"
-	switch {
-	case gpu && scaled:
-		chain += fmt.Sprintf(",scale_d3d11=width=%d:height=%d", p.Width, p.Height)
-	case !gpu:
+	switch p.Path {
+	case GPUScale:
+		chain += fmt.Sprintf(",scale_d3d11=width=%d:height=%d:format=nv12", p.Width, p.Height)
+	case CPUScale:
 		chain += ",hwdownload,format=bgra"
 		if scaled {
 			chain += fmt.Sprintf(",scale=%d:%d:flags=fast_bilinear", p.Width, p.Height)
 		}
 		chain += ",format=nv12"
+		// NVENC / AMF 从显存读取：重新上传到同一 D3D11 设备；Media Foundation 可直接读内存帧。
+		if p.Encoder != "h264_mf" {
+			chain += ",hwupload"
+		}
 	}
 	args := []string{"-hide_banner", "-nostdin", "-loglevel", "warning",
 		"-init_hw_device", "d3d11va=dda:" + strconv.Itoa(p.Adapter), "-filter_hw_device", "dda",

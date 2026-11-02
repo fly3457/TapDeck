@@ -72,6 +72,6 @@ ffmpeg 子进程放在“随句柄关闭而终止”的作业对象里，接收�
 
 ## 构建内嵌 ffmpeg
 
-`scripts/build-ffmpeg.ps1` 下载固定版本的 FFmpeg 8.1.3、nv-codec-headers 12.0.16.1（NVIDIA 驱动 522.25 及以上）与 AMF headers 1.5.3 源码包。它先校验 SHA-256，并用 FFmpeg 官方发布密钥核对源码签名，然后在一次性 Docker `ubuntu:24.04` 容器内用 mingw-w64 静态交叉编译。
+`scripts/build-ffmpeg.ps1` 下载固定版本的 FFmpeg 8.1.3、nv-codec-headers 11.0.10.3（NVIDIA 驱动 456.71 及以上）与 AMF headers 1.5.3 源码包。它先校验 SHA-256，并用 FFmpeg 官方发布密钥核对源码签名，然后在一次性 Docker Ubuntu 24.04 容器（默认使用 Canonical 在 ECR Public 发布的官方镜像）内用 mingw-w64 静态交叉编译。
 
 构建过程会确认 GPL／nonfree 均未启用，且 `ffmpeg.exe` 只依赖 Windows 系统 DLL。产物与 `manifest.json`（版本、源码地址与哈希、configure 参数）写入 `windows/internal/video/assets`。`build-windows.ps1` 在交付前核对资源哈希、两个接收端 `--apk-info` 读回的 `ffmpeg_sha256`，并写入 `release-manifest.json`。许可证见[第三方声明](../THIRD_PARTY_NOTICES.md)。

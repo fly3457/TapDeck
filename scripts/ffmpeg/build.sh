@@ -10,8 +10,8 @@ NVCODEC_VERSION="$2"
 AMF_VERSION="$3"
 
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq --no-install-recommends mingw-w64 nasm make pkg-config xz-utils ca-certificates >/dev/null
+apt-get -o Acquire::Retries=5 update -qq
+apt-get -o Acquire::Retries=5 install -y -qq --no-install-recommends gcc libc6-dev gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 mingw-w64-x86-64-dev nasm make pkg-config xz-utils ca-certificates >/dev/null
 
 work=/tmp/build
 deps=/opt/deps

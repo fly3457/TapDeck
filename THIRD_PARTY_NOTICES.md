@@ -22,7 +22,7 @@ TapDeck 自有源码采用根目录 [MIT License](LICENSE)。第三方组件保�
 | [FakerInput](https://github.com/Ryochan7/FakerInput/releases/tag/v0.1.1)，内嵌驱动安装包 | 0.1.1 x64 | MIT | [LICENSE](windows/internal/driver/assets/LICENSE.FakerInput.txt)、[分发副本](licenses/FakerInput-LICENSE.txt) |
 | [VB-CABLE](https://vb-audio.com/Cable/)，内嵌完整官方原包 | Driver Pack45 | VB-Audio donationware / 专有许可 | [原包 readme](windows/internal/vbcable/assets/LICENSE.VB-CABLE.txt)、[官方分发条件](https://vb-audio.com/Services/licensing.htm) |
 | [FFmpeg](https://ffmpeg.org/)，内嵌精简 `ffmpeg.exe`（视频模式） | 8.1.3 | LGPL-2.1-or-later | [COPYING.LGPLv2.1](licenses/FFmpeg-LGPL-2.1.txt) |
-| [nv-codec-headers](https://github.com/FFmpeg/nv-codec-headers)，编译进 ffmpeg 的 NVENC 头文件 | 12.0.16.1 | MIT | [声明](licenses/nv-codec-headers-LICENSE.txt) |
+| [nv-codec-headers](https://github.com/FFmpeg/nv-codec-headers)，编译进 ffmpeg 的 NVENC 头文件 | 11.0.10.3 | MIT | [声明](licenses/nv-codec-headers-LICENSE.txt) |
 | [AMF headers](https://github.com/GPUOpen-LibrariesAndSDKs/AMF)，编译进 ffmpeg 的 AMF 头文件 | 1.5.3 | MIT | [声明](licenses/AMF-headers-LICENSE.txt) |
 
 内嵌 MSI 是未修改的上游签名安装包；来源、发布者及 SHA-256 记录在 `windows/internal/driver/assets/manifest.json`。HID 客户端依据公开的报告格式使用 Go 实现，接口参考 [FakerInputDll](https://github.com/Ryochan7/FakerInputDll)，不分发其源码或客户端 DLL。上游已归档，当前版本固定使用。

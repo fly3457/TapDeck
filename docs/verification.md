@@ -1,8 +1,36 @@
 # TapDeck 验证记录
 
-测试日期：2026-10-06 至 2026-10-09。使用页描述当前行为；历史结果按当时版本理解。截图中的示例连接和录音状态不作为实机识别证明。
+测试日期：2026-10-06 至 2026-11-03。使用页描述当前行为；历史结果按当时版本理解。截图中的示例连接和录音状态不作为实机识别证明。
 
-当前：接收端 **0.3.19**、Android **0.3.19 / code 22** · [安装](installation.md) · [版本规则](versioning.md)
+当前：接收端 **0.4.0**、Android **0.4.0 / code 23**（未公开发布）· [安装](installation.md) · [版本规则](versioning.md)
+
+## 0.4.0 视频模式
+
+2026-11-03 完成实现与官方构建，**实机手机验证进行中（由用户人工测试）**，结果补记于本节。功能说明见[视频模式](video-mode.md)。
+
+| 验证项 | 结果 |
+|---|---|
+| 内嵌 ffmpeg 构建 | `scripts/build-ffmpeg.ps1`：FFmpeg 8.1.3 源码包 SHA-256 与官方发布密钥签名（FCF9 86EA…58D8）校验通过，Docker Ubuntu 24.04 容器内静态交叉编译；确认 `CONFIG_GPL 0`、`CONFIG_NONFREE 0`，只依赖系统 DLL。`ffmpeg.exe` 4,216,320 字节，SHA-256 `0fb089f3e1393d52aa2b60bb04752719db127b1c91c8bfe25497ae427d2816f4` |
+| NVENC 兼容性 | 本机 RTX 2060、驱动 457.49 只支持 NVENC API 11.0：nv-codec-headers 12.0 构建报 “Required 12.0 Found 11.0”，改用 11.0.10.3（驱动 456.71+）后可用 |
+| 处理路径探测 | 本机驱动无法为 `scale_d3d11` 创建编码纹理（“Failed to configure output pad”），自动退到下一级：原生分辨率零拷贝（编码器直接读取 ddagrab BGRA 显存纹理），省流档改用 CPU 缩放 |
+| 本机实时编码 | `TAPDECK_VIDEO_LIVE=1 go test -run TestLiveEncoder`，主显示器 2194×1234：流畅档 h264_nvenc 原生分辨率 60.2 fps、15.8 Mbps、首帧 350 ms、关键帧约 104 KB、GOP 1.0 s；清晰档 59.4 fps、14.5 Mbps；省流档 1280×718 CPU 缩放 51.0 fps、5.1 Mbps。三档均首帧为 IDR、配置帧只出现一次。编码器探测结果按“显示器＋编码器＋路径”缓存，接收端启动后后台预热 |
+| 协议与会话 | Go 集成测试：`ready.features` 声明 `video`；`video_ready` 尺寸正确；错误令牌返回 `unauthorized` 且不消耗流；画面配置帧、关键帧与光标消息到达；`VideoDevice` 显示查看者；控制连接断开后视频连接随之结束；PC 关闭开关时返回 `disabled`；同一会话重复请求替换旧流、其他会话 `busy`、未连接的流 30 秒过期、流只能被所属会话连接一次 |
+| 丢帧策略 | 单元测试：队列满时清空积压并丢弃到下一个 IDR，配置帧保留；FLV 解析（配置记录、长度前缀转起始码、截断／非 H.264 拒绝） |
+| Android 逻辑 | 单元测试：竖屏按高度填满且左右等量裁切、20:9 横屏完整显示两侧黑边、焦点缩放与上下限、平移不露边、光标进入 12% 边缘区平滑跟随、用户平移在光标移动前保持、旋转后重新套用规则；视频消息解析；捏合本地处理而双指拖动仍为滚轮、双指轻点仍为右键；`MicTrigger` 长按／单击／拖动／取消 |
+| 官方构建 | `scripts/build-windows.ps1 -OutputDirectory dist/0.4.0`（便携 PowerShell 7.6.9）：57 项版本规则、Android release 构建与单元测试、Go 测试与 vet、三个 EXE 通过；两个接收端 `--apk-info` 为 Android 0.4.0 / code 23、release、不可调试、证书 `7a73774806a038cf5ac53dff3aa4332390158c2ecbf55bebd5c01811ae543e30`，并读回内嵌 ffmpeg 哈希与清单一致；`release-manifest.json` 记录 ffmpeg 版本与哈希 |
+
+官方交付目录 `dist/0.4.0`（本地构建，未公开发布）：
+
+| 产物 | 字节数 | SHA-256 |
+|---|---:|---|
+| `TapDeck-0.4.0.apk` | 8,547,733 | `105261b822d34da0965e898a747b3ccc953ded2e22677781fd20f69ee8f7d803` |
+| `TapDeck-0.4.0.exe` | 28,051,456 | `0a52d6721b1221bc72b5dfd19ec2794152ade8c7ce6b04b643ff4af773c49bec` |
+| `TapDeck-debug-0.4.0.exe` | 33,595,392 | `70b33a8e64a02eb4717a3d17513672dfcdbca9adc455abb68bd2237017d9a1f9` |
+| `TapDeck-hidprobe-0.4.0.exe` | 8,048,128 | `4183eb58e5e728d659e611459e931e0bc8c45d0d02114a6e3b6e2f6ebf0631a3` |
+
+日志：`.tools/ffmpeg-build.log`、`.tools/windows-release-0.4.0-build.log`。
+
+待验收：实体手机竖屏／横屏显示与旋转、MediaCodec 低延迟解码与实际帧率、画面到画面延迟、捏合与光标跟随手感、悬浮球两种语音、后台恢复与断线重连、Wi-Fi 丢包下的丢帧恢复；AMD（AMF）、Intel（Media Foundation）显卡与新驱动下的 `scale_d3d11` 路径尚未实测。公开发布时须在同一 Release 附上 FFmpeg 源码包。
 
 ## 0.3.19 Android release 交付与签名检查
 
