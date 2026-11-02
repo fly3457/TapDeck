@@ -26,7 +26,7 @@ class MicBallView(
     private val saveMode: (String) -> Unit = {},
 ) : View(context) {
     companion object {
-        const val HOLD_MS = 300L
+        const val HOLD_MS = MicTrigger.HOLD_MS
         const val MODE_HOLD = "hold"
         const val MODE_TOGGLE = "toggle"
         val BACKGROUND = ControllerStyle.PANEL
@@ -40,23 +40,18 @@ class MicBallView(
     private var nx = 0.5f; private var ny = 0.42f
     private var restored = false; private var movedPosition = false
     private var pointer = -1
-    private var downX = 0f; private var downY = 0f
     private var originX = 0f; private var originY = 0f
-    private var downTime = 0L; private var lastTap = 0L
-    private var tapX = 0f; private var tapY = 0f
     /** 顶部模式按钮的命中区域（每帧按实际排版更新）。 */
     private val modeButton = RectF()
     private var modePressed = false
     private var modeTouch = false
     private val iconLines by lazy { context.getDrawable(R.drawable.ic_lucide_mic_audio_lines) }
     private val iconSignal by lazy { context.getDrawable(R.drawable.ic_lucide_mic_signal) }
-    private var dragging = false
-    private var holdStarted = false
     var onFeedback: (KeyFeedback) -> Unit = { keyFeedback(it) }
     var verticalScale = 1f
         set(v) { if (field != v) { field = v; invalidate() } }
     var status = "idle"
-        set(v) { if (field != v) { field = v; if (v == "idle") holdStarted = false; invalidate() } }
+        set(v) { if (field != v) { field = v; invalidate() } }
     /** 服务端确认的录音模式，仅用于文案；形状由 [gestureMode] 决定。 */
     var mode = ""
         set(v) { if (field != v) { field = v; invalidate() } }
@@ -76,18 +71,20 @@ class MicBallView(
     var gestureMode = MODE_HOLD
         set(v) { if (field != v) { field = v; invalidate() } }
 
-    private val hold = Runnable {
-        if (pointer >= 0 && !dragging && available && gestureMode == MODE_HOLD && status == "idle") {
-            lastTap = 0
-            holdStarted = begin(MODE_HOLD)
-            if (holdStarted) {
-                onFeedback(KeyFeedback.LongPress)
-                mode = MODE_HOLD
-                if (status == "idle") status = "preparing"
-            }
-            invalidate()
-        }
-    }
+    private val trigger: MicTrigger = MicTrigger(slop, object : MicTrigger.Host {
+        override val gestureMode get() = this@MicBallView.gestureMode
+        override val available get() = this@MicBallView.available
+        override val status get() = this@MicBallView.status
+        override fun begin(mode: String) = this@MicBallView.begin(mode)
+        override fun end(abort: Boolean) = this@MicBallView.end(abort)
+        override fun schedule(delayMs: Long) { postDelayed(hold, delayMs) }
+        override fun unschedule() { removeCallbacks(hold) }
+        override fun drag(dx: Float, dy: Float) = reposition(originX + dx, originY + dy)
+        override fun dragEnd() = savePosition(nx, ny)
+        override fun feedback(kind: KeyFeedback) = onFeedback(kind)
+        override fun started(mode: String) { this@MicBallView.mode = mode; if (this@MicBallView.status == "idle") this@MicBallView.status = "preparing"; invalidate() }
+    })
+    private val hold: Runnable = Runnable { trigger.holdElapsed(); invalidate() }
     init {
         isClickable = true
         contentDescription = "语音输入区：按开关选择长按或单击，可拖动调整位置"
@@ -275,19 +272,15 @@ class MicBallView(
                 }
                 val (cx, cy) = ballCenter()
                 if (!hit(e.x, e.y, cx, cy)) return false
-                if (available) onFeedback(KeyFeedback.Press)
                 parent?.requestDisallowInterceptTouchEvent(true)
-                pointer = e.getPointerId(0); downX = e.x; downY = e.y; originX = cx; originY = cy; downTime = e.eventTime
-                dragging = false; holdStarted = false
-                if (gestureMode == MODE_HOLD && available && status == "idle") postDelayed(hold, HOLD_MS)
+                pointer = e.getPointerId(0); originX = cx; originY = cy
+                trigger.down(e.x, e.y, e.eventTime)
                 invalidate()
             }
             MotionEvent.ACTION_MOVE -> {
                 if (modeTouch) return true
                 val i = e.findPointerIndex(pointer); if (i < 0) return pointer >= 0
-                val dx = e.getX(i) - downX; val dy = e.getY(i) - downY
-                if (!dragging && hypot(dx, dy) > slop) { dragging = true; lastTap = 0; removeCallbacks(hold) }
-                if (dragging) reposition(originX + dx, originY + dy)
+                trigger.move(e.getX(i), e.getY(i))
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
                 if (modeTouch) {
@@ -298,28 +291,16 @@ class MicBallView(
                     return true
                 }
                 if (pointer < 0 || e.getPointerId(e.actionIndex) != pointer) return pointer >= 0
-                removeCallbacks(hold)
-                val tapped = !dragging && hypot(e.x - downX, e.y - downY) <= slop && e.eventTime - downTime < HOLD_MS
-                if (holdStarted) { end(false); lastTap = 0 }
-                else if (dragging || !available) lastTap = 0
-                else if (gestureMode == MODE_TOGGLE && tapped) {
-                    // 免按模式：轻点开始，录音中再轻点结束。
-                    if (status == "idle") { if (begin(MODE_TOGGLE)) { mode = MODE_TOGGLE; status = "preparing" } }
-                    else end(false)
-                    lastTap = 0
-                } else lastTap = 0
-                if (dragging) savePosition(nx, ny)
-                pointer = -1; holdStarted = false; dragging = false; performClick(); invalidate()
+                trigger.up(e.x, e.y, e.eventTime)
+                pointer = -1; performClick(); invalidate()
             }
             MotionEvent.ACTION_CANCEL -> cancel()
         }
         return pointer >= 0 || e.actionMasked == MotionEvent.ACTION_UP
     }
     fun cancel() {
-        removeCallbacks(hold)
-        if (holdStarted) end(true)
-        if (dragging) savePosition(nx, ny)
-        pointer = -1; holdStarted = false; dragging = false; lastTap = 0; modePressed = false; modeTouch = false; invalidate()
+        trigger.cancel()
+        pointer = -1; modePressed = false; modeTouch = false; invalidate()
     }
     override fun onDetachedFromWindow() { cancel(); super.onDetachedFromWindow() }
     override fun performClick(): Boolean { super.performClick(); return true }

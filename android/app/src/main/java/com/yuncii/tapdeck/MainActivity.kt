@@ -76,7 +76,12 @@ class TapViewModel(app: Application) : AndroidViewModel(app) {
         private set
     private var savedVoiceId: String? = null
     val keyboardOn = MutableStateFlow(false)
+    /** 视频模式不持久化：重新打开 App 回到普通模式。 */
+    val videoOn = MutableStateFlow(false)
+    val videoQuality = MutableStateFlow(VideoQuality.Smooth)
+    val videoBall = MutableStateFlow<Pair<Float, Float>?>(null)
     init {
+        viewModelScope.launch { val (quality, ball) = store.loadVideoPreferences(); videoQuality.value = quality; videoBall.value = ball }
         viewModelScope.launch { client.restore() }
         viewModelScope.launch { ballPosition.value = store.loadBallPosition() }
         viewModelScope.launch {
@@ -116,6 +121,15 @@ class TapViewModel(app: Application) : AndroidViewModel(app) {
         val pc = state.selectedPeerId ?: return
         if (savedVoiceId != id) { savedVoiceId = id; client.rememberVoice(pc, state.connectionEpoch, id) }
     }
+    fun setVideoQuality(quality: VideoQuality) {
+        if (videoQuality.value == quality) return
+        videoQuality.value = quality
+        viewModelScope.launch { store.saveVideoQuality(quality) }
+    }
+    fun saveVideoBall(x: Float, y: Float) {
+        videoBall.value = x to y
+        viewModelScope.launch { store.saveVideoBall(x, y) }
+    }
     fun setKeyboardOn(on: Boolean) {
         if (keyboardOn.value == on) return
         keyboardOn.value = on
@@ -127,6 +141,13 @@ class MainActivity : ComponentActivity() {
     private val vm: TapViewModel by viewModels()
     private var touchpad: TouchpadView? = null
     private var microphone: MicBallView? = null
+    private var videoView: VideoModeView? = null
+    private var regionsView: View? = null
+    private val videoDecoder = VideoDecoder()
+    /** 视频模式下拦截返回键/返回手势：退出视频模式而不是关闭 App。 */
+    private val videoBack = object : androidx.activity.OnBackPressedCallback(false) {
+        override fun handleOnBackPressed() { exitVideo() }
+    }
     private var deferredLink: String? = null
     private var deferredPeerId: String? = null
     private var settings by mutableStateOf(false)
@@ -237,6 +258,7 @@ class MainActivity : ComponentActivity() {
                         if (!on) keyHold.releaseAll() else if (vm.client.state.value.mic != "idle") vm.client.stopMic()
                     },
                     onSettings = { touchpad?.cancel(); feedbackAvailability = feedbackController.availability(); feedbackTestMessage = ""; settings = true },
+                    onVideo = ::enterVideo,
                 )
             }.apply { id = R.id.connection_header }
             addView(headerView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0))
@@ -312,10 +334,27 @@ class MainActivity : ComponentActivity() {
             }
             modeViews?.invoke()
         }
+        regionsView = regions
+        val video = VideoModeView(this, vm.client, videoDecoder, { mode -> beginMic(mode, firstVoiceProfile()) }, vm.client::stopMic, vm::saveVideoBall).also { view ->
+            videoView = view
+            view.visibility = View.GONE
+            view.onExit = ::exitVideo
+            view.onRetry = { vm.client.stopVideo() } // 回到 Idle 后由状态收集自动重新请求
+            view.mic.onFeedback = { view.keyFeedback(it, feedbackController) }
+        }
+        videoDecoder.onError = { reason -> runOnUiThread { vm.client.stopVideo(); android.widget.Toast.makeText(this, reason, android.widget.Toast.LENGTH_LONG).show(); exitVideo() } }
+        vm.client.videoSink = { msg ->
+            when (msg) {
+                is VideoFrame -> videoDecoder.submit(msg)
+                is VideoCursor -> video.post { video.cursor(msg) }
+            }
+        }
+        onBackPressedDispatcher.addCallback(this, videoBack)
         val dialogs = compose(compact = false) {
             val state by vm.client.state.collectAsStateWithLifecycle()
             val peers by vm.client.peers.collectAsStateWithLifecycle()
             val inputSettings by vm.client.inputSettings.collectAsStateWithLifecycle()
+            val videoQuality by vm.videoQuality.collectAsStateWithLifecycle()
             if (managingPeers) PeerManager(peers, state, vm.client::renamePeer, vm.client::forgetPeer) { managingPeers = false }
             if (sensitivitySettings) SensitivitySettings(inputSettings, vm.client::setSensitivity) { sensitivitySettings = false }
             if (settings) AlertDialog(onDismissRequest = { settings = false }, title = {
@@ -357,6 +396,18 @@ class MainActivity : ComponentActivity() {
                     }
                     // Together with the column's 8dp spacing, leave 16dp on each side.
                     HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                    Text("视频模式画质", style = MaterialTheme.typography.bodyMedium)
+                    VideoQuality.entries.forEach { quality ->
+                        Row(Modifier.fillMaxWidth().clickable(role = Role.RadioButton) { vm.setVideoQuality(quality) }, verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(selected = videoQuality == quality, onClick = { vm.setVideoQuality(quality) })
+                            Column {
+                                Text(quality.label)
+                                Text(quality.detail, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                    Text("下次打开视频模式时生效", style = MaterialTheme.typography.bodySmall)
+                    HorizontalDivider(Modifier.padding(vertical = 8.dp))
                     TextButton(onClick = { settings = false; managingPeers = true }) { Text("管理电脑（${peers.peers.size}）") }
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text("输入PC连接窗口URL", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
@@ -380,10 +431,13 @@ class MainActivity : ComponentActivity() {
                 val safe = WindowInsetsCompat.toWindowInsetsCompat(insets, view)
                 val bars = safe.getInsets(WindowInsetsCompat.Type.systemBars())
                 val cutout = safe.getInsets(WindowInsetsCompat.Type.displayCutout())
-                view.setPadding(maxOf(bars.left, cutout.left), maxOf(bars.top, cutout.top), maxOf(bars.right, cutout.right), maxOf(bars.bottom, cutout.bottom))
+                // 视频模式整屏都是显示器：画面延伸到刘海与系统栏下方。
+                if (vm.videoOn.value) view.setPadding(0, 0, 0, 0)
+                else view.setPadding(maxOf(bars.left, cutout.left), maxOf(bars.top, cutout.top), maxOf(bars.right, cutout.right), maxOf(bars.bottom, cutout.bottom))
                 insets
             }
             addView(regions, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            addView(video, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
             // Dialogs own their windows; this composition needs no screen area.
             addView(dialogs, FrameLayout.LayoutParams(0, 0))
         }
@@ -393,6 +447,31 @@ class MainActivity : ComponentActivity() {
                 // 本地记录的模式是异步读出来的：读到以后要重新应用到界面。
                 launch {
                     vm.keyboardOn.collect { modeViews?.invoke() }
+                }
+                launch {
+                    combine(vm.client.state, vm.videoOn, vm.videoBall) { state, on, ball -> Triple(state, on, ball) }.collect { (state, on, ball) ->
+                        val view = videoView ?: return@collect
+                        view.connected = state.connected
+                        view.update(state.video, state.rttMs)
+                        ball?.let { view.mic.restorePosition(it.first, it.second) }
+                        view.mic.apply {
+                            val profile = state.activeVoiceProfile ?: firstVoiceProfile(state)
+                            mode = state.micMode; status = state.mic; level = state.level
+                            profileName = profile?.name ?: "语音未启用"
+                            if (profile != null) gestureMode = profile.mode
+                            available = state.connected && (profile != null || state.mic != "idle")
+                        }
+                        if (!on) return@collect
+                        // 连接（或重连）就绪、回到前台后自动请求画面；出错后等用户点击重试。
+                        if (state.connected && state.videoSupported && state.video.phase == VideoPhase.Idle) {
+                            videoDecoder.reset()
+                            val (maxW, maxH) = decoderLimit()
+                            vm.client.startVideo(vm.videoQuality.value, maxW, maxH)
+                        } else if (state.connected && !state.videoSupported) {
+                            android.widget.Toast.makeText(this@MainActivity, "请将电脑端升级到 TapDeck 0.4.0 或更新版本以使用视频模式", android.widget.Toast.LENGTH_LONG).show()
+                            exitVideo()
+                        }
+                    }
                 }
                 combine(vm.client.state, vm.ballPosition, vm.selectedVoice) { state, position, selected -> Triple(state, position, selected) }.collect { (state, position, selected) ->
                     if (awaitingNewPeer && state.phase == ConnectionPhase.Disconnected && state.error.isNotEmpty() && state.selectedPeerId == null) {
@@ -416,17 +495,25 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        // Activity 重建（例如系统字体变化）时 ViewModel 仍处于视频模式，重新套用界面。
+        if (vm.videoOn.value) applyVideoMode()
         // A restored task can carry the original system Intent after process death.
         if (savedInstanceState == null) consumePairingIntent(intent) else intent?.data = null
     }
     private fun fullscreen() {
         // 保留系统状态栏（电池、时间等），只把布局延伸到状态栏后面，并按安全区留白。
+        // 视频模式改为沉浸式：隐藏系统栏，从边缘滑动可临时呼出。
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (Build.VERSION.SDK_INT >= 28) window.attributes = window.attributes.apply { layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES }
         WindowInsetsControllerCompat(window, window.decorView).apply {
-            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
-            show(WindowInsetsCompat.Type.systemBars())
+            if (vm.videoOn.value) {
+                systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                hide(WindowInsetsCompat.Type.systemBars())
+            } else {
+                systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
+                show(WindowInsetsCompat.Type.systemBars())
+            }
         }
     }
     private fun scanPairingAddress() {
@@ -479,10 +566,53 @@ class MainActivity : ComponentActivity() {
         shortcutHold.cancelAll()
         keyHold.releaseAll()
         microphone?.cancel()
+        videoView?.cancel()
     }
-    private fun beginMic(mode: String): Boolean {
-        if (!vm.voiceSelectionMatches(vm.client.state.value)) return false
-        val profile = vm.selectedVoice.value ?: return false
+    /** 视频模式的悬浮球固定使用 PC 语音配置中第一个已启用的组。 */
+    private fun firstVoiceProfile(state: ClientState = vm.client.state.value) = state.voiceProfiles().firstOrNull { it.enabled }
+
+    private fun enterVideo() {
+        val state = vm.client.state.value
+        when {
+            !state.connected -> android.widget.Toast.makeText(this, "请先连接电脑", android.widget.Toast.LENGTH_SHORT).show()
+            !state.videoSupported -> android.widget.Toast.makeText(this, "请将电脑端升级到 TapDeck 0.4.0 或更新版本以使用视频模式", android.widget.Toast.LENGTH_LONG).show()
+            else -> { cancelInputs(); vm.videoOn.value = true; applyVideoMode() }
+        }
+    }
+
+    private fun exitVideo() {
+        if (!vm.videoOn.value) return
+        videoView?.cancel()
+        vm.client.stopVideo()
+        vm.videoOn.value = false
+        applyVideoMode()
+    }
+
+    /** 横竖屏都使用同一条画面规则；普通模式锁回竖屏。 */
+    private fun applyVideoMode() {
+        val on = vm.videoOn.value
+        videoBack.isEnabled = on
+        requestedOrientation = if (on) android.content.pm.ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR else android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        regionsView?.visibility = if (on) View.GONE else View.VISIBLE
+        videoView?.visibility = if (on) View.VISIBLE else View.GONE
+        if (on) { pickerOpen = false; touchpad?.cancel(); shortcutHold.cancelAll(); keyHold.releaseAll() }
+        fullscreen()
+        window.decorView.requestApplyInsets()
+    }
+
+    /** 手机 H.264 硬件解码器支持的最大宽高，PC 端据此限制输出尺寸。 */
+    private fun decoderLimit(): Pair<Int, Int> = runCatching {
+        android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS).codecInfos
+            .filter { !it.isEncoder && it.supportedTypes.any { t -> t.equals(android.media.MediaFormat.MIMETYPE_VIDEO_AVC, true) } }
+            .sortedBy { if (Build.VERSION.SDK_INT >= 29 && it.isSoftwareOnly) 1 else 0 }
+            .firstNotNullOf { info ->
+                info.getCapabilitiesForType(android.media.MediaFormat.MIMETYPE_VIDEO_AVC).videoCapabilities?.let { it.supportedWidths.upper to it.supportedHeights.upper }
+            }
+    }.getOrDefault(1920 to 1080)
+
+    private fun beginMic(mode: String, override: VoiceProfile? = null): Boolean {
+        if (override == null && !vm.voiceSelectionMatches(vm.client.state.value)) return false
+        val profile = override ?: vm.selectedVoice.value ?: return false
         if (!vm.client.state.value.voiceProfiles().any { it.id == profile.id && it.enabled }) return false
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             android.util.Log.i("TapDeck", "beginMic $mode：未授予麦克风权限")
@@ -506,8 +636,19 @@ class MainActivity : ComponentActivity() {
     }
     override fun onPause() { pageResumed = false; super.onPause() }
     override fun onStart() { super.onStart(); vm.client.setForeground(true) }
-    override fun onStop() { touchpad?.cancel(); microphone?.cancel(); vm.client.stopMic(true); vm.client.setForeground(false); super.onStop() }
-    override fun onDestroy() { vm.client.beforeConnectionChange = null; super.onDestroy() }
+    override fun onStop() {
+        touchpad?.cancel(); microphone?.cancel(); videoView?.cancel()
+        vm.client.stopMic(true)
+        // 后台不传画面；回到前台后由状态收集自动重新请求。
+        vm.client.stopVideo()
+        vm.client.setForeground(false); super.onStop()
+    }
+    override fun onDestroy() {
+        vm.client.beforeConnectionChange = null
+        vm.client.videoSink = null
+        videoDecoder.release()
+        super.onDestroy()
+    }
 }
 
 @Composable private fun SensitivitySettings(settings: DeviceInputSettings, change: (Double) -> Unit, close: () -> Unit) {
@@ -539,6 +680,7 @@ class MainActivity : ComponentActivity() {
     onManagePeers: () -> Unit,
     onKeyboardToggle: (Boolean) -> Unit,
     onSettings: () -> Unit,
+    onVideo: () -> Unit,
 ) {
     val feedback = LocalKeyFeedback.current
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -597,6 +739,21 @@ class MainActivity : ComponentActivity() {
                 }
             }
             // Explicit click bounds avoid Material's minimum size enlarging a 0.10W header.
+            Box(
+                Modifier.width(width * 0.10f).fillMaxHeight()
+                    .clip(RoundedCornerShape(width * ControllerStyle.CORNER))
+                    .clickable(role = Role.Button) { feedback(KeyFeedback.Press); onVideo() }
+                    .semantics { contentDescription = if (state.videoSupported) "进入视频模式，在手机上显示电脑画面" else "视频模式不可用，需要连接 TapDeck 0.4.0 或更新版本的电脑端" },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_lucide_monitor),
+                    contentDescription = null,
+                    tint = if (state.connected && state.videoSupported) Color(0xFF000000) else Color(0xFFAAAAAA),
+                    modifier = Modifier.size(iconSize),
+                )
+            }
+            Spacer(Modifier.width(width * 0.01f))
             Box(
                 Modifier.width(width * 0.10f).fillMaxHeight()
                     .clip(RoundedCornerShape(width * ControllerStyle.CORNER))

@@ -21,8 +21,13 @@ TapDeck 自有源码采用根目录 [MIT License](LICENSE)。第三方组件保�
 | [golang.org/x/image](https://go.googlesource.com/image)，资源工具依赖 | 0.31.0 | BSD-3-Clause | [LICENSE](licenses/x-image-LICENSE.txt) |
 | [FakerInput](https://github.com/Ryochan7/FakerInput/releases/tag/v0.1.1)，内嵌驱动安装包 | 0.1.1 x64 | MIT | [LICENSE](windows/internal/driver/assets/LICENSE.FakerInput.txt)、[分发副本](licenses/FakerInput-LICENSE.txt) |
 | [VB-CABLE](https://vb-audio.com/Cable/)，内嵌完整官方原包 | Driver Pack45 | VB-Audio donationware / 专有许可 | [原包 readme](windows/internal/vbcable/assets/LICENSE.VB-CABLE.txt)、[官方分发条件](https://vb-audio.com/Services/licensing.htm) |
+| [FFmpeg](https://ffmpeg.org/)，内嵌精简 `ffmpeg.exe`（视频模式） | 8.1.3 | LGPL-2.1-or-later | [COPYING.LGPLv2.1](licenses/FFmpeg-LGPL-2.1.txt) |
+| [nv-codec-headers](https://github.com/FFmpeg/nv-codec-headers)，编译进 ffmpeg 的 NVENC 头文件 | 12.0.16.1 | MIT | [声明](licenses/nv-codec-headers-LICENSE.txt) |
+| [AMF headers](https://github.com/GPUOpen-LibrariesAndSDKs/AMF)，编译进 ffmpeg 的 AMF 头文件 | 1.5.3 | MIT | [声明](licenses/AMF-headers-LICENSE.txt) |
 
 内嵌 MSI 是未修改的上游签名安装包；来源、发布者及 SHA-256 记录在 `windows/internal/driver/assets/manifest.json`。HID 客户端依据公开的报告格式使用 Go 实现，接口参考 [FakerInputDll](https://github.com/Ryochan7/FakerInputDll)，不分发其源码或客户端 DLL。上游已归档，当前版本固定使用。
+
+视频模式使用的 `ffmpeg.exe` 是未修改的 FFmpeg 8.1.3 源码按 `scripts/build-ffmpeg.ps1` 与 `scripts/ffmpeg/build.sh` 中的固定参数静态编译的 LGPL 版本，未启用任何 GPL／nonfree 组件。它作为独立子进程运行，不与 TapDeck 链接。源码包地址、SHA-256、configure 参数与产物哈希记录在 `windows/internal/video/assets/manifest.json`；用户可按同一脚本从对应源码重新构建并替换。公开发布含该 ffmpeg 的接收端时，须在同一 GitHub Release 附上对应源码包 `ffmpeg-8.1.3.tar.xz`（亦可从 [ffmpeg.org](https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz) 获取）及上述构建脚本，满足 LGPL 在同一位置提供源码的要求。H.264 编码由显卡驱动或 Windows Media Foundation 提供，TapDeck 不分发编解码器专利许可。
 
 `winres` 及其图像依赖只用于构建阶段生成资源，不作为运行时组件链接进接收端或 HID 工具。历史构建工具 `rsrc` 的许可副本继续保留在 `licenses/rsrc-LICENSE.txt`。
 
@@ -49,7 +54,7 @@ Gradle Wrapper 的原始版权和许可头保留在 `android/gradlew` 与 `andro
 
 ## Lucide 图标
 
-Android 使用 Lucide 的 `keyboard`、`mic-audio-lines`、`mic-signal`、`plug`、`arrow-big-up`、`corner-down-left`、`delete`、`sliders-horizontal`、`scan-line` 和 `chevron-right` 矢量图标；Shift+Enter 组合 `arrow-big-up` 与 `corner-down-left`。图标适用 ISC 许可及其原始版权声明。完整上游原文（含 Feather 来源附录）保留在 [Lucide-LICENSE.txt](licenses/Lucide-LICENSE.txt)，同一份声明也随 APK 的 `assets/Lucide-LICENSE.txt` 分发。
+Android 使用 Lucide 的 `keyboard`、`mic-audio-lines`、`mic-signal`、`plug`、`arrow-big-up`、`corner-down-left`、`delete`、`sliders-horizontal`、`scan-line`、`chevron-right` 和 `monitor` 矢量图标；Shift+Enter 组合 `arrow-big-up` 与 `corner-down-left`。图标适用 ISC 许可及其原始版权声明。完整上游原文（含 Feather 来源附录）保留在 [Lucide-LICENSE.txt](licenses/Lucide-LICENSE.txt)，同一份声明也随 APK 的 `assets/Lucide-LICENSE.txt` 分发。
 
 ## VB-CABLE 原包与分发
 

@@ -28,6 +28,7 @@ import (
 	"tapdeck/internal/keyboard"
 	"tapdeck/internal/protocol"
 	"tapdeck/internal/secure"
+	"tapdeck/internal/video"
 	"time"
 )
 
@@ -61,6 +62,13 @@ type Message struct {
 	Reason      string `json:"reason,omitempty"`
 	Steps       int    `json:"steps,omitempty"`
 	Action      string `json:"action,omitempty"`
+	// 视频模式：video_start 的画质与手机解码上限，video_hello 的流凭据。
+	Quality   string `json:"quality,omitempty"`
+	MaxWidth  int    `json:"max_width,omitempty"`
+	MaxHeight int    `json:"max_height,omitempty"`
+	FPS       int    `json:"fps,omitempty"`
+	Session   string `json:"session,omitempty"`
+	Stream    string `json:"stream,omitempty"`
 }
 type Pending struct {
 	ID       string
@@ -98,6 +106,8 @@ type Snapshot struct {
 	InjectionP95MS    float64
 	BufferedFrames    int
 	MaxBufferedFrames int
+	// VideoDevice 是正在查看屏幕的控制端名称。
+	VideoDevice string
 }
 type InputController interface {
 	Move(int32, int32, int32, int32) error
@@ -183,16 +193,18 @@ type Server struct {
 	pending      map[string]*Pending
 	pairTimeout  time.Duration
 	// sessions 是当前已连接的控制端，按会话 id 索引，最多 MaxSessions 个。
-	sessions     map[uint64]*session
-	http         *http.Server
-	wss          *http.Server
-	udp          *net.UDPConn
-	cancel       context.CancelFunc
-	audioDone    chan struct{}
-	running      bool
-	lastError    string
-	Input        InputController
-	Audio        AudioEngine
+	sessions  map[uint64]*session
+	http      *http.Server
+	wss       *http.Server
+	udp       *net.UDPConn
+	cancel    context.CancelFunc
+	audioDone chan struct{}
+	running   bool
+	lastError string
+	Input     InputController
+	Audio     AudioEngine
+	// Video 为空或没有内嵌编码器时不声明 video 能力。
+	Video        *video.Manager
 	mousePackets atomic.Uint64
 	audioPackets atomic.Uint64
 	processingNS atomic.Uint64
@@ -269,7 +281,7 @@ func New(dir string) (*Server, error) {
 		host = ips[1].String()
 	}
 	name, _ := os.Hostname()
-	s := &Server{cfg: c, dir: dir, host: host, name: name, pin: pin, cert: cert, pairEpoch: map[string]uint64{}, pending: map[string]*Pending{}, pairTimeout: 120 * time.Second, sessions: map[uint64]*session{}, Input: input.New(), Audio: audio.New()}
+	s := &Server{cfg: c, dir: dir, host: host, name: name, pin: pin, cert: cert, pairEpoch: map[string]uint64{}, pending: map[string]*Pending{}, pairTimeout: 120 * time.Second, sessions: map[uint64]*session{}, Input: input.New(), Audio: audio.New(), Video: video.NewManager(video.NewLauncher())}
 	if s.paired, err = loadPaired(dir); err != nil {
 		return nil, err
 	}
@@ -410,6 +422,7 @@ func (s *Server) Start() error {
 	s.http = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second}
 	wm := http.NewServeMux()
 	wm.HandleFunc("GET /ws", s.connect)
+	wm.HandleFunc("GET /video", s.videoConnect)
 	s.wss = &http.Server{Handler: wm, ReadHeaderTimeout: 5 * time.Second, TLSConfig: &tls.Config{Certificates: []tls.Certificate{s.cert}, MinVersion: tls.VersionTLS12}}
 	hs := s.http
 	ws := s.wss
@@ -456,6 +469,7 @@ func (s *Server) Stop() {
 	w.Close()
 	u.Close()
 	s.Audio.Abort()
+	s.Video.StopAll()
 	s.Input.ReleaseAll()
 	<-audioDone
 }
@@ -473,6 +487,7 @@ func (s *Server) Snapshot() Snapshot {
 	sort.Slice(v.Pending, func(i, j int) bool { return v.Pending[i].Expires.Before(v.Pending[j].Expires) })
 	v.PairedDevices = s.pairedDevicesLocked()
 	s.mu.Unlock()
+	v.VideoDevice = s.VideoDevice()
 	v.AudioStatus, v.AudioReady, v.Level, v.Received, v.Concealed = s.Audio.Status()
 	v.MousePackets = s.mousePackets.Load()
 	v.AudioPackets = s.audioPackets.Load()
@@ -714,7 +729,7 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 			ss.close("连接结束")
 		}
 	}()
-	if e = ss.send(map[string]any{"type": "ready", "session": fmt.Sprintf("%016x", ss.id), "token": token, "config": cfg, "udp_port": cfg.UDPPort, "mouse_key": base64.RawURLEncoding.EncodeToString(mouseKey), "audio_key": base64.RawURLEncoding.EncodeToString(audioKey), "mouse_prefix": base64.RawURLEncoding.EncodeToString(mp[:]), "audio_prefix": base64.RawURLEncoding.EncodeToString(ap[:]), "features": append(ss.touchpadFeatures(), "voice_profiles"), "double_click_ms": input.DoubleClickTime()}); e != nil {
+	if e = ss.send(map[string]any{"type": "ready", "session": fmt.Sprintf("%016x", ss.id), "token": token, "config": cfg, "udp_port": cfg.UDPPort, "mouse_key": base64.RawURLEncoding.EncodeToString(mouseKey), "audio_key": base64.RawURLEncoding.EncodeToString(audioKey), "mouse_prefix": base64.RawURLEncoding.EncodeToString(mp[:]), "audio_prefix": base64.RawURLEncoding.EncodeToString(ap[:]), "features": ss.features(), "double_click_ms": input.DoubleClickTime()}); e != nil {
 		return
 	}
 	go func() {
@@ -795,6 +810,7 @@ func (ss *session) close(reason string) {
 		ss.mu.Unlock()
 		ss.cancel()
 		ss.ws.CloseNow()
+		ss.s.Video.Stop(ss.id)
 		ss.releaseInputs(holds, keys, recording, voice)
 		log.Printf("session closed: %s", reason)
 	})
@@ -1085,6 +1101,13 @@ func (ss *session) handle(m Message) error {
 		}
 		ss.ending = true
 		ss.s.Audio.End(ss.audioRecording, time.Duration(v.StopDelayMS)*time.Millisecond, finish)
+	case "video_start":
+		// 首次探测编码器需要数秒，不能占住会话锁和控制消息循环。
+		go ss.startVideo(m)
+		return nil
+	case "video_stop":
+		ss.s.Video.Stop(ss.id)
+		return nil
 	case "pair_confirm":
 		// 老版本 App 配对时仍会发这条消息（现在改由 PC 端确认）：收到就忽略。
 		return nil

@@ -13,6 +13,11 @@ interface TouchSink {
     fun button(name: String, down: Boolean)
     fun click(name: String = "left")
     fun zoom(steps: Int) {}
+    /**
+     * 连续捏合：scale 为相对上一帧的缩放比，focus 为双指中心，pan 为中心位移（dp）。
+     * 返回 true 表示已在本地处理（视频模式缩放画面），不再发送 PC 缩放。
+     */
+    fun pinch(scale: Double, focusX: Double, focusY: Double, panX: Double, panY: Double): Boolean = false
     fun gesture(direction: String) {}
 }
 
@@ -138,7 +143,7 @@ internal class TouchpadGestures(
                 }
                 when (mode) {
                     Mode.Scroll -> sink.scroll(nowCenter.x - lastCenter.x, nowCenter.y - lastCenter.y)
-                    Mode.Pinch -> {
+                    Mode.Pinch -> if (!sink.pinch(span / lastSpan, nowCenter.x, nowCenter.y, nowCenter.x - lastCenter.x, nowCenter.y - lastCenter.y)) {
                         zoomRemainder += ln(span / lastSpan) / ln(1.12)
                         val steps = zoomRemainder.toInt()
                         if (steps != 0) { sink.zoom(steps); zoomRemainder -= steps }

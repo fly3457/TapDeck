@@ -26,6 +26,9 @@ class PairStore(private val context: Context) {
     private val keyboardKey = booleanPreferencesKey("keyboard_mode")
     private val sensitivityKey = doublePreferencesKey("touchpad_sensitivity_multiplier")
     private val hapticsKey = booleanPreferencesKey("key_haptics")
+    private val videoQualityKey = stringPreferencesKey("video_quality")
+    private val videoBallX = floatPreferencesKey("video_ball_x")
+    private val videoBallY = floatPreferencesKey("video_ball_y")
     private fun key(): SecretKey {
         val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         (ks.getKey("tapdeck-pair", null) as? SecretKey)?.let { return it }
@@ -100,6 +103,19 @@ class PairStore(private val context: Context) {
 
     suspend fun saveKeyboardMode(on: Boolean) {
         context.dataStore.edit { it[keyboardKey] = on }
+    }
+
+    /** 视频模式画质档位与悬浮球位置，仅保存在本机。 */
+    suspend fun loadVideoPreferences(): Pair<VideoQuality, Pair<Float, Float>> {
+        val p = context.dataStore.data.first()
+        fun safe(v: Float?, fallback: Float) = v?.takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: fallback
+        return VideoQuality.of(p[videoQualityKey]) to (safe(p[videoBallX], 0.86f) to safe(p[videoBallY], 0.78f))
+    }
+
+    suspend fun saveVideoQuality(quality: VideoQuality) { context.dataStore.edit { it[videoQualityKey] = quality.wire } }
+
+    suspend fun saveVideoBall(x: Float, y: Float) {
+        context.dataStore.edit { it[videoBallX] = x.coerceIn(0f, 1f); it[videoBallY] = y.coerceIn(0f, 1f) }
     }
 
     suspend fun loadInputSettings(): DeviceInputSettings {

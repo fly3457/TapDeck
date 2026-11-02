@@ -5,4 +5,8 @@
     <item name="control_panel" type="id" />
     <item name="shortcut_region" type="id" />
     <item name="keyboard_region" type="id" />
+    <item name="video_mode" type="id" />
+    <item name="video_exit_button" type="id" />
+    <item name="video_touch_layer" type="id" />
+    <item name="video_mic" type="id" />
 </resources>

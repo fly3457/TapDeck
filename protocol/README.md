@@ -68,6 +68,32 @@ Windows schema 0/1 migration expands four shortcuts to eight and maps the old vo
 
 Windows 0.3 adds the optional PC-only `keyboard_backend` field (`auto`, `hid`, or `sendinput`; missing means `auto`). This does not change control version 2 or the Android audio protocol. Keyboard pulses run in a child process over inherited anonymous pipes and hold for 50 ms. `mic_ready` is sent after the snapshotted start action completes. A stop received while preparing cancels queued start actions immediately; late completion cannot revive capture. Child input state is cleaned on pipe EOF, including one snapshotted toggle-stop action if its start had reached key-down. Unsupported HID keys use the software backend in auto mode, and shared modifier ownership spans both routes.
 
+## Video
+
+Windows 0.4.0 advertises `video` in `ready.features` only when its embedded ffmpeg is present and valid. Android 0.4.0 disables the video-mode entry with an upgrade notice when the capability is missing. The wire version remains 2 and the PC configuration schema remains 3. The optional PC-only field `video_disabled` (missing means allowed) rejects new requests.
+
+| Message (control WSS) | Fields and behaviour |
+|---|---|
+| `video_start` | `quality` (`smooth`, `clear`, `saver`; unknown means `smooth`), `max_width`/`max_height` (phone H.264 decoder limits, compared as long/short edges), `fps` (15–60, default 60). Probing encoders may take seconds, so the PC answers asynchronously. |
+| `video_ready` | `stream` (16 hex), `token` (32 random bytes, Base64URL), output `width`/`height`, captured `screen_width`/`screen_height` (physical pixels), `fps`, `encoder`. Output keeps the aspect ratio, is never upscaled, and has even dimensions. |
+| `video_error` | `code` (`busy`, `no_encoder`, `capture_failed`, `disabled`, `unauthorized`) and `reason`. |
+| `video_stop` | Ends this session's stream. |
+
+A new `video_start` from the same session replaces its previous stream. Only one session may stream at a time; another session receives `busy` until that stream ends, or until an unclaimed stream expires 30 seconds after allocation. Ending the control session (disconnect, heartbeat timeout, unpair or receiver stop) immediately ends the stream and its encoder process.
+
+The phone then opens `GET /video` on the same pinned TLS port. Its first text message is `video_hello` with `session` (the `ready` session ID), `stream` and `token`. The PC compares the token in constant time, binds the stream to that live control session, and allows a stream to be claimed only once. It then sends one text `video_format` message with the same fields as `video_ready`, followed only by binary messages. All integers are little endian:
+
+| Offset | Frame message (type 1) | Cursor message (type 2) |
+|---:|---|---|
+| 0 | `0x01` | `0x02` |
+| 1 | flags: bit0 IDR key frame, bit1 SPS/PPS configuration | int32 x |
+| 2 | int64 presentation time, µs | — |
+| 5 | — | int32 y |
+| 9 | — | uint8 visible |
+| 10 | H.264 Annex-B access unit (4-byte start codes) | — |
+
+Cursor coordinates are physical pixels relative to the captured display's top-left corner. They are polled every 8 ms and sent only when they change. `visible=0` means the cursor is hidden or on another display. The PC sends the configuration frame first and never drops it. Each stream begins with an IDR frame; GOP is one second, with no B-frames. When more than six frames are queued, the PC discards the backlog and drops frames until the next IDR, so latency cannot accumulate. Android likewise drops to the next key frame when its decoder input falls behind. Write stalls longer than two seconds end the stream with `video_error`.
+
 ## UDP encoding
 
 All integers are little endian. Packets are at most 1200 bytes.

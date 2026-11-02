@@ -20,6 +20,13 @@ $taskBundledDriver = Join-Path $taskProjectRoot 'windows\internal\driver\assets\
 if ((Get-FileHash -LiteralPath $taskBundledDriver -Algorithm SHA256).Hash.ToLowerInvariant() -ne '4c0aefb7340051a91d606776243298b5cd1143ef5508bbae6800c474f9ed0840') { throw 'Bundled upstream driver hash mismatch' }
 $taskBundledCable = Join-Path $taskProjectRoot 'windows\internal\vbcable\assets\VBCABLE_Driver_Pack45.zip'
 if ((Get-FileHash -LiteralPath $taskBundledCable -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'b950e39f01af1d04ea623c8f6d8eb9b6ea5c477c637295fabf20631c85116bfb') { throw 'Bundled VB-CABLE pack hash mismatch' }
+# 视频模式的精简 LGPL ffmpeg 由 scripts\build-ffmpeg.ps1 生成，必须与清单一致。
+$taskVideoAssets = Join-Path $taskProjectRoot 'windows\internal\video\assets'
+$taskFFmpegPath = Join-Path $taskVideoAssets 'ffmpeg.exe'
+if (-not (Test-Path -LiteralPath $taskFFmpegPath)) { throw 'Bundled ffmpeg missing; run scripts\build-ffmpeg.ps1' }
+$taskFFmpeg = Get-Content -Raw -LiteralPath (Join-Path $taskVideoAssets 'manifest.json') | ConvertFrom-Json
+if ((Get-FileHash -LiteralPath $taskFFmpegPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $taskFFmpeg.sha256 -or
+    (Get-Item -LiteralPath $taskFFmpegPath).Length -ne $taskFFmpeg.bytes) { throw 'Bundled ffmpeg hash mismatch' }
 Push-Location (Join-Path $taskProjectRoot 'windows')
 try {
     # 把编译好的 Android 安装包放进 embed 目录，接收端就能在配对网页上给出下载二维码。
@@ -81,7 +88,9 @@ try {
             if (-not $taskProcess.WaitForExit(30000)) { $taskProcess.Kill(); throw 'Timed out verifying embedded APK' }
             if ($taskProcess.ExitCode -ne 0) { throw ('Embedded APK verification failed: ' + (Get-Content -LiteralPath $taskErrorPath -Raw)) }
         } finally { $taskProcess.Dispose() }
-        Assert-TapDeckApkInfo (Get-Content -LiteralPath $taskInfoPath -Raw | ConvertFrom-Json) $taskVersions $taskApk
+        $taskInfo = Get-Content -LiteralPath $taskInfoPath -Raw | ConvertFrom-Json
+        Assert-TapDeckApkInfo $taskInfo $taskVersions $taskApk
+        if ($taskInfo.ffmpeg_sha256 -cne $taskFFmpeg.sha256) { throw ('Embedded ffmpeg mismatch: ' + $taskReceiver) }
     }
     $taskReportedVersion = (& (Join-Path $OutputDirectory $taskDebugName) --version | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $taskReportedVersion -cne ('TapDeck ' + $taskVersion)) { throw 'Receiver runtime version mismatch' }
@@ -96,6 +105,7 @@ try {
         receiver_version = $taskVersion
         controllers = @(@{ platform = 'android'; version = $taskApk.VersionName; version_code = $taskApk.VersionCode; filename = $taskApk.Name; sha256 = $taskApk.SHA256; bytes = $taskApk.Bytes;
             build_type = $taskApk.BuildType; debuggable = $taskApk.Debuggable; certificate_sha256 = $taskApk.CertificateSHA256 })
+        bundled = @{ ffmpeg = @{ version = $taskFFmpeg.version; sha256 = $taskFFmpeg.sha256; bytes = $taskFFmpeg.bytes } }
         artifacts = $taskFileRecords
     }
     [IO.File]::WriteAllText((Join-Path $OutputDirectory 'release-manifest.json'), ($taskRelease | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))

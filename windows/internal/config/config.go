@@ -41,6 +41,9 @@ type Config struct {
 	Sensitivity     float64    `json:"sensitivity"`
 	NaturalScroll   bool       `json:"natural_scroll"`
 	KeyboardBackend string     `json:"keyboard_backend,omitempty"`
+	// VideoDisabled 为 PC 端专用开关：为真时拒绝手机查看屏幕。缺省（false）表示允许，
+	// 旧配置无需迁移，schema 版本不变。
+	VideoDisabled bool `json:"video_disabled,omitempty"`
 }
 
 func Default() Config {

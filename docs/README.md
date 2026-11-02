@@ -6,6 +6,7 @@
 
 - [全键盘](full-keyboard.md)：键位、长短按与间隙触控。
 - [触控板](touchpad-gestures.md)：点击、拖拽、滚动、缩放和窗口操作。
+- [视频模式](video-mode.md)：手机整屏显示 PC 画面，叠加触控板与语音悬浮球。
 - [语音配置](voice-profiles.md)与[手机语音操作](android-voice-mode.md)：热键、长按与单击。
 - [豆包输入法](voice-hotkey.md)与[虚拟键盘](virtual-keyboard.md)：安装和热键排查。
 - [多台 PC](multi-pc.md)与[多个控制端](multi-controller.md)：切换电脑及多人共享。

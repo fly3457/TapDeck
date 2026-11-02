@@ -28,8 +28,9 @@ import okhttp3.*
 
 enum class ConnectionPhase { Disconnected, Connecting, Pairing, Connected, NeedsPairing }
 
-data class ClientState(val status: String = "未连接", val peerName: String = "TapDeck", val connected: Boolean = false, val pairing: String = "", val pairingConfirmed: Boolean = false, val config: PcConfig = PcConfig(), val mic: String = "idle", val micMode: String = "", val activeVoiceProfile: VoiceProfile? = null, val voiceProfilesSupported: Boolean = false, val level: Float = 0f, val error: String = "", val rttMs: Long = 0, val touchpad: TouchpadCapabilities = TouchpadCapabilities(), val selectedPeerId: String? = null, val connectionEpoch: Long = 0, val phase: ConnectionPhase = ConnectionPhase.Disconnected, val catalogReady: Boolean = false) {
+data class ClientState(val status: String = "未连接", val peerName: String = "TapDeck", val connected: Boolean = false, val pairing: String = "", val pairingConfirmed: Boolean = false, val config: PcConfig = PcConfig(), val mic: String = "idle", val micMode: String = "", val activeVoiceProfile: VoiceProfile? = null, val voiceProfilesSupported: Boolean = false, val level: Float = 0f, val error: String = "", val rttMs: Long = 0, val touchpad: TouchpadCapabilities = TouchpadCapabilities(), val selectedPeerId: String? = null, val connectionEpoch: Long = 0, val phase: ConnectionPhase = ConnectionPhase.Disconnected, val catalogReady: Boolean = false, val video: VideoState = VideoState()) {
     fun voiceProfiles() = config.voiceProfiles(voiceProfilesSupported)
+    val videoSupported: Boolean get() = VIDEO_FEATURE in touchpad.features
     val canSwitch: Boolean get() = mic == "idle"
 }
 class TapClient(private val app: Application, private val scope: CoroutineScope) : TouchSink {
@@ -59,6 +60,13 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
     private var lastTouchpadNotice = -3000L
     private val lock = Any()
     private var socket: WebSocket? = null
+    /** 证书固定的 TLS 客户端，视频连接复用它。 */
+    private var pinnedClient: OkHttpClient? = null
+    private var sessionHex = ""
+    private var videoSocket: WebSocket? = null
+    private var videoRequest = 0L
+    /** 视频消息在 OkHttp 线程上回调，画面帧不经过主线程。 */
+    @Volatile var videoSink: ((VideoMessage) -> Unit)? = null
     private var udp: DatagramSocket? = null
     @Volatile private var peer: Peer? = null
     private var target: InetAddress? = null
@@ -444,6 +452,8 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
                         }
                         "mic_error" -> finishMic(m.str("recording"), m.str("reason"))
                         "mic_stopped" -> finishMic(m.str("recording"))
+                        "video_ready" -> openVideo(gen, m)
+                        "video_error" -> videoFailed(m.str("reason").ifEmpty { "无法查看电脑画面" })
                         "error" -> when {
                             m.str("code") == "pairing_revoked" -> revokePair(gen, m.str("reason"))
                             finishPairingAttempt(gen, m.str("code"), m.str("reason")) -> Unit
@@ -460,7 +470,7 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
             override fun onClosed(ws: WebSocket, code: Int, reason: String) = dispatch { lost(gen, reason.ifEmpty { "连接已断开" }) }
             override fun onClosing(ws: WebSocket, code: Int, reason: String) { ws.close(code, reason) }
         })
-        synchronized(lock) { if (current(attempt, gen)) socket = ws else ws.cancel() }
+        synchronized(lock) { if (current(attempt, gen)) { socket = ws; pinnedClient = client } else ws.cancel() }
     }
     private fun acceptReady(p: Peer, attempt: Long, gen: Long, ws: WebSocket, m: JsonObject) {
         if (readyPending == gen || connected) return
@@ -471,6 +481,7 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
         val profilesSupported = VOICE_PROFILES_FEATURE in capabilities.features
         config.voiceProfiles(profilesSupported)
         val session = m.str("session").toULong(16).toLong()
+        sessionHex = m.str("session")
         val mouse = UdpCodec(decode64(m.str("mouse_key")), decode64(m.str("mouse_prefix")), session, 1)
         val voice = UdpCodec(decode64(m.str("audio_key")), decode64(m.str("audio_prefix")), session, 2)
         val port = m.long("udp_port").toInt()
@@ -558,6 +569,7 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
             updateWifiLock()
             bootstrapCall?.cancel(); bootstrapCall = null
             socket?.cancel(); socket = null
+            closeVideoLocked()
             udp?.close(); udp = null
             mouseCodec = null; audioCodec = null
             while (movement.tryReceive().isSuccess) { }
@@ -565,7 +577,7 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
             readyPending = -1L
             mutable.update { it.copy(connected = false, phase = ConnectionPhase.Disconnected, connectionEpoch = generation,
                 mic = "idle", micMode = "", activeVoiceProfile = null, level = 0f, pairing = "", pairingConfirmed = false,
-                status = reason, config = PcConfig(), voiceProfilesSupported = false, touchpad = TouchpadCapabilities(), rttMs = 0) }
+                status = reason, config = PcConfig(), voiceProfilesSupported = false, touchpad = TouchpadCapabilities(), rttMs = 0, video = VideoState()) }
         }
         recorder.stop()
         heartbeat?.cancel()
@@ -715,6 +727,77 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
                 send(message(if (abort) "mic_abort" else "mic_stop", "recording" to id.j()))
         }
     }
+    /**
+     * 请求查看电脑画面。maxWidth/maxHeight 为手机解码器上限；PC 回复 video_ready 后
+     * 用同一证书固定的客户端另开 /video 连接，画面帧不经过控制连接。
+     */
+    fun startVideo(quality: VideoQuality, maxWidth: Int, maxHeight: Int): Boolean = synchronized(lock) {
+        val current = mutable.value
+        if (!connected || !foreground || !current.videoSupported) return@synchronized false
+        closeVideoLocked()
+        videoRequest++
+        mutable.update { it.copy(video = VideoState(VideoPhase.Starting)) }
+        if (!send(message("video_start", "quality" to quality.wire.j(), "max_width" to maxWidth.j(), "max_height" to maxHeight.j(), "fps" to 60.j()))) {
+            mutable.update { it.copy(video = VideoState(VideoPhase.Error, error = "控制连接不可用")) }
+            return@synchronized false
+        }
+        true
+    }
+
+    fun stopVideo() = synchronized(lock) {
+        val active = mutable.value.video.phase != VideoPhase.Idle
+        closeVideoLocked()
+        videoRequest++
+        if (active && connected) send(message("video_stop"))
+        mutable.update { it.copy(video = VideoState()) }
+    }
+
+    private fun openVideo(gen: Long, m: JsonObject) = synchronized(lock) {
+        val p = peer
+        val client = pinnedClient
+        if (gen != generation || !connected || mutable.value.video.phase != VideoPhase.Starting || p == null || client == null) {
+            send(message("video_stop")); return@synchronized
+        }
+        val request = videoRequest
+        val hello = message("video_hello", "session" to sessionHex.j(), "stream" to m.str("stream").j(), "token" to m.str("token").j())
+        fun live() = synchronized(lock) { gen == generation && request == videoRequest }
+        videoSocket = client.newWebSocket(Request.Builder().url("wss://" + p.host + ":" + p.wssPort + "/video").build(), object : WebSocketListener() {
+            override fun onOpen(ws: WebSocket, response: Response) { if (live()) ws.send(hello.toString()) else ws.cancel() }
+            override fun onMessage(ws: WebSocket, text: String) {
+                if (!live()) { ws.cancel(); return }
+                val msg = runCatching { wireJson.parseToJsonElement(text).jsonObject }.getOrNull() ?: return
+                when (msg.str("type")) {
+                    "video_format" -> {
+                        val format = VideoFormat.of(msg) ?: return videoFailed("电脑画面尺寸无效")
+                        mutable.update { it.copy(video = VideoState(VideoPhase.Streaming, format)) }
+                    }
+                    "video_error" -> videoFailed(msg.str("reason").ifEmpty { "无法查看电脑画面" })
+                }
+            }
+            override fun onMessage(ws: WebSocket, bytes: okio.ByteString) {
+                if (!live()) { ws.cancel(); return }
+                val msg = parseVideoMessage(bytes.toByteArray()) ?: return
+                if (msg is VideoCursor && msg.visible != mutable.value.video.cursorVisible)
+                    mutable.update { it.copy(video = it.video.copy(cursorVisible = msg.visible)) }
+                videoSink?.invoke(msg)
+            }
+            override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) { if (live()) videoFailed("视频连接已断开") }
+            override fun onClosed(ws: WebSocket, code: Int, reason: String) { if (live() && mutable.value.video.phase != VideoPhase.Error) videoFailed("视频连接已断开") }
+            override fun onClosing(ws: WebSocket, code: Int, reason: String) { ws.close(code, reason) }
+        })
+    }
+
+    private fun videoFailed(reason: String) = synchronized(lock) {
+        if (mutable.value.video.phase == VideoPhase.Idle) return@synchronized
+        closeVideoLocked()
+        videoRequest++
+        mutable.update { it.copy(video = VideoState(VideoPhase.Error, error = reason)) }
+    }
+
+    private fun closeVideoLocked() {
+        videoSocket?.cancel(); videoSocket = null
+    }
+
     fun close() {
         inputPreferences.close()
         synchronized(lock) { closed = true; desiredConnection++; reconnect = false; retryAt = 0L }

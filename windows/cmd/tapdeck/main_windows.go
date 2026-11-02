@@ -30,6 +30,7 @@ import (
 	"tapdeck/internal/keyboard"
 	"tapdeck/internal/server"
 	"tapdeck/internal/vbcable"
+	"tapdeck/internal/video"
 	"time"
 	"unsafe"
 )
@@ -122,8 +123,13 @@ func main() {
 		if err := apkdist.Verify(); err != nil {
 			log.Fatal(err)
 		}
+		// 同时读回内嵌 ffmpeg 的哈希，供构建脚本核对视频模式编码器确实打进了接收端。
+		ffmpeg, ffmpegExe, ffmpegErr := video.EmbeddedManifest()
+		if ffmpegErr != nil {
+			log.Fatal(ffmpegErr)
+		}
 		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"pc_version": appVersion, "version_name": apkdist.Version(), "version_code": apkdist.VersionCode(), "filename": apkdist.Name(), "sha256": apkdist.SHA256(), "bytes": len(apkdist.Bytes()),
-			"build_type": apkdist.BuildType(), "debuggable": apkdist.Debuggable(), "certificate_sha256": apkdist.CertificateSHA256()})
+			"build_type": apkdist.BuildType(), "debuggable": apkdist.Debuggable(), "certificate_sha256": apkdist.CertificateSHA256(), "ffmpeg_sha256": ffmpeg.SHA256, "ffmpeg_bytes": len(ffmpegExe)})
 		return
 	}
 	if *probe > 0 {
@@ -255,6 +261,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 	var voiceEditors [config.VoiceProfileCount]voiceProfileEditor
 	var gain, delay, httpPort, wssPort, udpPort *walk.NumberEdit
 	var natural *walk.CheckBox
+	var videoBox *walk.CheckBox
 	var autostartBox *walk.CheckBox
 	var autostartLabel *walk.Label
 	var labels, keys [config.ShortcutCount]*walk.LineEdit
@@ -475,6 +482,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 		c.Gain = gain.Value()
 		c.Sensitivity = config.PointerBaseSensitivity
 		c.NaturalScroll = natural.Checked()
+		c.VideoDisabled = !videoBox.Checked()
 		c.KeyboardBackend = backendIDs[max(0, backend.CurrentIndex())]
 		c.AudioDevice = deviceIDs[max(0, devices.CurrentIndex())]
 		for i := range voiceEditors {
@@ -543,7 +551,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 					d.Composite{Layout: d.HBox{}, Children: []d.Widget{d.Label{Text: "尾音结束延迟 ms"}, d.NumberEdit{AssignTo: &delay, Value: float64(cfg.Voice.StopDelayMS), MinValue: 0, MaxValue: 1000}}},
 				),
 			}},
-			{Title: "设置与状态", Layout: d.VBox{}, Children: []d.Widget{d.Label{Text: "HTTP / WSS / UDP 端口（修改后重启连接）"}, d.NumberEdit{AssignTo: &httpPort, Value: float64(cfg.HTTPPort), MinValue: 1024, MaxValue: 65535}, d.NumberEdit{AssignTo: &wssPort, Value: float64(cfg.WSSPort), MinValue: 1024, MaxValue: 65535}, d.NumberEdit{AssignTo: &udpPort, Value: float64(cfg.UDPPort), MinValue: 1024, MaxValue: 65535}, d.Label{Text: "触控板灵敏度：在各 Android 设备触控板左上角设置（0.5–3 倍）"}, d.Label{Text: "手机震动开关：Android 顶部连接图标 → 连接与设置"}, d.CheckBox{AssignTo: &natural, Text: "自然滚动", Checked: cfg.NaturalScroll}, d.CheckBox{AssignTo: &autostartBox, Text: "随 Windows 登录自动启动接收端", Checked: autostartEnabled(), OnCheckedChanged: func() {
+			{Title: "设置与状态", Layout: d.VBox{}, Children: []d.Widget{d.Label{Text: "HTTP / WSS / UDP 端口（修改后重启连接）"}, d.NumberEdit{AssignTo: &httpPort, Value: float64(cfg.HTTPPort), MinValue: 1024, MaxValue: 65535}, d.NumberEdit{AssignTo: &wssPort, Value: float64(cfg.WSSPort), MinValue: 1024, MaxValue: 65535}, d.NumberEdit{AssignTo: &udpPort, Value: float64(cfg.UDPPort), MinValue: 1024, MaxValue: 65535}, d.Label{Text: "触控板灵敏度：在各 Android 设备触控板左上角设置（0.5–3 倍）"}, d.Label{Text: "手机震动开关：Android 顶部连接图标 → 连接与设置"}, d.CheckBox{AssignTo: &natural, Text: "自然滚动", Checked: cfg.NaturalScroll}, d.CheckBox{AssignTo: &videoBox, Text: "允许手机查看屏幕（视频模式）", Checked: !cfg.VideoDisabled}, d.CheckBox{AssignTo: &autostartBox, Text: "随 Windows 登录自动启动接收端", Checked: autostartEnabled(), OnCheckedChanged: func() {
 				on, err := autostart.Set(autostartBox.Checked())
 				if err != nil {
 					walk.MsgBox(mw, "开机自启设置失败", err.Error(), walk.MsgBoxIconError)
@@ -585,6 +593,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 		voiceEditors[i].syncEnabled()
 	}
 	natural.SetChecked(cfg.NaturalScroll)
+	videoBox.SetChecked(!cfg.VideoDisabled)
 	updateSaveVisibility(tabs, saveButton)
 	defer mw.Dispose()
 	defer func() {
@@ -703,6 +712,9 @@ func window(s *server.Server, dir string, startHidden bool) error {
 						text = "已连接：" + v.Devices[0]
 					case len(v.Devices) > 1:
 						text = fmt.Sprintf("已连接 %d 个控制端：%s", len(v.Devices), strings.Join(v.Devices, "、"))
+					}
+					if v.VideoDevice != "" {
+						text += " · " + v.VideoDevice + " 正在查看屏幕"
 					}
 					_ = status.SetText(text)
 					applyKeyboardStatus()
