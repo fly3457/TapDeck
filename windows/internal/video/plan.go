@@ -137,9 +137,11 @@ func (p Plan) Variants(r Request) []Plan {
 // 关闭 B 帧与前瞻，GOP 1 秒，输出 FLV 到标准输出。probe 为真时只编码几帧到 null。
 func (p Plan) Args(probe bool) []string {
 	k := strconv.Itoa(p.Kbps) + "k"
-	// VBV 约为两帧大小，限制单帧尖峰，避免网络突发拖慢后续帧。
-	vbv := strconv.Itoa(max(p.Kbps*2/p.FPS, 200)) + "k"
-	gop := strconv.Itoa(p.FPS)
+	// VBV 约 250ms：关键帧有足够码率，避免过度量化在纯色背景上出现色块闪烁；
+	// 局域网 Wi-Fi 的实际吞吐远高于平均码率，突发的关键帧只多占几十毫秒。
+	vbv := strconv.Itoa(max(p.Kbps/4, 500)) + "k"
+	// GOP 2 秒：减少周期性关键帧带来的画质跳变，丢帧后最多等 2 秒恢复。
+	gop := strconv.Itoa(p.FPS * 2)
 	chain := fmt.Sprintf("ddagrab=output_idx=%d:framerate=%d:draw_mouse=1:dup_frames=1", p.Output, p.FPS)
 	scaled := p.Width != p.Display.Width || p.Height != p.Display.Height
 	switch p.Path {

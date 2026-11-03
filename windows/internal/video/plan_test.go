@@ -62,7 +62,7 @@ func TestArgsChooseProcessingPath(t *testing.T) {
 	d := Display{Adapter: 1, Output: 2, Width: 3840, Height: 2160}
 	nv, _ := NewPlan(d, Request{}, "h264_nvenc")
 	a := strings.Join(nv.Args(false), " ")
-	for _, want := range []string{"d3d11va=dda:1", "output_idx=2", "scale_d3d11=width=1920:height=1080:format=nv12", "-tune ull", "-bf 0", "-g 60", "-f flv", "pipe:1"} {
+	for _, want := range []string{"d3d11va=dda:1", "output_idx=2", "scale_d3d11=width=1920:height=1080:format=nv12", "-tune ull", "-bf 0", "-g 120", "-bufsize 3000k", "-f flv", "pipe:1"} {
 		if !strings.Contains(a, want) {
 			t.Errorf("nvenc args missing %q: %s", want, a)
 		}
