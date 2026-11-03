@@ -49,3 +49,13 @@ func TestPunctuationKeysUseHID(t *testing.T) {
 		t.Fatal("unicode-only key must not claim HID support")
 	}
 }
+
+func TestMouseReportLayout(t *testing.T) {
+	r := MouseReport(MouseLeft|MouseRight, 0x1234, 40000)
+	want := []byte{0x40, 7, 0x04, 3, 0x34, 0x12, 0xFF, 0x7F, 0}
+	for i, b := range want {
+		if r[i] != b {
+			t.Fatalf("byte %d = %#x, want %#x (%x)", i, r[i], b, r[:9])
+		}
+	}
+}

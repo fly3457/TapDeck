@@ -201,6 +201,10 @@ func main() {
 	}
 	s.Input = agent
 	defer func() { s.Stop(); agent.Close() }()
+	// 视频模式点击优先走 FakerInput 虚拟鼠标：输入法候选框等窗口忽略 SendInput 注入的点击。
+	hidPointer := server.NewHIDPointer()
+	defer hidPointer.Close()
+	s.Pointer = hidPointer
 	if e = s.Start(); e != nil {
 		log.Printf("接收启动失败: %v", e)
 	}

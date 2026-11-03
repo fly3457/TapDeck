@@ -207,7 +207,9 @@ type Server struct {
 	Input     InputController
 	Audio     AudioEngine
 	// Video 为空或没有内嵌编码器时不声明 video 能力。
-	Video        *video.Manager
+	Video *video.Manager
+	// Pointer 为视频模式点击的硬件级后端（FakerInput 虚拟鼠标）；为空或失败时退回 SendInput。
+	Pointer      PointerClicker
 	mousePackets atomic.Uint64
 	audioPackets atomic.Uint64
 	processingNS atomic.Uint64

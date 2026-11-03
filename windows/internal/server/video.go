@@ -170,6 +170,14 @@ func (ss *session) pointer(m Message) error {
 	if !ok {
 		return notice("电脑画面未打开，无法按位置点击")
 	}
+	if p := ss.s.Pointer; p != nil {
+		px, py := min(max(m.PX, 0), int32(d.Width-1)), min(max(m.PY, 0), int32(d.Height-1))
+		if err := p.Click(d, px, py, m.Action == "right_click"); err == nil {
+			return nil
+		} else {
+			log.Printf("video: 虚拟鼠标点击失败，改用 SendInput：%v", err)
+		}
+	}
 	mover, ok := ss.controller().(absolutePointer)
 	if !ok {
 		return notice("电脑端不支持按位置点击，请升级")

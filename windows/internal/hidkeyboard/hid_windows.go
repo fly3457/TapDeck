@@ -203,3 +203,27 @@ func (d *Device) Update(keys map[uint16]int) error {
 	}
 	return write(d.control, r[:])
 }
+
+// 绝对坐标鼠标（FakerInput REPORTID_ABSOLUTE_MOUSE）：坐标范围 0–32767，按键位 bit0 左、bit1 右、bit2 中。
+const (
+	MouseLeft   byte = 1
+	MouseRight  byte = 2
+	MouseMiddle byte = 4
+	AbsMax           = 32767
+)
+
+// MouseReport 按上游 FakerInputAbsMouseReport 布局封装为控制报告：
+// 控制头（0x40, 长度 7）+ ReportID 0x04、Button、X、Y（小端 USHORT）、Wheel。
+func MouseReport(buttons byte, x, y uint16) [65]byte {
+	r := [65]byte{0x40, 7, 0x04, buttons}
+	binary.LittleEndian.PutUint16(r[4:], min(x, AbsMax))
+	binary.LittleEndian.PutUint16(r[6:], min(y, AbsMax))
+	return r
+}
+
+// Mouse 以虚拟 HID 鼠标发送绝对位置与按键状态。对 Windows 而言这是硬件输入：
+// 没有“注入”标记，也不受 UIPI 限制，输入法候选框等只认真实鼠标的窗口同样可以点击。
+func (d *Device) Mouse(buttons byte, x, y uint16) error {
+	r := MouseReport(buttons, x, y)
+	return write(d.control, r[:])
+}

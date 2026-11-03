@@ -204,3 +204,58 @@ func TestVideoPointerClicksAtDisplayPosition(t *testing.T) {
 		t.Fatalf("pauses %v", pauses)
 	}
 }
+
+type fakeClicker struct {
+	mu    sync.Mutex
+	calls []string
+	fail  bool
+}
+
+func (f *fakeClicker) Click(d video.Display, x, y int32, right bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, fmt.Sprintf("%d,%d,%v", x, y, right))
+	if f.fail {
+		return fmt.Errorf("no device")
+	}
+	return nil
+}
+
+func TestVideoPointerPrefersHardwareClicker(t *testing.T) {
+	old := pointerPause
+	pointerPause = func(time.Duration) {}
+	t.Cleanup(func() { pointerPause = old })
+	for _, fail := range []bool{false, true} {
+		in, clicker := &pointerInput{}, &fakeClicker{fail: fail}
+		s, client := testReceiver(t, func(s *Server) {
+			s.Input = in
+			s.Pointer = clicker
+			s.Video = video.NewManager(testVideoLauncher{launched: make(chan struct{})})
+		})
+		conn, ctx := testSocket(t, s, client, "")
+		testPair(t, s, conn, ctx)
+		s.mu.Lock()
+		var sid uint64
+		for id := range s.sessions {
+			sid = id
+		}
+		s.mu.Unlock()
+		if _, err := s.Video.Start(sid, video.Request{}); err != nil {
+			t.Fatal(err)
+		}
+		_ = write(ctx, conn, Message{Type: "pointer", Action: "right_click", PX: 30, PY: 40, Epoch: 0, NextEpoch: 1})
+		_ = write(ctx, conn, Message{Type: "heartbeat", Tick: 1})
+		readUntil(t, ctx, conn, "heartbeat")
+		clicker.mu.Lock()
+		calls := append([]string(nil), clicker.calls...)
+		clicker.mu.Unlock()
+		if !slices.Equal(calls, []string{"30,40,true"}) {
+			t.Fatalf("fail=%v clicker calls %v", fail, calls)
+		}
+		// 硬件点击成功时不再走 SendInput；失败时退回 SendInput 完成同一次点击。
+		got := in.snapshot()
+		if fail != (len(got) > 0) {
+			t.Fatalf("fail=%v SendInput events %v", fail, got)
+		}
+	}
+}
