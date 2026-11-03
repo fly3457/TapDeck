@@ -193,10 +193,11 @@ func TestVideoPointerClicksAtDisplayPosition(t *testing.T) {
 	}
 	_ = write(ctx, conn, Message{Type: "pointer", Action: "click", PX: 100, PY: 200, Epoch: 1, NextEpoch: 2})
 	_ = write(ctx, conn, Message{Type: "pointer", Action: "right_click", PX: 99999, PY: -5, Epoch: 2, NextEpoch: 3})
+	_ = write(ctx, conn, Message{Type: "pointer", Action: "move", PX: 5, PY: 6, Epoch: 3, NextEpoch: 4})
 	_ = write(ctx, conn, Message{Type: "heartbeat", Tick: 7})
 	readUntil(t, ctx, conn, "heartbeat")
 	// 先移入并停顿（悬停），再补一次同位置移动、按下、按住、抬起。
-	want := []string{"to:100,200", "to:100,200", "left:true", "left:false", "to:2559,0", "to:2559,0", "right:true", "right:false"}
+	want := []string{"to:100,200", "to:100,200", "left:true", "left:false", "to:2559,0", "to:2559,0", "right:true", "right:false", "to:5,6"}
 	if got := in.snapshot(); !slices.Equal(got, want) {
 		t.Fatalf("events %v, want %v", got, want)
 	}
@@ -209,6 +210,13 @@ type fakeClicker struct {
 	mu    sync.Mutex
 	calls []string
 	fail  bool
+}
+
+func (f *fakeClicker) Move(d video.Display, x, y int32) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, fmt.Sprintf("move %d,%d", x, y))
+	return nil
 }
 
 func (f *fakeClicker) Click(d video.Display, x, y int32, right bool) error {

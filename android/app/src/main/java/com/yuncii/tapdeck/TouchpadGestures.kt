@@ -23,6 +23,8 @@ interface TouchSink {
     fun pan(dx: Double, dy: Double) {}
     /** 视频模式直接操作：在触点位置单击，轻点为 left、长按为 right（dp）。 */
     fun clickAt(x: Double, y: Double, button: String) {}
+    /** 视频模式直接操作：双指滚动开始前把鼠标移到双指中心（dp），滚轮才作用于手指下方的区域。 */
+    fun hoverAt(x: Double, y: Double) {}
 }
 
 internal data class TouchPoint(val id: Int, val x: Double, val y: Double)
@@ -165,7 +167,10 @@ internal class TouchpadGestures(
                     val pan = distance(nowCenter, pairCenter)
                     val spread = abs(span - initialSpan)
                     if (spread >= max(8.0, initialSpan * 0.04) && spread > pan * 1.2) mode = Mode.Pinch
-                    else if (pan >= slop) mode = Mode.Scroll
+                    else if (pan >= slop) {
+                        mode = Mode.Scroll
+                        if (direct) sink.hoverAt(pairCenter.x, pairCenter.y)
+                    }
                 }
                 when (mode) {
                     Mode.Scroll -> sink.scroll(nowCenter.x - lastCenter.x, nowCenter.y - lastCenter.y)

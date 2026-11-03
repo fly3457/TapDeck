@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"tapdeck/internal/hidkeyboard"
 	"tapdeck/internal/video"
@@ -11,6 +12,8 @@ import (
 // PointerClicker 以硬件级输入在显示器坐标处点击（视频模式点哪到哪）。
 type PointerClicker interface {
 	Click(d video.Display, x, y int32, right bool) error
+	// Move 只移动光标不点击（双指滚动前把光标移到手指下方）。
+	Move(d video.Display, x, y int32) error
 }
 
 // HIDPointer 通过 FakerInput 虚拟 HID 绝对坐标鼠标点击。Windows 把它当作真实鼠标：
@@ -23,21 +26,30 @@ type HIDPointer struct {
 
 func NewHIDPointer() *HIDPointer { return &HIDPointer{} }
 
-func (h *HIDPointer) Click(d video.Display, x, y int32, right bool) error {
+func (h *HIDPointer) Move(d video.Display, x, y int32) error {
+	hx, hy, err := hidPosition(d, x, y)
+	if err != nil {
+		return err
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.send(0, hx, hy)
+}
+
+// hidPosition 把主显示器像素换算为 HID 绝对坐标（1–32767）。
+func hidPosition(d video.Display, x, y int32) (uint16, uint16, error) {
 	if d.Left != 0 || d.Top != 0 || d.Width < 2 || d.Height < 2 {
-		return fmt.Errorf("虚拟鼠标只能定位主显示器")
+		return 0, 0, fmt.Errorf("虚拟鼠标只能定位主显示器")
 	}
 	scale := func(v int32, size int) uint16 {
 		n := (int64(v)*hidkeyboard.AbsMax + int64(size-1)/2) / int64(size-1)
 		return uint16(min(max(n, 1), hidkeyboard.AbsMax))
 	}
-	hx, hy := scale(x, d.Width), scale(y, d.Height)
-	button := hidkeyboard.MouseLeft
-	if right {
-		button = hidkeyboard.MouseRight
-	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
+	return scale(x, d.Width), scale(y, d.Height), nil
+}
+
+// send 写一个 HID 鼠标报告；设备不可用或写入失败时关闭句柄，下次重新打开。调用方持有 h.mu。
+func (h *HIDPointer) send(buttons byte, hx, hy uint16) error {
 	if h.dev == nil {
 		dev, err := hidkeyboard.Open()
 		if err != nil {
@@ -45,23 +57,35 @@ func (h *HIDPointer) Click(d video.Display, x, y int32, right bool) error {
 		}
 		h.dev = dev
 	}
+	if err := h.dev.Mouse(buttons, hx, hy); err != nil {
+		h.dev.Close()
+		h.dev = nil
+		return err
+	}
+	return nil
+}
+
+func (h *HIDPointer) Click(d video.Display, x, y int32, right bool) error {
+	hx, hy, err := hidPosition(d, x, y)
+	if err != nil {
+		return err
+	}
+	button := hidkeyboard.MouseLeft
+	if right {
+		button = hidkeyboard.MouseRight
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	// 与 SendInput 路径相同的节奏：先移入并悬停，再按下、按住、抬起。
-	steps := []struct {
+	for _, s := range []struct {
 		buttons byte
-		pause   bool
-	}{{0, true}, {0, false}, {button, true}, {0, false}}
-	for _, s := range steps {
-		if err := h.dev.Mouse(s.buttons, hx, hy); err != nil {
-			h.dev.Close()
-			h.dev = nil
+		pause   time.Duration
+	}{{0, pointerHoverDelay}, {0, 0}, {button, pointerPressDuration}, {0, 0}} {
+		if err = h.send(s.buttons, hx, hy); err != nil {
 			return err
 		}
-		if s.pause {
-			if s.buttons == 0 {
-				pointerPause(pointerHoverDelay)
-			} else {
-				pointerPause(pointerPressDuration)
-			}
+		if s.pause > 0 {
+			pointerPause(s.pause)
 		}
 	}
 	return nil

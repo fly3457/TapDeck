@@ -163,29 +163,37 @@ func (ss *session) pointer(m Message) error {
 		_ = ss.send(map[string]any{"type": "error", "code": "touchpad_error", "reason": reason})
 		return nil
 	}
-	if m.Action != "click" && m.Action != "right_click" {
+	if m.Action != "click" && m.Action != "right_click" && m.Action != "move" {
 		return notice("无效的画面点击")
 	}
 	d, ok := ss.s.Video.DisplayFor(ss.id)
 	if !ok {
 		return notice("电脑画面未打开，无法按位置点击")
 	}
+	px, py := min(max(m.PX, 0), int32(d.Width-1)), min(max(m.PY, 0), int32(d.Height-1))
 	if p := ss.s.Pointer; p != nil {
-		px, py := min(max(m.PX, 0), int32(d.Width-1)), min(max(m.PY, 0), int32(d.Height-1))
-		if err := p.Click(d, px, py, m.Action == "right_click"); err == nil {
-			return nil
+		var err error
+		if m.Action == "move" {
+			err = p.Move(d, px, py)
 		} else {
-			log.Printf("video: 虚拟鼠标点击失败，改用 SendInput：%v", err)
+			err = p.Click(d, px, py, m.Action == "right_click")
 		}
+		if err == nil {
+			return nil
+		}
+		log.Printf("video: 虚拟鼠标失败，改用 SendInput：%v", err)
 	}
 	mover, ok := ss.controller().(absolutePointer)
 	if !ok {
 		return notice("电脑端不支持按位置点击，请升级")
 	}
-	x := int32(d.Left) + min(max(m.PX, 0), int32(d.Width-1))
-	y := int32(d.Top) + min(max(m.PY, 0), int32(d.Height-1))
+	x, y := int32(d.Left)+px, int32(d.Top)+py
 	if err := mover.MoveTo(x, y); err != nil {
 		return err
+	}
+	// move：双指滚动前把光标移到手指下方，滚轮才会作用于该区域的窗口。
+	if m.Action == "move" {
+		return nil
 	}
 	button := "left"
 	if m.Action == "right_click" {

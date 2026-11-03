@@ -14,6 +14,7 @@ class VideoDirectGesturesTest {
         override fun click(name: String) { events.add("click:$name") }
         override fun pan(dx: Double, dy: Double) { panX += dx; panY += dy; if (events.lastOrNull() != "pan") events.add("pan") }
         override fun clickAt(x: Double, y: Double, button: String) { events.add("at:$button:${x.toInt()},${y.toInt()}") }
+        override fun hoverAt(x: Double, y: Double) { events.add("hover:${x.toInt()},${y.toInt()}") }
         override fun pinch(scale: Double, focusX: Double, focusY: Double, panX: Double, panY: Double): Boolean { events.add("pinch"); return true }
     }
     private fun p(id: Int = 1, x: Double = 100.0, y: Double = 100.0) = TouchPoint(id, x, y)
@@ -57,7 +58,10 @@ class VideoDirectGesturesTest {
         val s = Sink(); val g = gestures(s)
         g.event(100, TouchPhase.Down, p(1, 100.0)); g.event(110, TouchPhase.Add, p(1, 100.0), p(2, 200.0), changed = 2)
         g.event(130, TouchPhase.Move, p(1, 100.0, 140.0), p(2, 200.0, 140.0))
-        assertEquals(listOf("scroll"), s.events)
+        // 滚动开始前先把鼠标移到双指起始中心，滚轮才作用于手指下方的区域。
+        assertEquals(listOf("hover:150,100", "scroll"), s.events)
+        g.event(140, TouchPhase.Move, p(1, 100.0, 160.0), p(2, 200.0, 160.0))
+        assertEquals("只在滚动开始时移动一次", listOf("hover:150,100", "scroll", "scroll"), s.events)
         g.cancel(); s.events.clear()
         g.event(200, TouchPhase.Down, p(1, 100.0)); g.event(210, TouchPhase.Add, p(1, 100.0), p(2, 200.0), changed = 2)
         g.event(230, TouchPhase.Remove, p(1, 100.0), p(2, 200.0), changed = 2); g.event(240, TouchPhase.Up, p(1, 100.0))

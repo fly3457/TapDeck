@@ -622,13 +622,13 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
 
     /**
      * 视频模式：把 PC 光标移到画面上的 (x, y)（所捕获显示器的物理像素）并单击。
-     * action 为 click 或 right_click。与鼠标按键共用分段屏障；单击语音录音中第一次点击只结束录音。
+     * action 为 click、right_click 或 move（只移动光标）。与鼠标按键共用分段屏障；单击语音录音中第一次点击只结束录音。
      */
     fun pointer(action: String, x: Int, y: Int) {
         val finishVoice = synchronized(lock) {
             if (!connected) return
             val current = mutable.value
-            if (current.micMode == "toggle" && current.mic in listOf("preparing", "transmitting", "stopping")) true
+            if (action != "move" && current.micMode == "toggle" && current.mic in listOf("preparing", "transmitting", "stopping")) true
             else { barrier("pointer", "action" to action.j(), "px" to x.j(), "py" to y.j()); false }
         }
         if (finishVoice) stopMic()

@@ -66,6 +66,10 @@ class VideoModeView(
             viewport.pan(dx * density, dy * density)
             placeSurface()
         }
+        override fun hoverAt(x: Double, y: Double) {
+            val (cx, cy) = viewport.toContent(x * density, y * density) ?: return
+            onPointer("move", cx.toInt(), cy.toInt())
+        }
         override fun clickAt(x: Double, y: Double, button: String) {
             // 点在两侧黑边等画面之外时不操作电脑。
             val (cx, cy) = viewport.toContent(x * density, y * density) ?: return
