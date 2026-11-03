@@ -167,6 +167,10 @@ func (p *pointerInput) snapshot() []string {
 }
 
 func TestVideoPointerClicksAtDisplayPosition(t *testing.T) {
+	var pauses []time.Duration
+	old := pointerPause
+	pointerPause = func(d time.Duration) { pauses = append(pauses, d) }
+	t.Cleanup(func() { pointerPause = old })
 	in := &pointerInput{}
 	s, client := testReceiver(t, func(s *Server) {
 		s.Input = in
@@ -191,8 +195,12 @@ func TestVideoPointerClicksAtDisplayPosition(t *testing.T) {
 	_ = write(ctx, conn, Message{Type: "pointer", Action: "right_click", PX: 99999, PY: -5, Epoch: 2, NextEpoch: 3})
 	_ = write(ctx, conn, Message{Type: "heartbeat", Tick: 7})
 	readUntil(t, ctx, conn, "heartbeat")
-	want := []string{"to:100,200", "left:true", "left:false", "to:2559,0", "right:true", "right:false"}
+	// 先移入并停顿（悬停），再补一次同位置移动、按下、按住、抬起。
+	want := []string{"to:100,200", "to:100,200", "left:true", "left:false", "to:2559,0", "to:2559,0", "right:true", "right:false"}
 	if got := in.snapshot(); !slices.Equal(got, want) {
 		t.Fatalf("events %v, want %v", got, want)
+	}
+	if !slices.Equal(pauses, []time.Duration{pointerHoverDelay, pointerPressDuration, pointerHoverDelay, pointerPressDuration}) {
+		t.Fatalf("pauses %v", pauses)
 	}
 }

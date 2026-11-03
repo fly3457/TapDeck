@@ -183,8 +183,23 @@ func (ss *session) pointer(m Message) error {
 	if m.Action == "right_click" {
 		button = "right"
 	}
+	// 模拟真实点击的节奏：先让目标窗口处理移入（悬停高亮），再按下并按住片刻。
+	// 输入法候选框等窗口只接受“先悬停、再按下”的点击，瞬移后立即按下会被忽略。
+	pointerPause(pointerHoverDelay)
+	if err := mover.MoveTo(x, y); err != nil {
+		return err
+	}
 	if err := ss.mouseButton(button, true); err != nil {
 		return err
 	}
+	pointerPause(pointerPressDuration)
 	return ss.mouseButton(button, false)
 }
+
+const (
+	pointerHoverDelay    = 25 * time.Millisecond
+	pointerPressDuration = 40 * time.Millisecond
+)
+
+// pointerPause 可在测试中替换，避免真实等待。
+var pointerPause = time.Sleep
