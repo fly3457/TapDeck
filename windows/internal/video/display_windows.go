@@ -4,6 +4,7 @@ package video
 
 import (
 	"fmt"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -21,6 +22,10 @@ var (
 
 type comObject struct{ vtbl *[32]uintptr }
 
+// call 调用 COM 虚函数。uintptrescapes 让调用方以 uintptr(unsafe.Pointer(&x)) 传入的输出参数
+// 分配在堆上：否则 goroutine 栈在调用期间增长搬迁后，DXGI 会写入已失效的旧栈地址。
+//
+//go:uintptrescapes
 func (o *comObject) call(index int, args ...uintptr) uintptr {
 	r, _, _ := syscall.SyscallN(o.vtbl[index], append([]uintptr{uintptr(unsafe.Pointer(o))}, args...)...)
 	return r
@@ -45,6 +50,7 @@ func PrimaryDisplay() (Display, error) {
 		return Display{}, fmt.Errorf("无法创建 DXGI 工厂：0x%08x", uint32(hr))
 	}
 	defer factory.release()
+	var seen []string
 	for a := 0; a < 16; a++ {
 		var adapter *comObject
 		if int32(factory.call(7, uintptr(a), uintptr(unsafe.Pointer(&adapter)))) < 0 || adapter == nil { // EnumAdapters
@@ -62,10 +68,12 @@ func PrimaryDisplay() (Display, error) {
 				adapter.release()
 				return Display{Adapter: a, Output: o, Width: int(desc.Right - desc.Left), Height: int(desc.Bottom - desc.Top)}, nil
 			}
+			seen = append(seen, fmt.Sprintf("%d/%d %s (%d,%d)-(%d,%d) attached=%d hr=0x%08x", a, o, windows.UTF16ToString(desc.DeviceName[:]),
+				desc.Left, desc.Top, desc.Right, desc.Bottom, desc.Attached, uint32(hr)))
 		}
 		adapter.release()
 	}
-	return Display{}, fmt.Errorf("未找到主显示器的 DXGI 输出")
+	return Display{}, fmt.Errorf("未找到主显示器的 DXGI 输出（枚举到：%s）", strings.Join(seen, "；"))
 }
 
 type cursorInfo struct {

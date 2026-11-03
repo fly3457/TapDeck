@@ -247,9 +247,10 @@ func assignJob(pid int) {
 		if err != nil {
 			return
 		}
-		info := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{}
+		// 堆上分配：指针以 uintptr 形式传入，不能指向可能搬迁的栈。
+		info := new(windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION)
 		info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-		if _, err = windows.SetInformationJobObject(h, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
+		if _, err = windows.SetInformationJobObject(h, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(info)), uint32(unsafe.Sizeof(*info))); err != nil {
 			windows.CloseHandle(h)
 			return
 		}
