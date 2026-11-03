@@ -92,7 +92,7 @@ The phone then opens `GET /video` on the same pinned TLS port. Its first text me
 | 9 | — | uint8 visible |
 | 10 | H.264 Annex-B access unit (4-byte start codes) | — |
 
-Cursor coordinates are physical pixels relative to the captured display's top-left corner. They are polled every 8 ms and sent only when they change. `visible=0` means the cursor is hidden or on another display. The PC sends the configuration frame first and never drops it. Each stream begins with an IDR frame; GOP is one second, with no B-frames. When more than six frames are queued, the PC discards the backlog and drops frames until the next IDR, so latency cannot accumulate. Android likewise drops to the next key frame when its decoder input falls behind. Write stalls longer than two seconds end the stream with `video_error`.
+Cursor coordinates are physical pixels relative to the captured display's top-left corner. They are polled every 8 ms and sent only when they change. `visible=0` means the cursor is hidden or on another display. The PC sends the configuration frame first and never drops it. Each stream begins with an IDR frame; GOP is two seconds, with no B-frames. When more than six frames are queued, the PC discards the backlog and drops frames until the next IDR, so latency cannot accumulate. Android likewise drops to the next key frame when its decoder input falls behind. Write stalls longer than two seconds end the stream with `video_error`.
 
 ## UDP encoding
 

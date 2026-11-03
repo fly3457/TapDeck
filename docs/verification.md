@@ -6,7 +6,7 @@
 
 ## 0.4.0 视频模式
 
-2026-11-03 完成实现与官方构建，**实机手机验证进行中（由用户人工测试）**，结果补记于本节。功能说明见[视频模式](video-mode.md)。
+2026-11-03 完成实现、官方构建与首轮实体手机验证；其余交互由用户人工继续测试，结果补记于本节。功能说明见[视频模式](video-mode.md)。
 
 | 验证项 | 结果 |
 |---|---|
@@ -24,13 +24,21 @@
 | 产物 | 字节数 | SHA-256 |
 |---|---:|---|
 | `TapDeck-0.4.0.apk` | 8,547,733 | `105261b822d34da0965e898a747b3ccc953ded2e22677781fd20f69ee8f7d803` |
-| `TapDeck-0.4.0.exe` | 28,051,456 | `0a52d6721b1221bc72b5dfd19ec2794152ade8c7ce6b04b643ff4af773c49bec` |
-| `TapDeck-debug-0.4.0.exe` | 33,595,392 | `70b33a8e64a02eb4717a3d17513672dfcdbca9adc455abb68bd2237017d9a1f9` |
-| `TapDeck-hidprobe-0.4.0.exe` | 8,048,128 | `4183eb58e5e728d659e611459e931e0bc8c45d0d02114a6e3b6e2f6ebf0631a3` |
+| `TapDeck-0.4.0.exe` | 28,053,504 | `592de5dd935bfbf2a96ae53a922466a6361914d2926be62ddf6bace39bd9bddf` |
+| `TapDeck-debug-0.4.0.exe` | 33,598,464 | `b531301c2486565e5c2a783e4193887dbd6415824889c2fd43ee0cce7d9ed92e` |
+| `TapDeck-hidprobe-0.4.0.exe` | 8,048,128 | `c47eb2e2ae5fe288e29c0329b54de74fda536ce113292b3662fbf261770d362d` |
 
-日志：`.tools/ffmpeg-build.log`、`.tools/windows-release-0.4.0-build.log`。
+日志：`.tools/ffmpeg-build.log`、`.tools/windows-release-0.4.0-build3.log`（含下述两项修复后的最终构建）。
 
-待验收：实体手机竖屏／横屏显示与旋转、MediaCodec 低延迟解码与实际帧率、画面到画面延迟、捏合与光标跟随手感、悬浮球两种语音、后台恢复与断线重连、Wi-Fi 丢包下的丢帧恢复；AMD（AMF）、Intel（Media Foundation）显卡与新驱动下的 `scale_d3d11` 路径尚未实测。公开发布时须在同一 Release 附上 FFmpeg 源码包。
+实体手机（nubia NX741J，Android 16，1216×2688）首轮结果：
+
+| 项目 | 结果 |
+|---|---|
+| 首次请求失败 | 手机显示“未找到主显示器的 DXGI 输出”。日志显示启动预热成功、随后手机请求失败；原因是 COM 调用封装把栈变量地址以 uintptr 传入，goroutine 栈搬迁后 DXGI 写入旧地址。已为封装加 `//go:uintptrescapes` 并改为堆分配，复测通过 |
+| 画面与帧率 | 双屏电脑（主屏 2560×1440，副屏位于左侧）只传主屏；NVENC 原生分辨率 18 Mbps，手机左上角显示 59 fps、RTT 9 ms；竖屏按高度填满、左右等量裁切，悬浮球显示“说话”（第一组单击语音） |
+| 白底色块闪烁 | 用户观察到纯白背景周期性闪烁淡红色块：VBV 仅约两帧，关键帧被压到约 100 KB。改为 VBV 约 250 ms、GOP 2 秒后关键帧约 290–460 KB，用户确认闪烁消失；本机三档仍为 60 fps |
+
+待验收：横屏显示与旋转、画面到画面延迟、捏合与光标跟随手感、悬浮球两种语音、后台恢复与断线重连、Wi-Fi 丢包下的丢帧恢复；AMD（AMF）、Intel（Media Foundation）显卡与新驱动下的 `scale_d3d11` 路径尚未实测。公开发布时须在同一 Release 附上 FFmpeg 源码包。
 
 ## 0.3.19 Android release 交付与签名检查
 
