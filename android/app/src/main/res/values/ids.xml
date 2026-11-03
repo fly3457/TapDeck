@@ -9,4 +9,8 @@
     <item name="video_exit_button" type="id" />
     <item name="video_touch_layer" type="id" />
     <item name="video_mic" type="id" />
+    <item name="video_reset_button" type="id" />
+    <item name="video_shortcuts_button" type="id" />
+    <item name="video_keyboard_button" type="id" />
+    <item name="video_keyboard_host" type="id" />
 </resources>

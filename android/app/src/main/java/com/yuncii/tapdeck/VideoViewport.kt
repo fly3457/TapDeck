@@ -40,12 +40,16 @@ class VideoViewport(private val followMargin: Double = 0.12, private val smoothi
         reset()
     }
 
-    fun reset() {
+    /**
+     * 恢复默认比例。aroundCursor 为假时与刚连接时完全一致（按高度填满、水平居中），
+     * 供“恢复默认比例”按钮使用；尺寸变化（旋转）时为真，尽量让光标留在画面内。
+     */
+    fun reset(aroundCursor: Boolean = true) {
         if (!ready) return
         scale = defaultScale
         offsetX = (viewWidth - displayWidth) / 2
         offsetY = (viewHeight - displayHeight) / 2
-        if (!cursorX.isNaN() && displayWidth > viewWidth) offsetX = viewWidth / 2 - cursorX * scale
+        if (aroundCursor && !cursorX.isNaN() && displayWidth > viewWidth) offsetX = viewWidth / 2 - cursorX * scale
         clamp()
         targetX = offsetX; targetY = offsetY
     }
@@ -102,4 +106,25 @@ class VideoViewport(private val followMargin: Double = 0.12, private val smoothi
         offsetX = if (displayWidth <= viewWidth) (viewWidth - displayWidth) / 2 else offsetX.coerceIn(viewWidth - displayWidth, 0.0)
         offsetY = if (displayHeight <= viewHeight) (viewHeight - displayHeight) / 2 else offsetY.coerceIn(viewHeight - displayHeight, 0.0)
     }
+}
+
+/** 视频模式底部的叠加键盘：同一时间最多显示一种。 */
+enum class VideoKeyboard { None, Shortcuts, Full }
+
+/** 叠加键盘的像素尺寸与纵向缩放（传给 ShortcutButtons / KeyboardView 的 scale）。 */
+data class VideoKeyboardSize(val width: Int, val height: Int, val padding: Int, val scale: Float)
+
+/**
+ * 竖屏与普通模式一致：全宽，全键盘内容 0.60W、快捷键 0.30W，上下各留 0.01W。
+ * 横屏不拉满宽度：宽度取屏幕短边（与竖屏同宽），纵向压缩到全键盘约 40%、快捷键约 22% 屏高，
+ * 键位变扁但不会遮住大半画面。
+ */
+fun videoKeyboardSize(viewWidth: Int, viewHeight: Int, mode: VideoKeyboard): VideoKeyboardSize? {
+    if (mode == VideoKeyboard.None || viewWidth <= 0 || viewHeight <= 0) return null
+    val content = if (mode == VideoKeyboard.Full) 0.60f else 0.30f
+    val landscape = viewWidth > viewHeight
+    val width = if (landscape) minOf(viewWidth, viewHeight) else viewWidth
+    val scale = if (landscape) minOf(1f, (if (mode == VideoKeyboard.Full) 0.40f else 0.22f) * viewHeight / (content * width)) else 1f
+    val padding = (width * 0.01f * scale).toInt()
+    return VideoKeyboardSize(width, (width * content * scale).toInt() + padding * 2, padding, scale)
 }

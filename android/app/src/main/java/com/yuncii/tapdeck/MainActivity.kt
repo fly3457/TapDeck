@@ -165,6 +165,11 @@ class MainActivity : ComponentActivity() {
     private var shortcutHold = ShortcutHold({ _, _ -> }, {})
     /** 全键盘的按键状态。 */
     private var keyHold = KeyHold({}, {})
+    /** 视频模式底部叠加键盘的按住状态，与普通模式各自独立。 */
+    private var videoShortcutHold = ShortcutHold({ _, _ -> }, {})
+    private var videoKeyHold = KeyHold({}, {})
+    private var videoKeyboardMode by mutableStateOf(VideoKeyboard.None)
+    private var videoKeyboardSize by mutableStateOf<VideoKeyboardSize?>(null)
     /** 切换全键盘 / 快捷键+语音两种下半区布局。 */
     private var modeViews: (() -> Unit)? = null
     private val microphonePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (!granted) android.widget.Toast.makeText(this, "麦克风权限未授予，键鼠仍可使用", android.widget.Toast.LENGTH_LONG).show() }
@@ -341,6 +346,43 @@ class MainActivity : ComponentActivity() {
             view.onExit = ::exitVideo
             view.onRetry = { vm.client.stopVideo() } // 回到 Idle 后由状态收集自动重新请求
             view.mic.onFeedback = { view.keyFeedback(it, feedbackController) }
+            view.onKeyboardChange = { mode -> videoShortcutHold.cancelAll(); videoKeyHold.releaseAll(); videoKeyboardMode = mode }
+            view.onKeyboardSize = { videoKeyboardSize = it }
+            view.keyboardHost.addView(compose {
+                val state by vm.client.state.collectAsStateWithLifecycle()
+                val epoch = state.connectionEpoch
+                val shortcutSession = remember(epoch) { ShortcutHold(
+                    { slot, token -> vm.client.inputInSession(epoch) { vm.client.shortcutHoldStart(slot, token) } },
+                    { token -> vm.client.inputInSession(epoch) { vm.client.shortcutHoldStop(token) } },
+                ) }
+                val keySession = remember(epoch) { KeyHold(
+                    { chord -> vm.client.inputInSession(epoch) { vm.client.keyDown(chord) } },
+                    { chord -> vm.client.inputInSession(epoch) { vm.client.keyUp(chord) } },
+                ) }
+                SideEffect { videoShortcutHold = shortcutSession; videoKeyHold = keySession }
+                DisposableEffect(shortcutSession, keySession) { onDispose { shortcutSession.cancelAll(); keySession.releaseAll() } }
+                val size = videoKeyboardSize
+                val mode = videoKeyboardMode
+                if (size != null && mode != VideoKeyboard.None) {
+                    val pad = with(LocalDensity.current) { size.padding.toDp() }
+                    // 50% 透明度叠加在画面上；只占键盘自身区域，区域外仍是触控板。
+                    Box(Modifier.fillMaxSize().graphicsLayer { alpha = 0.5f }.background(Color(ControllerStyle.PANEL)).padding(vertical = pad)) {
+                        if (mode == VideoKeyboard.Shortcuts) ShortcutButtons(state, shortcutSession, scale = size.scale, stopRecording = {
+                            val active = vm.client.state.value.micMode == MicBallView.MODE_TOGGLE && vm.client.state.value.mic in listOf("preparing", "transmitting", "stopping")
+                            if (active) vm.client.inputInSession(epoch) { vm.client.stopMic() }
+                            active
+                        })
+                        else key(epoch) { KeyboardView(
+                            connected = state.connected,
+                            voiceActive = state.mic == "preparing" || state.mic == "transmitting",
+                            scale = size.scale,
+                            hold = keySession,
+                            beginVoice = { m -> var started = false; vm.client.inputInSession(epoch) { started = beginMic(m, firstVoiceProfile()) }; started },
+                            stopVoice = { vm.client.inputInSession(epoch) { vm.client.stopMic() } },
+                        ) }
+                    }
+                }
+            }, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         }
         videoDecoder.onError = { reason -> runOnUiThread { vm.client.stopVideo(); android.widget.Toast.makeText(this, reason, android.widget.Toast.LENGTH_LONG).show(); exitVideo() } }
         vm.client.videoSink = { msg ->
@@ -490,6 +532,7 @@ class MainActivity : ComponentActivity() {
                         available = state.connected && (profile != null || state.mic != "idle")
                         // 单击语音输入开始录音时，撤销可能仍在按住的快捷键。
                         if (state.mic == "preparing" || state.mic == "transmitting") shortcutHold.cancelAll()
+                        if (state.mic == "preparing" || state.mic == "transmitting") videoShortcutHold.cancelAll()
                         position?.let { restorePosition(it.first, it.second) }
                     }
                 }
@@ -567,6 +610,8 @@ class MainActivity : ComponentActivity() {
         keyHold.releaseAll()
         microphone?.cancel()
         videoView?.cancel()
+        videoShortcutHold.cancelAll()
+        videoKeyHold.releaseAll()
     }
     /** 视频模式的悬浮球固定使用 PC 语音配置中第一个已启用的组。 */
     private fun firstVoiceProfile(state: ClientState = vm.client.state.value) = state.voiceProfiles().firstOrNull { it.enabled }
@@ -583,6 +628,7 @@ class MainActivity : ComponentActivity() {
     private fun exitVideo() {
         if (!vm.videoOn.value) return
         videoView?.cancel()
+        videoView?.showKeyboard(VideoKeyboard.None)
         vm.client.stopVideo()
         vm.videoOn.value = false
         applyVideoMode()

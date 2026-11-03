@@ -70,6 +70,17 @@ class VideoViewportTest {
         assertEquals(panned, v.offsetX, 1e-9)
     }
 
+    @Test fun resetButtonRestoresConnectionDefault() {
+        val v = VideoViewport(); v.resize(1080.0, 2400.0, 1920.0, 1080.0)
+        val centered = v.offsetX
+        v.cursor(1900.0, 540.0); settle(v)
+        v.pinch(2.0, 100.0, 100.0, 0.0, 0.0)
+        v.reset(aroundCursor = false)
+        assertEquals(v.defaultScale, v.scale, 1e-9)
+        assertEquals(centered, v.offsetX, 1e-9)
+        assertFalse(v.step())
+    }
+
     @Test fun rotationReappliesRuleAroundCursor() {
         val v = VideoViewport(); v.resize(2400.0, 1080.0, 1920.0, 1080.0)
         v.cursor(1700.0, 500.0); settle(v)

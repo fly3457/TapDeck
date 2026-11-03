@@ -92,6 +92,44 @@ class VideoModeView(
     }
     val mic = FloatingMicView(context, beginMic, endMic, saveMicPosition).apply { id = R.id.video_mic }
 
+    /** 底部叠加键盘的容器；MainActivity 放入 Compose 键盘，尺寸由 [videoKeyboardSize] 决定。 */
+    val keyboardHost = FrameLayout(context).apply { id = R.id.video_keyboard_host; visibility = GONE; isMotionEventSplittingEnabled = true }
+    /** 键盘切换时回调（用于释放仍按住的键）；scale 变化时回调给键盘纵向缩放。 */
+    var onKeyboardChange: (VideoKeyboard) -> Unit = {}
+    var onKeyboardSize: (VideoKeyboardSize?) -> Unit = {}
+    var keyboard = VideoKeyboard.None
+        private set
+    private var keyboardSize: VideoKeyboardSize? = null
+
+    private fun iconButton(viewId: Int, icon: Int, description: String, click: () -> Unit) = android.widget.ImageButton(context).apply {
+        id = viewId
+        setImageResource(icon)
+        imageTintList = android.content.res.ColorStateList.valueOf(Color.WHITE)
+        scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+        val pad = (8 * density).roundToInt()
+        setPadding(pad, pad, pad, pad)
+        background = pill(0x99000000.toInt())
+        contentDescription = description
+        setOnClickListener { click() }
+    }
+    private val resetButton = iconButton(R.id.video_reset_button, R.drawable.ic_lucide_scan, "恢复默认画面比例") {
+        viewport.reset(aroundCursor = false); requestLayout()
+    }
+    private val shortcutsButton = iconButton(R.id.video_shortcuts_button, R.drawable.ic_lucide_layout_grid, "显示快捷键盘") {
+        showKeyboard(if (keyboard == VideoKeyboard.Shortcuts) VideoKeyboard.None else VideoKeyboard.Shortcuts)
+    }
+    private val keyboardButton = iconButton(R.id.video_keyboard_button, R.drawable.ic_lucide_keyboard, "显示全键盘") {
+        showKeyboard(if (keyboard == VideoKeyboard.Full) VideoKeyboard.None else VideoKeyboard.Full)
+    }
+    private val toolbar = android.widget.LinearLayout(context).apply {
+        orientation = android.widget.LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        val icon = (36 * density).roundToInt(); val gap = (8 * density).roundToInt()
+        addView(statusButton, android.widget.LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, icon))
+        for (b in listOf(resetButton, shortcutsButton, keyboardButton))
+            addView(b, android.widget.LinearLayout.LayoutParams(icon, icon).apply { leftMargin = gap })
+    }
+
     private var state = VideoState()
     private var rttMs = 0L
     private var lastStatus = 0L
@@ -100,14 +138,31 @@ class VideoModeView(
         id = R.id.video_mode
         setBackgroundColor(Color.BLACK)
         isMotionEventSplittingEnabled = true
+        statusButton.gravity = Gravity.CENTER_VERTICAL
         addView(surface, LayoutParams(0, 0))
         addView(touchLayer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        // 键盘只占自身区域，区域外的触摸仍落到下面的手势层。
+        addView(keyboardHost, LayoutParams(0, 0, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
         addView(message, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.CENTER))
-        addView(statusButton, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.START).apply {
+        addView(toolbar, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.START).apply {
             leftMargin = (12 * density).roundToInt(); topMargin = (12 * density).roundToInt()
         })
         addView(mic, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         render()
+    }
+
+    /** 快捷键盘与全键盘互斥；再次点击当前键盘的图标即收起。 */
+    fun showKeyboard(mode: VideoKeyboard) {
+        if (keyboard == mode) return
+        keyboard = mode
+        onKeyboardChange(mode)
+        keyboardHost.visibility = if (mode == VideoKeyboard.None) GONE else VISIBLE
+        val active = 0xCC175CD3.toInt(); val idle = 0x99000000.toInt()
+        shortcutsButton.background = pill(if (mode == VideoKeyboard.Shortcuts) active else idle)
+        keyboardButton.background = pill(if (mode == VideoKeyboard.Full) active else idle)
+        shortcutsButton.contentDescription = if (mode == VideoKeyboard.Shortcuts) "收起快捷键盘" else "显示快捷键盘"
+        keyboardButton.contentDescription = if (mode == VideoKeyboard.Full) "收起全键盘" else "显示全键盘"
+        requestLayout()
     }
 
     /** 控制端状态（主线程）：视频阶段、画面尺寸、RTT。 */
@@ -167,6 +222,10 @@ class VideoModeView(
         state.format?.let { viewport.resize(w.toDouble(), h.toDouble(), it.screenWidth.toDouble(), it.screenHeight.toDouble()) }
         surface.layoutParams.width = viewport.displayWidth.roundToInt().coerceAtLeast(1)
         surface.layoutParams.height = viewport.displayHeight.roundToInt().coerceAtLeast(1)
+        val size = videoKeyboardSize(w, h, keyboard)
+        keyboardHost.layoutParams.width = size?.width ?: 0
+        keyboardHost.layoutParams.height = size?.height ?: 0
+        if (size != keyboardSize) { keyboardSize = size; post { onKeyboardSize(keyboardSize) } }
         super.onMeasure(widthMeasureSpec, heightMeasureSpec)
     }
 
