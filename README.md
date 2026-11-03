@@ -2,9 +2,9 @@
 
 通过 Wi-Fi 局域网，把 Android 手机变成 Windows 电脑的麦克风、触控板和键盘，方便 Vibe Coding 和日常操作。
 
-**[Windows EXE](https://github.com/fly3457/TapDeck/releases/download/v0.3.19/TapDeck-0.3.19.exe) · [Android APK](https://github.com/fly3457/TapDeck/releases/download/v0.3.19/TapDeck-0.3.19.apk) · [完整下载与校验](https://github.com/fly3457/TapDeck/releases/tag/v0.3.19)**
+**[Windows EXE](https://github.com/fly3457/TapDeck/releases/download/v0.4.0/TapDeck-0.4.0.exe) · [Android APK](https://github.com/fly3457/TapDeck/releases/download/v0.4.0/TapDeck-0.4.0.apk) · [完整下载与校验](https://github.com/fly3457/TapDeck/releases/tag/v0.4.0)**
 
-当前测试版 **0.3.19** · Android **code 22** · Windows 11 x64 · Android 8 及以上 · 同一局域网
+当前测试版 **0.4.0** · Android **code 23** · Windows 11 x64 · Android 8 及以上 · 同一局域网
 
 Android APK 使用不可调试的 release 构建，现有官方版可覆盖升级并保留配对。
 
@@ -12,7 +12,7 @@ Android APK 使用不可调试的 release 构建，现有官方版可覆盖升�
 
 - 手机麦克风传音到 PC，配合输入法或支持语音输入的 Agent 软件转成文字。
 - 触控板支持点击、拖拽、双指滚动与缩放、三指窗口操作。
-- 视频模式把手机整屏变成 PC 显示器：硬件 H.264 低延迟传画面，画面上直接用触控板手势和语音悬浮球，横竖屏都可用，见[视频模式](docs/video-mode.md)。
+- 视频模式把手机整屏变成 PC 显示器：硬件 H.264 低延迟传画面，点哪里就操作哪里，双指滚动与缩放，配有语音悬浮球和半透明叠加键盘，横竖屏都可用，见[视频模式](docs/video-mode.md)。
 - 可切换全键盘，输入字母、数字、符号和组合键。
 - 最多八个自定义快捷键、三组语音配置，支持长按和单击起停。
 - 一部手机可配对多台 PC 并切换控制；一台 PC 最多连接五个控制端。

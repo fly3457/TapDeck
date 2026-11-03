@@ -2,7 +2,7 @@
 
 测试日期：2026-10-06 至 2026-11-03。使用页描述当前行为；历史结果按当时版本理解。截图中的示例连接和录音状态不作为实机识别证明。
 
-当前：接收端 **0.4.0**、Android **0.4.0 / code 23**（未公开发布）· [安装](installation.md) · [版本规则](versioning.md)
+当前：接收端 **0.4.0**、Android **0.4.0 / code 23**· [安装](installation.md) · [版本规则](versioning.md)
 
 ## 0.4.0 视频模式
 
@@ -19,7 +19,7 @@
 | Android 逻辑 | 单元测试：竖屏按高度填满且左右等量裁切、20:9 横屏完整显示两侧黑边、焦点缩放与上下限、平移不露边、光标进入 12% 边缘区平滑跟随、用户平移在光标移动前保持、旋转后重新套用规则；视频消息解析；捏合本地处理而双指拖动仍为滚轮、双指轻点仍为右键；`MicTrigger` 长按／单击／拖动／取消 |
 | 官方构建 | `scripts/build-windows.ps1 -OutputDirectory dist/0.4.0`（便携 PowerShell 7.6.9）：57 项版本规则、Android release 构建与单元测试、Go 测试与 vet、三个 EXE 通过；两个接收端 `--apk-info` 为 Android 0.4.0 / code 23、release、不可调试、证书 `7a73774806a038cf5ac53dff3aa4332390158c2ecbf55bebd5c01811ae543e30`，并读回内嵌 ffmpeg 哈希与清单一致；`release-manifest.json` 记录 ffmpeg 版本与哈希 |
 
-官方交付目录 `dist/0.4.0`（本地构建，未公开发布）：
+官方交付目录 `dist/0.4.0`：
 
 | 产物 | 字节数 | SHA-256 |
 |---|---:|---|
@@ -44,6 +44,10 @@
 | 输入法候选字 | 用户反馈轻点无法选中输入法候选字（本机物理点击可以）。加悬停与按住时长后仍不行，判定候选框忽略 SendInput 注入点击；改为 FakerInput 绝对坐标 HID 鼠标。本机实测 HID 坐标映射到主显示器（16383→1279,719；32767→2559,1439），(0,0) 被忽略、(1,1) 为左上角。用户确认可以选中 |
 
 待验收：横屏叠加键盘尺寸、画面到画面延迟、捏合手感、悬浮球两种语音、后台恢复与断线重连、Wi-Fi 丢包下的丢帧恢复；AMD（AMF）、Intel（Media Foundation）显卡与新驱动下的 `scale_d3d11` 路径尚未实测。公开发布时须在同一 Release 附上 FFmpeg 源码包。
+
+### 公开发布
+
+2026-11-03 已公开 [v0.4.0 Release（测试版）](https://github.com/fly3457/TapDeck/releases/tag/v0.4.0)，GitHub 公开时间 `2026-11-03T09:01:17Z`。附注标签指向实现、版本与验证记录提交 [686c566](https://github.com/fly3457/TapDeck/commit/686c56669ff02fb0d1e48b2231ea5b0237a17821)。13 个资产包括四个带版本号的程序、两份 `--apk-info`、公开 `release-manifest.json`（含 `source_commit` 与内嵌 FFmpeg 哈希）、`SHA256SUMS.txt`、LICENSE、第三方声明、完整 ZIP（69 个文件），以及 LGPL 对应源码 `ffmpeg-8.1.3.tar.xz` 和官方签名 `.asc`。发布后全部下载回独立目录：12 个文件与公开 `SHA256SUMS.txt` 逐项一致，ZIP 内 10 个文件与其内部校验清单一致；校验清单与上一版相同，使用 CRLF 换行。原 [v0.3.19](https://github.com/fly3457/TapDeck/releases/tag/v0.3.19) 保留为历史版本。
 
 ## 0.3.19 Android release 交付与签名检查
 
