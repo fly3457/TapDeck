@@ -67,10 +67,24 @@ class VideoViewport(private val followMargin: Double = 0.12, private val smoothi
     }
 
     /** PC 光标位置（PC 屏幕像素）。只在光标移动时更新跟随目标，不会拉回用户刚平移的视野。 */
+    /** 为假时只记录光标位置、不自动平移（视频模式改为直接点击后，由用户自己拖动画面）。 */
+    var followCursor = true
+
+    /** 单指拖动平移画面（像素），不超出画面边界。 */
+    fun pan(dx: Double, dy: Double) = pinch(1.0, 0.0, 0.0, dx, dy)
+
+    /** 视图像素坐标换算为 PC 画面像素；落在画面之外（两侧黑边）时返回 null。 */
+    fun toContent(x: Double, y: Double): Pair<Double, Double>? {
+        if (!ready) return null
+        val cx = (x - offsetX) / scale; val cy = (y - offsetY) / scale
+        return if (cx in 0.0..contentWidth && cy in 0.0..contentHeight) cx to cy else null
+    }
+
     fun cursor(x: Double, y: Double) {
         val moved = cursorX.isNaN() || abs(x - cursorX) > 0.5 || abs(y - cursorY) > 0.5
         cursorX = x; cursorY = y
         if (!ready || !moved) return
+        if (!followCursor) return
         targetX = follow(targetX, x * scale, viewWidth, displayWidth)
         targetY = follow(targetY, y * scale, viewHeight, displayHeight)
     }

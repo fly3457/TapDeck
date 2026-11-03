@@ -36,6 +36,22 @@ class VideoDecoder {
 
     fun setSurface(value: Surface?) = handler.post { if (surface !== value) { surface = value; restart() } }
 
+    /**
+     * 同一 Surface 对象的尺寸或底层缓冲队列变化（例如旋转）：优先 setOutputSurface 无缝切换，
+     * 解码不中断；解码器不支持时重建，并请求新的关键帧。
+     */
+    fun surfaceChanged(value: Surface) = handler.post {
+        surface = value
+        val c = codec
+        if (c != null && value.isValid) {
+            try { c.setOutputSurface(value); return@post } catch (e: Exception) { Log.w("TapDeck", "切换解码输出失败，重建解码器", e) }
+        }
+        restart()
+    }
+
+    /** 解码器在视频流中途重建后调用：此时只能等下一个关键帧，调用方可重开视频流立即获得关键帧。 */
+    var onKeyFrameNeeded: () -> Unit = {}
+
     /** Surface 销毁回调中必须同步停止解码器，之后系统才会回收 Surface。 */
     fun detachSurfaceBlocking() {
         val done = java.util.concurrent.CountDownLatch(1)
@@ -64,7 +80,7 @@ class VideoDecoder {
     }
 
     /** 新的视频流：丢弃旧配置，等待新的 SPS/PPS。 */
-    fun reset() = handler.post { config = null; pending.clear(); needKey = true; stopCodec() }
+    fun reset() = handler.post { config = null; pending.clear(); needKey = true; restart() }
 
     fun release() {
         handler.post { stopCodec() }
@@ -86,6 +102,8 @@ class VideoDecoder {
         // 新解码器必须从配置帧和关键帧开始。
         pending.clear(); needKey = true
         config?.let { pending.add(it) }
+        // 流已在进行中（已有配置帧）：不必等最长 2 秒的下一个关键帧。
+        if (codec != null && config != null) onKeyFrameNeeded()
     }
 
     private fun create(target: Surface, lowLatency: Boolean): MediaCodec {

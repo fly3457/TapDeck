@@ -19,19 +19,29 @@ interface TouchSink {
      */
     fun pinch(scale: Double, focusX: Double, focusY: Double, panX: Double, panY: Double): Boolean = false
     fun gesture(direction: String) {}
+    /** 视频模式直接操作：单指拖动平移手机上的画面（dp），不移动鼠标。 */
+    fun pan(dx: Double, dy: Double) {}
+    /** 视频模式直接操作：在触点位置单击，轻点为 left、长按为 right（dp）。 */
+    fun clickAt(x: Double, y: Double, button: String) {}
 }
 
 internal data class TouchPoint(val id: Int, val x: Double, val y: Double)
 internal enum class TouchPhase { Down, Add, Move, Remove, Up, Cancel }
 internal data class TouchFrame(val time: Long, val phase: TouchPhase, val points: List<TouchPoint>, val changed: Int = points.firstOrNull()?.id ?: -1)
 
-/** Coordinates are dp; time is monotonic. Android only supplies events and the deadline timer. */
+/**
+ * Coordinates are dp; time is monotonic. Android only supplies events and the deadline timer.
+ *
+ * direct 为真时是视频模式的直接操作：单指拖动平移画面、轻点在该位置左击、长按在该位置右击，
+ * 不再有相对移动与双击拖拽；双指与三指手势不变。
+ */
 internal class TouchpadGestures(
     private val sink: TouchSink,
     private val slop: Double,
     private val doubleTapSlop: Double,
+    private val direct: Boolean = false,
 ) {
-    private enum class Mode { Idle, Single, Second, Drag, Two, TwoEnding, Scroll, Pinch, Three, Consumed }
+    private enum class Mode { Idle, Single, Second, Drag, Pan, Two, TwoEnding, Scroll, Pinch, Three, Consumed }
     private data class Tap(val time: Long, val point: TouchPoint)
     private var mode = Mode.Idle
     private var started = 0L
@@ -47,10 +57,11 @@ internal class TouchpadGestures(
     private var pendingTap: Tap? = null
     private val origins = mutableMapOf<Int, TouchPoint>()
     private var ids = emptyList<Int>()
-    val nextDeadline: Long? get() = pendingTap?.let { it.time + TAP_WINDOW }
+    val nextDeadline: Long? get() = if (direct) (if (mode == Mode.Single && !moved) started + LONG_PRESS else null) else pendingTap?.let { it.time + TAP_WINDOW }
 
     fun advance(now: Long) {
-        if (nextDeadline?.let { now >= it } == true) flushTap()
+        if (nextDeadline?.let { now >= it } != true) return
+        if (direct) { sink.clickAt(origin.x, origin.y, "right"); mode = Mode.Consumed } else flushTap()
     }
 
     fun accept(frame: TouchFrame) {
@@ -70,7 +81,7 @@ internal class TouchpadGestures(
         releaseLeft()
         val point = frame.points.singleOrNull() ?: run { cancel(); return }
         val tap = pendingTap
-        val second = tap != null && frame.time - tap.time in 0 until TAP_WINDOW && distance(point, tap.point) <= doubleTapSlop
+        val second = !direct && tap != null && frame.time - tap.time in 0 until TAP_WINDOW && distance(point, tap.point) <= doubleTapSlop
         if (second) {
             pendingTap = null
             leftHeld = true
@@ -123,7 +134,22 @@ internal class TouchpadGestures(
         track(frame.points)
         val points = ordered(frame.points) ?: return
         when (mode) {
-            Mode.Single, Mode.Second, Mode.Drag -> {
+            Mode.Single, Mode.Pan -> if (direct) {
+                val point = points.singleOrNull() ?: return
+                // 超过触摸阈值即为拖动画面；从按下点开始累计，阈值内的位移不会丢失。
+                if (moved) {
+                    mode = Mode.Pan
+                    sink.pan(point.x - last.x, point.y - last.y)
+                    last = point
+                }
+            } else {
+                val point = points.singleOrNull() ?: return
+                if (moved) {
+                    sink.move(point.x - last.x, point.y - last.y)
+                    last = point
+                }
+            }
+            Mode.Second, Mode.Drag -> {
                 val point = points.singleOrNull() ?: return
                 if (mode == Mode.Second && moved) mode = Mode.Drag
                 // Buffer tap jitter: the double-click's mouse position stays stable.
@@ -176,7 +202,9 @@ internal class TouchpadGestures(
         track(frame.points)
         val elapsed = frame.time - started
         when (mode) {
-            Mode.Single -> if (!moved && elapsed in 0 until TAP_WINDOW) pendingTap = Tap(frame.time, origin)
+            Mode.Single -> if (direct) {
+                if (!moved && elapsed in 0 until LONG_PRESS) sink.clickAt(origin.x, origin.y, "left")
+            } else if (!moved && elapsed in 0 until TAP_WINDOW) pendingTap = Tap(frame.time, origin)
             Mode.Second -> {
                 releaseLeft()
                 // The first PC click starts on the SECOND finger-down. Complete the
@@ -201,7 +229,11 @@ internal class TouchpadGestures(
     }
     private fun distance(a: TouchPoint, b: TouchPoint) = hypot(a.x - b.x, a.y - b.y)
     private fun center(points: List<TouchPoint>) = TouchPoint(-1, points.sumOf { it.x } / points.size, points.sumOf { it.y } / points.size)
-    companion object { const val TAP_WINDOW = 300L }
+    companion object {
+        const val TAP_WINDOW = 300L
+        /** 视频模式长按右击的判定时间。 */
+        const val LONG_PRESS = 500L
+    }
 }
 
 /** Windows vertical and horizontal wheels have different positive directions. */

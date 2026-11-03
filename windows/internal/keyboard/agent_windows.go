@@ -263,6 +263,7 @@ func (a *Agent) StopVoice(token string, done func(error)) error {
 }
 func (a *Agent) Move(dx, dy, sx, sy int32) error  { return a.mouse.Move(dx, dy, sx, sy) }
 func (a *Agent) Button(b string, down bool) error { return a.mouse.Button(b, down) }
+func (a *Agent) MoveTo(x, y int32) error          { return a.mouse.MoveTo(x, y) }
 func (a *Agent) ReleaseAll() {
 	a.mouse.ReleaseAll()
 	a.mu.Lock()

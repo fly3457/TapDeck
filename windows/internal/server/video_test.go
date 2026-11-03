@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -137,5 +139,60 @@ func TestVideoDisabledOnPC(t *testing.T) {
 	_ = write(ctx, conn, Message{Type: "video_start"})
 	if m := readUntil(t, ctx, conn, "video_error"); stringField(m, "code") != "disabled" {
 		t.Fatalf("%v", m)
+	}
+}
+
+type pointerInput struct {
+	quietInput
+	mu     sync.Mutex
+	events []string
+}
+
+func (p *pointerInput) MoveTo(x, y int32) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.events = append(p.events, fmt.Sprintf("to:%d,%d", x, y))
+	return nil
+}
+func (p *pointerInput) Button(b string, down bool) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.events = append(p.events, fmt.Sprintf("%s:%v", b, down))
+	return nil
+}
+func (p *pointerInput) snapshot() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.events...)
+}
+
+func TestVideoPointerClicksAtDisplayPosition(t *testing.T) {
+	in := &pointerInput{}
+	s, client := testReceiver(t, func(s *Server) {
+		s.Input = in
+		s.Video = video.NewManager(testVideoLauncher{launched: make(chan struct{})})
+	})
+	conn, ctx := testSocket(t, s, client, "")
+	token := testPair(t, s, conn, ctx)
+	conn.CloseNow()
+	conn, ctx = testSocket(t, s, client, token)
+	ready := testRead(t, ctx, conn)
+	sid, _ := strconv.ParseUint(stringField(ready, "session"), 16, 64)
+
+	// 画面未打开：只提示，屏障仍推进，不注入。
+	_ = write(ctx, conn, Message{Type: "pointer", Action: "click", PX: 10, PY: 20, Epoch: 0, NextEpoch: 1})
+	if m := readUntil(t, ctx, conn, "error"); stringField(m, "code") != "touchpad_error" {
+		t.Fatalf("%v", m)
+	}
+	if _, err := s.Video.Start(sid, video.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	_ = write(ctx, conn, Message{Type: "pointer", Action: "click", PX: 100, PY: 200, Epoch: 1, NextEpoch: 2})
+	_ = write(ctx, conn, Message{Type: "pointer", Action: "right_click", PX: 99999, PY: -5, Epoch: 2, NextEpoch: 3})
+	_ = write(ctx, conn, Message{Type: "heartbeat", Tick: 7})
+	readUntil(t, ctx, conn, "heartbeat")
+	want := []string{"to:100,200", "left:true", "left:false", "to:2559,0", "right:true", "right:false"}
+	if got := in.snapshot(); !slices.Equal(got, want) {
+		t.Fatalf("events %v, want %v", got, want)
 	}
 }

@@ -42,6 +42,7 @@ func (o *Owner) sync(r request) error {
 func (o *Owner) KeyboardStatus() Status             { return o.agent.KeyboardStatus() }
 func (o *Owner) ConfigureBackend(mode string) error { return o.agent.ConfigureBackend(mode) }
 func (o *Owner) Move(x, y, sx, sy int32) error      { return o.agent.Move(x, y, sx, sy) }
+func (o *Owner) MoveTo(x, y int32) error            { return o.agent.MoveTo(x, y) }
 func (o *Owner) Button(b string, down bool) error   { return o.agent.Button(b, down) }
 func (o *Owner) Chord(k string) error               { return o.sync(request{Action: "chord", Chord: k}) }
 func (o *Owner) Hold(k string, down bool) error {

@@ -295,6 +295,25 @@ func (c *Controller) Button(button string, down bool) error {
 	c.buttons[button] = down
 	return nil
 }
+
+var getSystemMetrics = user32.NewProc("GetSystemMetrics")
+
+// MoveTo 把光标移到虚拟桌面的物理像素坐标（视频模式点哪到哪）。使用绝对坐标的
+// SendInput，不受“提高指针精确度”加速影响；坐标按虚拟桌面归一化到 0–65535。
+func (c *Controller) MoveTo(x, y int32) error {
+	metric := func(i uintptr) int32 { v, _, _ := getSystemMetrics.Call(i); return int32(v) }
+	left, top, width, height := metric(76), metric(77), metric(78), metric(79) // SM_X/YVIRTUALSCREEN, SM_CX/CYVIRTUALSCREEN
+	if width <= 1 || height <= 1 {
+		return fmt.Errorf("无法读取桌面尺寸")
+	}
+	nx := int32((int64(x-left)*65535 + int64(width-1)/2) / int64(width-1))
+	ny := int32((int64(y-top)*65535 + int64(height-1)/2) / int64(height-1))
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	// MOUSEEVENTF_MOVE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_ABSOLUTE
+	return c.inject(nativeInput{DX: nx, DY: ny, Flags: 0x0001 | 0x4000 | 0x8000})
+}
+
 func (c *Controller) ReleaseAll() {
 	c.mu.Lock()
 	defer c.mu.Unlock()

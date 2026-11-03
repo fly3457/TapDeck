@@ -36,7 +36,8 @@ class VideoModeView(
     saveMicPosition: (Float, Float) -> Unit,
 ) : FrameLayout(context) {
     private val density = resources.displayMetrics.density
-    val viewport = VideoViewport()
+    // 改为直接点击后不再自动跟随光标平移，以免点击边缘时画面跳动；用户单指拖动画面。
+    val viewport = VideoViewport().apply { followCursor = false }
     var onExit: () -> Unit = {}
     var onRetry: () -> Unit = {}
     var connected = false
@@ -45,26 +46,41 @@ class VideoModeView(
     private val surface = SurfaceView(context).apply {
         holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(h: SurfaceHolder) { decoder.setSurface(h.surface) }
-            override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, height: Int) { decoder.setSurface(h.surface) }
+            // 旋转时系统可能在同一个 Surface 对象下换了新的缓冲队列：必须重新指定解码输出，否则画面停在最后一帧。
+            override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, height: Int) { decoder.surfaceChanged(h.surface) }
             override fun surfaceDestroyed(h: SurfaceHolder) { decoder.detachSurfaceBlocking() }
         })
     }
 
     /** 捏合交给视口；其余手势原样发往 PC。 */
+    /** 在 PC 画面的 (x, y) 处单击：action 为 click 或 right_click，坐标为 PC 屏幕像素。 */
+    var onPointer: (String, Int, Int) -> Unit = { _, _, _ -> }
+    var onFeedback: (KeyFeedback) -> Unit = {}
     private val sink = object : TouchSink by client {
         override fun pinch(scale: Double, focusX: Double, focusY: Double, panX: Double, panY: Double): Boolean {
             viewport.pinch(scale, focusX * density, focusY * density, panX * density, panY * density)
             requestLayout()
             return true
         }
+        override fun pan(dx: Double, dy: Double) {
+            viewport.pan(dx * density, dy * density)
+            placeSurface()
+        }
+        override fun clickAt(x: Double, y: Double, button: String) {
+            // 点在两侧黑边等画面之外时不操作电脑。
+            val (cx, cy) = viewport.toContent(x * density, y * density) ?: return
+            if (button == "right") onFeedback(KeyFeedback.LongPress)
+            onPointer(if (button == "right") "right_click" else "click", cx.toInt(), cy.toInt())
+        }
     }
     private val configuration = ViewConfiguration.get(context)
-    private val gestures = TouchpadGestures(sink, configuration.scaledTouchSlop / density.toDouble(), configuration.scaledDoubleTapSlop / density.toDouble())
+    // 直接操作：单指拖动平移画面、轻点左击、长按右击；双指滚动／缩放画面、双指轻点右击与三指手势不变。
+    private val gestures = TouchpadGestures(sink, configuration.scaledTouchSlop / density.toDouble(), configuration.scaledDoubleTapSlop / density.toDouble(), direct = true)
     private val handler = Handler(Looper.getMainLooper())
     private val deadline = Runnable { if (connected) gestures.advance(SystemClock.uptimeMillis()); scheduleDeadline() }
 
     private val touchLayer = object : View(context) {
-        init { id = R.id.video_touch_layer; isClickable = true; contentDescription = "电脑画面：单指移动鼠标，轻点左击，双指滚动，捏合缩放画面" }
+        init { id = R.id.video_touch_layer; isClickable = true; contentDescription = "电脑画面：单指拖动画面，轻点该位置左击，长按该位置右击，双指滚动，捏合缩放画面" }
         override fun onTouchEvent(e: MotionEvent): Boolean = this@VideoModeView.touch(e)
         override fun performClick(): Boolean { super.performClick(); return true }
     }

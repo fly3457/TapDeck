@@ -149,3 +149,42 @@ func (s *Server) VideoDevice() string {
 	}
 	return ""
 }
+
+// absolutePointer 是支持绝对坐标移动光标的输入后端（视频模式点击位置）。
+type absolutePointer interface {
+	MoveTo(x, y int32) error
+}
+
+// pointer 处理视频模式的点击：把光标移到手机点击的画面位置，再按动作按键。
+// 动作：click（左键单击）、right_click（右键单击）。坐标钳制在所捕获显示器内。
+// 画面已关闭或后端不支持时只提示、不注入，鼠标分段屏障照常推进。
+func (ss *session) pointer(m Message) error {
+	notice := func(reason string) error {
+		_ = ss.send(map[string]any{"type": "error", "code": "touchpad_error", "reason": reason})
+		return nil
+	}
+	if m.Action != "click" && m.Action != "right_click" {
+		return notice("无效的画面点击")
+	}
+	d, ok := ss.s.Video.DisplayFor(ss.id)
+	if !ok {
+		return notice("电脑画面未打开，无法按位置点击")
+	}
+	mover, ok := ss.controller().(absolutePointer)
+	if !ok {
+		return notice("电脑端不支持按位置点击，请升级")
+	}
+	x := int32(d.Left) + min(max(m.PX, 0), int32(d.Width-1))
+	y := int32(d.Top) + min(max(m.PY, 0), int32(d.Height-1))
+	if err := mover.MoveTo(x, y); err != nil {
+		return err
+	}
+	button := "left"
+	if m.Action == "right_click" {
+		button = "right"
+	}
+	if err := ss.mouseButton(button, true); err != nil {
+		return err
+	}
+	return ss.mouseButton(button, false)
+}

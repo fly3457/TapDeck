@@ -69,6 +69,9 @@ type Message struct {
 	FPS       int    `json:"fps,omitempty"`
 	Session   string `json:"session,omitempty"`
 	Stream    string `json:"stream,omitempty"`
+	// pointer：视频画面上的点击位置，单位为所捕获显示器的物理像素。
+	PX int32 `json:"px,omitempty"`
+	PY int32 `json:"py,omitempty"`
 }
 type Pending struct {
 	ID       string
@@ -782,7 +785,7 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 		if e = ss.handle(m); e != nil {
 			_ = ss.send(map[string]any{"type": "error", "reason": e.Error()})
 			// A failed barrier cannot leave the peers on different mouse epochs.
-			if m.Type == "mouse_button" || m.Type == "zoom" || m.Type == "gesture" {
+			if m.Type == "mouse_button" || m.Type == "zoom" || m.Type == "gesture" || m.Type == "pointer" {
 				return
 			}
 		}
@@ -1101,6 +1104,8 @@ func (ss *session) handle(m Message) error {
 		}
 		ss.ending = true
 		ss.s.Audio.End(ss.audioRecording, time.Duration(v.StopDelayMS)*time.Millisecond, finish)
+	case "pointer":
+		return ss.controlBarrier(m, func() error { return ss.pointer(m) })
 	case "video_start":
 		// 首次探测编码器需要数秒，不能占住会话锁和控制消息循环。
 		go ss.startVideo(m)

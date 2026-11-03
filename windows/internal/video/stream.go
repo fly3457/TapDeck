@@ -149,6 +149,19 @@ func (m *Manager) StopAll() {
 	}
 }
 
+// DisplayFor 返回 owner 当前视频流捕获的显示器，用于把手机上的点击换算为桌面坐标。
+func (m *Manager) DisplayFor(owner uint64) (Display, bool) {
+	if m == nil {
+		return Display{}, false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.active == nil || m.active.Owner != owner || m.active.ctx.Err() != nil {
+		return Display{}, false
+	}
+	return m.active.Plan.Display, true
+}
+
 // Owner 返回当前视频流的会话 ID，没有时为 0。
 func (m *Manager) Owner() uint64 {
 	if m == nil {

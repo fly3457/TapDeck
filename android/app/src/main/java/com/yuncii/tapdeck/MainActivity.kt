@@ -348,6 +348,8 @@ class MainActivity : ComponentActivity() {
             view.mic.onFeedback = { view.keyFeedback(it, feedbackController) }
             view.onKeyboardChange = { mode -> videoShortcutHold.cancelAll(); videoKeyHold.releaseAll(); videoKeyboardMode = mode }
             view.onKeyboardSize = { videoKeyboardSize = it }
+            view.onPointer = vm.client::pointer
+            view.onFeedback = { view.keyFeedback(it, feedbackController) }
             view.keyboardHost.addView(compose {
                 val state by vm.client.state.collectAsStateWithLifecycle()
                 val epoch = state.connectionEpoch
@@ -385,6 +387,8 @@ class MainActivity : ComponentActivity() {
             }, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         }
         videoDecoder.onError = { reason -> runOnUiThread { vm.client.stopVideo(); android.widget.Toast.makeText(this, reason, android.widget.Toast.LENGTH_LONG).show(); exitVideo() } }
+        // 旋转等导致解码器中途重建：重开视频流，PC 新的编码进程会立即发出关键帧（约 0.3 秒恢复）。
+        videoDecoder.onKeyFrameNeeded = { runOnUiThread { if (vm.videoOn.value && vm.client.state.value.video.phase == VideoPhase.Streaming) vm.client.stopVideo() } }
         vm.client.videoSink = { msg ->
             when (msg) {
                 is VideoFrame -> videoDecoder.submit(msg)
