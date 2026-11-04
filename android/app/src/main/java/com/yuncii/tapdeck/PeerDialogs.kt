@@ -29,7 +29,7 @@ internal fun PeerManager(
                 Column {
                     Text(pc.displayName, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     if (pc.alias.isNotEmpty()) Text(pc.peer.name, style = MaterialTheme.typography.bodySmall)
-                    Text(pc.address, style = MaterialTheme.typography.bodySmall)
+                    Text(pc.address + if (pc.addresses.isEmpty()) "" else "（另记住 ${pc.addresses.size} 个地址）", style = MaterialTheme.typography.bodySmall)
                     Text(when {
                         pc.id == state.selectedPeerId -> "当前电脑 · ${state.status}"
                         pc.needsPairing -> "需重新配对"

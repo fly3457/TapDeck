@@ -356,8 +356,8 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
         val a = InetAddress.getByName(host)
         require(a is java.net.Inet4Address && (a.isSiteLocalAddress || a.isLoopbackAddress)) { "仅支持局域网 IPv4 地址" }
     }
-    private fun pairInfo(host: String, port: Int, attempt: Long): JsonObject {
-        val call = http.newCall(Request.Builder().url("http://$host:$port/api/pair-info").build())
+    private fun pairInfo(host: String, port: Int, attempt: Long, client: OkHttpClient = http): JsonObject {
+        val call = client.newCall(Request.Builder().url("http://$host:$port/api/pair-info").build())
         synchronized(lock) {
             if (!current(attempt)) throw CancellationException("Target changed")
             bootstrapCall = call
@@ -369,6 +369,33 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
             }
         } finally { synchronized(lock) { if (bootstrapCall === call) bootstrapCall = null } }
     }
+    /** 探测已知地址时缩短超时：换了网络后旧地址通常不可达，不必每个等满 5 秒。 */
+    private val probeHttp by lazy { http.newBuilder().connectTimeout(1500, java.util.concurrent.TimeUnit.MILLISECONDS).readTimeout(2500, java.util.concurrent.TimeUnit.MILLISECONDS).build() }
+    private class IdentityChanged : Exception("电脑身份已变化")
+
+    /**
+     * 依次探测这台电脑记住的所有地址（当前地址在前），返回第一个证书指纹一致的地址及其元数据。
+     * 换 Wi-Fi / 网段后电脑 IP 不同：只要曾在该网络连过，就能自动连回。只有一个地址且被
+     * 另一台电脑占用时仍按“身份已变化”处理；多个地址时跳过被占用的旧地址。
+     */
+    private fun locate(p: Peer, attempt: Long): Pair<Peer, JsonObject> {
+        val candidates = (listOf(p) + (directory.value.find(p.id)?.candidates() ?: emptyList())).distinctBy { it.host + ":" + it.httpPort }
+        var mismatch = false
+        var failure: Exception? = null
+        for (c in candidates) {
+            try {
+                validateHost(c.host)
+                val m = pairInfo(c.host, c.httpPort, attempt, if (candidates.size > 1) probeHttp else http)
+                if (!m.str("pin").equals(p.pin, true)) { mismatch = true; continue }
+                val wss = m.long("wss_port").toInt().takeIf { it in 1024..65535 } ?: c.wssPort
+                return c.copy(wssPort = wss) to m
+            } catch (e: CancellationException) { throw e } catch (e: Exception) { failure = e }
+        }
+        if (mismatch && candidates.size == 1) throw IdentityChanged()
+        if (candidates.size > 1) throw java.io.IOException("记住的 ${candidates.size} 个地址都没找到这台电脑；如果换了网络，请扫描电脑配对二维码添加新地址")
+        throw failure ?: java.io.IOException("连接失败")
+    }
+
     private suspend fun connectSafely(p: Peer, attempt: Long) {
         try { connect(p, attempt) }
         catch (e: CancellationException) { throw e }
@@ -380,13 +407,15 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
             }
         }
     }
-    private suspend fun connect(p: Peer, attempt: Long) {
+    private suspend fun connect(saved: Peer, attempt: Long) {
         val gen = synchronized(lock) { if (!current(attempt)) return; generation++; generation }
         mutable.update { it.copy(status = "正在连接", phase = ConnectionPhase.Connecting, connectionEpoch = gen, pairing = "", pairingConfirmed = false, error = "") }
         val metadata: JsonObject
+        val p: Peer
         try {
-            metadata = withContext(Dispatchers.IO) { validateHost(p.host); pairInfo(p.host, p.httpPort, attempt) }
+            val located = withContext(Dispatchers.IO) { locate(saved, attempt) }
             if (!current(attempt, gen)) return
+            p = located.first; metadata = located.second
             if (metadata.long("version") != CONTROL_VERSION.toLong()) {
                 reconnect = false
                 mutable.update { it.copy(status = "版本不匹配", phase = ConnectionPhase.Disconnected, error = "请升级 TapDeck 至兼容协议版本") }
@@ -398,7 +427,11 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
                 mutable.update { it.copy(status = "电脑身份已变化", phase = ConnectionPhase.NeedsPairing, error = "请重新扫描该电脑配对网址并核对校验码") }
                 return
             }
-        } catch (e: CancellationException) { throw e } catch (e: Exception) { lost(gen, e.message ?: "连接失败"); return }
+        } catch (e: CancellationException) { throw e } catch (e: IdentityChanged) {
+            reconnect = false
+            mutable.update { it.copy(status = "电脑身份已变化", phase = ConnectionPhase.NeedsPairing, error = "请重新扫描该电脑配对网址并核对校验码") }
+            return
+        } catch (e: Exception) { lost(gen, e.message ?: "连接失败"); return }
         val candidate = p.copy(name = metadata.str("name").ifBlank { p.name })
         val id = withContext(Dispatchers.IO) { store.deviceId() }
         if (!current(attempt, gen)) return
