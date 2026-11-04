@@ -4,6 +4,7 @@
 
 - 每次修改完成后，都必须将本次改动提交到 Git，不得仅保留为未提交的工作区改动。
 - 提交说明应清晰记录修改内容与目的，让 Git 历史作为项目的长期记忆与追溯依据。
+- 提交说明和 PR 描述不得添加 `Co-Authored-By: Claude …` 等 AI 署名或“Generated with Claude Code”字样，避免 AI 账号出现在 GitHub Contributors 中。
 
 ## 每次迭代的版本与交付（长期约定）
 
