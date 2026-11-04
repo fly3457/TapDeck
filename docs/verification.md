@@ -11,6 +11,7 @@
 | 验证项 | 结果 |
 |---|---|
 | 实机 nubia NX741J（1216×2688，520 dpi，约 374 dp 宽） | 横屏视频模式：铃铛位于四角框左侧，角标显示 6 条未读；点击后弹出“电脑通知”列表，角标随即清除；竖屏下连接信息与铃铛不重叠。截图含 PC 桌面内容，未入库 |
+| 推送复测（接收端 0.5.0 + Android 0.5.1） | 15:11–15:13 经 `tapdeck-notify.cmd --notify-title` 连发三条：横屏视频模式中顶部白色横幅显示约 3 秒，消失后铃铛角标为 1；普通界面顶部横幅正常；App 切到后台后以“电脑通知”渠道（importance 4，按 PC 分组）弹出系统横幅“推送测试 3/3 · PC-77”，前台服务通知同时在 |
 | 官方构建 | `scripts/build-windows.ps1 -OutputDirectory dist/0.5.1`：Android release 构建与单元测试、Go 测试与 vet、三个 EXE 通过；`--apk-info` 为 Android 0.5.1 / code 26、release、不可调试、证书不变；正式 APK 覆盖安装到实机 |
 
 官方交付目录 `dist/0.5.1`：
