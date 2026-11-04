@@ -12,7 +12,7 @@
 |---|---|
 | 读取 Windows 通知 | 本机 Windows 11 26200：未打包的接收端进程调用 `UserNotificationListener`，权限状态为允许，可读到 Chrome、Windows 安全中心、Claude 桌面版等应用的通知，无需 MSIX／sparse package。纯 Go WinRT 调用的接口 IID 与 vtable 顺序已用 .NET 元数据反射核对 |
 | Toast 往返 | `TAPDECK_LIVE_NOTIFY=1` 实测：以 `Yuncii.TapDeck` 弹出含 emoji 的 Toast，监听器约 0.3 秒内读回，标题与正文一致；仅登记在注册表的 AppUserModelId 没有 AppInfo，因此应用名为空，属预期 |
-| Agent hook | GUI 子系统 EXE 经 `tapdeck-notify.cmd` 从 Git Bash 调用，stdin 正常传入；`--agent-hook claude` 生成 `Claude Code · TapDeck` 通知。单元测试覆盖 Stop（读取会话记录最后一条回复）、Notification、Codex 负载、XML 转义；批处理改用系统代码页，含中文的 EXE 路径也能正确调用 |
+| Agent hook | GUI 子系统 EXE 经 `tapdeck-notify.cmd` 从 Git Bash 调用，stdin 正常传入；`--agent-hook claude` 生成 `Claude Code · TapDeck` 通知。单元测试覆盖 Stop（读取会话记录最后一条回复）、Notification、Codex 负载、XML 转义；批处理改用系统代码页，含中文的 EXE 路径也能正确调用。端到端：在 `~/.claude/settings.json` 写入 Stop / Notification hook 后运行 `claude -p`（Claude Code 2.1.312），结束时 PC 弹出 Toast，手机收到“Claude Code · TapDeck / 任务完成：通知转发端到端测试完成”（摘要取自会话记录） |
 | 协议与心跳 | Go 集成测试：`notify` 能力、广播、排除应用、空通知、关闭转发、`notify_sync` 按 seq／boot 补发、无监听器时报错、后台模式超过 1 秒仍保持连接并收到 PC keepalive、回到前台恢复 1 秒超时 |
 | Android 收件箱 | 单元测试覆盖 seq 去重、boot 变化、多 PC 独立与忘记、100 条上限、已读／清空后保留游标、补发旧通知不弹系统通知 |
 | 实机 nubia NX741J（Android 16） | 前台服务（connectedDevice）随已配对电脑启动；锁屏时 PC 通知以“电脑通知”渠道弹出并带电脑名；App 在后台时为横幅通知；前台时顶部显示白色卡片横幅，顶栏铃铛显示未读角标；接收端重启后手机自动重连。通知权限首次由 adb 授予（App 内请求只在连接后、前台时触发一次） |
@@ -28,7 +28,7 @@
 | `TapDeck-debug-0.5.0.exe` | 33,847,808 | `7a945382e1dd6e3f87ec0a605538e52f821950c5e032b43562d8d729f2698f22` |
 | `TapDeck-hidprobe-0.5.0.exe` | 8,048,128 | `62e274692b295c0940c103e557c65cf13d47cee52a1e173c7deb7210dde72377` |
 
-日志：`.tools/windows-release-0.5.0-build.log`。待用户实测：锁屏 10 分钟以上、未充电状态下的深度 Doze、App 内电池优化引导弹窗、Claude Code hook 端到端、其他机型的后台保活。
+日志：`.tools/windows-release-0.5.0-build.log`。待用户实测：锁屏 10 分钟以上、未充电状态下的深度 Doze、App 内电池优化引导弹窗、Claude Code 的 Notification 事件（需授权提示时）、其他机型的后台保活。
 
 ## 0.4.1 视频模式交互优化与多地址重连
 
