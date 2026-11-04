@@ -2,7 +2,27 @@
 
 测试日期：2026-10-06 至 2026-11-04。使用页描述当前行为；历史结果按当时版本理解。截图中的示例连接和录音状态不作为实机识别证明。
 
-当前：接收端 **0.4.0**、Android **0.4.0 / code 23**· [安装](installation.md) · [版本规则](versioning.md)
+当前：接收端 **0.5.1**、Android **0.5.1 / code 26**· [安装](installation.md) · [版本规则](versioning.md)
+
+## 0.5.1 视频模式通知图标
+
+2026-11-04 完成，未公开发布。视频模式右上角工具栏在“恢复默认比例”左边加铃铛，红色角标显示未读数，点击打开电脑通知列表；窄屏竖屏时左上角连接信息自动缩短，避免与右侧四个图标重叠。
+
+| 验证项 | 结果 |
+|---|---|
+| 实机 nubia NX741J（1216×2688，520 dpi，约 374 dp 宽） | 横屏视频模式：铃铛位于四角框左侧，角标显示 6 条未读；点击后弹出“电脑通知”列表，角标随即清除；竖屏下连接信息与铃铛不重叠。截图含 PC 桌面内容，未入库 |
+| 官方构建 | `scripts/build-windows.ps1 -OutputDirectory dist/0.5.1`：Android release 构建与单元测试、Go 测试与 vet、三个 EXE 通过；`--apk-info` 为 Android 0.5.1 / code 26、release、不可调试、证书不变；正式 APK 覆盖安装到实机 |
+
+官方交付目录 `dist/0.5.1`：
+
+| 产物 | 字节数 | SHA-256 |
+|---|---:|---|
+| `TapDeck-0.5.1.apk` | 8,615,777 | `64b59cf3e8ae4ea574d19a0517d07dff43757275b9d9c6befb1d8f0aeb03a0b7` |
+| `TapDeck-0.5.1.exe` | 28,254,208 | `1b7964712c8b3654809708c7d41dd69c2155a10adc4e1a5e3bacb1b3176358d1` |
+| `TapDeck-debug-0.5.1.exe` | 33,847,808 | `5aa1d4ba1dcaa16d53420a2d019870bc613f55243c329908ccf2b524e51fe7e7` |
+| `TapDeck-hidprobe-0.5.1.exe` | 8,048,128 | `c5ae394499af36feac4f21d8f629c34613def60d4507dd4a95e46541941a0419` |
+
+日志：`.tools/windows-release-0.5.1-build.log`。
 
 ## 0.5.0 电脑通知转发与 Agent 完成提醒
 

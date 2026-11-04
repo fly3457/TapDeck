@@ -154,6 +154,34 @@ class VideoModeView(
         contentDescription = description
         setOnClickListener { click() }
     }
+    /** 点击铃铛：MainActivity 打开电脑通知列表。 */
+    var onNotifications: () -> Unit = {}
+    private val notificationBadge = TextView(context).apply {
+        setTextColor(Color.WHITE)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+        gravity = Gravity.CENTER
+        includeFontPadding = false
+        minWidth = (16 * density).roundToInt()
+        val pad = (3 * density).roundToInt()
+        setPadding(pad, 0, pad, 0)
+        background = GradientDrawable().apply { cornerRadius = 8 * density; setColor(0xFFE5484D.toInt()) }
+        visibility = GONE
+    }
+    // 铃铛与普通模式顶栏一致：红色角标显示未读数，角标不拦截点击。
+    private val notificationsButton = FrameLayout(context).apply {
+        addView(iconButton(R.id.video_notifications_button, R.drawable.ic_lucide_bell, "电脑通知") { cancel(); onNotifications() },
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        addView(notificationBadge, LayoutParams(LayoutParams.WRAP_CONTENT, (16 * density).roundToInt(), Gravity.TOP or Gravity.END))
+    }
+    private var unread = -1
+    /** 未读通知数；为 0 时隐藏角标。 */
+    fun setUnread(count: Int) {
+        if (count == unread) return
+        unread = count
+        notificationBadge.text = if (count > 99) "99+" else count.toString()
+        notificationBadge.visibility = if (count > 0) VISIBLE else GONE
+        findViewById<View>(R.id.video_notifications_button).contentDescription = if (count > 0) "电脑通知，$count 条未读" else "电脑通知"
+    }
     private val resetButton = iconButton(R.id.video_reset_button, R.drawable.ic_lucide_scan, "恢复默认画面比例") {
         viewport.reset(aroundCursor = false); requestLayout()
     }
@@ -163,12 +191,12 @@ class VideoModeView(
     private val keyboardButton = iconButton(R.id.video_keyboard_button, R.drawable.ic_lucide_keyboard, "显示全键盘") {
         showKeyboard(if (keyboard == VideoKeyboard.Full) VideoKeyboard.None else VideoKeyboard.Full)
     }
-    // 图标固定在屏幕右上角，右对齐。
+    // 图标固定在屏幕右上角，右对齐；铃铛在恢复默认比例的左边。
     private val toolbar = android.widget.LinearLayout(context).apply {
         orientation = android.widget.LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
-        val icon = (36 * density).roundToInt(); val gap = (8 * density).roundToInt()
-        for ((i, b) in listOf(resetButton, shortcutsButton, keyboardButton).withIndex())
+        val icon = (TOOLBAR_ICON_DP * density).roundToInt(); val gap = (TOOLBAR_GAP_DP * density).roundToInt()
+        for ((i, b) in listOf(notificationsButton, resetButton, shortcutsButton, keyboardButton).withIndex())
             addView(b, android.widget.LinearLayout.LayoutParams(icon, icon).apply { if (i > 0) leftMargin = gap })
     }
 
@@ -279,6 +307,10 @@ class VideoModeView(
         shortcutHost.layoutParams.width = (grid.columns * cellW + (grid.columns + 1) * gap).roundToInt()
         shortcutHost.layoutParams.height = (grid.rows * cellH + (grid.rows + 1) * gap).roundToInt()
         if (grid != shortcutGrid) { shortcutGrid = grid; post { onShortcutGrid(grid) } }
+        // 窄屏竖屏时连接信息让出宽度，不与右侧四个图标重叠。
+        val margin = 12 * density
+        val tools = (TOOLBAR_ICONS * TOOLBAR_ICON_DP + (TOOLBAR_ICONS - 1) * TOOLBAR_GAP_DP) * density
+        statusButton.layoutParams.width = minOf(STATUS_WIDTH_DP * density, w - tools - 3 * margin).roundToInt().coerceAtLeast((96 * density).roundToInt())
         keyboardHost.layoutParams.width = size?.width ?: 0
         keyboardHost.layoutParams.height = size?.height ?: 0
         if (size != keyboardSize) { keyboardSize = size; post { onKeyboardSize(keyboardSize) } }
@@ -346,6 +378,9 @@ class VideoModeView(
 }
 
 private const val STATUS_WIDTH_DP = 176
+private const val TOOLBAR_ICONS = 4
+private const val TOOLBAR_ICON_DP = 36
+private const val TOOLBAR_GAP_DP = 8
 private const val SHORTCUT_CELL_W_DP = 62
 private const val SHORTCUT_CELL_H_DP = 40
 private const val SHORTCUT_GAP_DP = 4

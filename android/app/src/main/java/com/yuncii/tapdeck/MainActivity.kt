@@ -359,6 +359,7 @@ class MainActivity : ComponentActivity() {
             videoView = view
             view.visibility = View.GONE
             view.onExit = ::exitVideo
+            view.onNotifications = { notificationsOpen = true }
             view.onRetry = { vm.client.stopVideo() } // 回到 Idle 后由状态收集自动重新请求
             view.mic.onFeedback = { view.keyFeedback(it, feedbackController) }
             view.onKeyboardChange = { mode -> videoShortcutHold.cancelAll(); videoKeyHold.releaseAll(); videoKeyboardMode = mode }
@@ -553,6 +554,9 @@ class MainActivity : ComponentActivity() {
                 launch {
                     // 新通知替换旧横幅并重新计时 3 秒。
                     vm.notifications.banner.collectLatest { n -> banner = n; delay(3000); if (banner == n) banner = null }
+                }
+                launch {
+                    vm.notifications.inbox.collect { videoView?.setUnread(it.unread) }
                 }
                 launch {
                     // 首次连上支持通知转发的电脑时请求一次通知权限。
