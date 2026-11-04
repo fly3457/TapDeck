@@ -6,7 +6,9 @@
 
 ## 0.5.1 视频模式通知图标
 
-2026-11-04 完成，与 0.4.1、0.5.0 的改动一起公开发布为测试版 [v0.5.1](https://github.com/fly3457/TapDeck/releases/tag/v0.5.1)（GitHub prerelease，标签指向源码与验证提交 `10a6850`）。发布资产与 0.4.0 相同：四个程序、两个 `apk-info`、完整 ZIP、公开清单、校验清单、许可证、第三方声明以及 FFmpeg 8.1.3 源码包与签名；GitHub 返回的 13 个资产 SHA-256 与本地 `SHA256SUMS.txt` 一致。视频模式右上角工具栏在“恢复默认比例”左边加铃铛，红色角标显示未读数，点击打开电脑通知列表；窄屏竖屏时左上角连接信息自动缩短，避免与右侧四个图标重叠。
+2026-11-04 完成，与 0.4.1、0.5.0 的改动一起公开发布为测试版 [v0.5.1](https://github.com/fly3457/TapDeck/releases/tag/v0.5.1)（GitHub prerelease，标签指向源码与验证提交 `a4b7c9e`）。发布资产与 0.4.0 相同：四个程序、两个 `apk-info`、完整 ZIP、公开清单、校验清单、许可证、第三方声明以及 FFmpeg 8.1.3 源码包与签名；GitHub 返回的 13 个资产 SHA-256 与本地 `SHA256SUMS.txt` 一致。视频模式右上角工具栏在“恢复默认比例”左边加铃铛，红色角标显示未读数，点击打开电脑通知列表；窄屏竖屏时左上角连接信息自动缩短，避免与右侧四个图标重叠。
+
+> 2026-11-04 发布后改写了 Git 历史：去掉 24 个提交说明中的 AI 署名行，各提交的文件内容不变，但提交号全部更新（例如源码提交 `10a6850` → `a4b7c9e`）。按用户要求删除了 v0.3.0-prototype、v0.3.6、v0.3.18、v0.3.19、v0.4.0 标签，只重建 v0.5.1。旧标签对应的 Release 随之转为草稿、不再公开，下文历史段落中的旧 Release 链接与旧提交号仅作记录。
 
 | 验证项 | 结果 |
 |---|---|
@@ -118,7 +120,7 @@
 
 ### 公开发布
 
-2026-11-03 已公开 [v0.4.0 Release（测试版）](https://github.com/fly3457/TapDeck/releases/tag/v0.4.0)，GitHub 公开时间 `2026-11-03T09:01:17Z`。附注标签指向实现、版本与验证记录提交 [686c566](https://github.com/fly3457/TapDeck/commit/686c56669ff02fb0d1e48b2231ea5b0237a17821)。13 个资产包括四个带版本号的程序、两份 `--apk-info`、公开 `release-manifest.json`（含 `source_commit` 与内嵌 FFmpeg 哈希）、`SHA256SUMS.txt`、LICENSE、第三方声明、完整 ZIP（69 个文件），以及 LGPL 对应源码 `ffmpeg-8.1.3.tar.xz` 和官方签名 `.asc`。发布后全部下载回独立目录：12 个文件与公开 `SHA256SUMS.txt` 逐项一致，ZIP 内 10 个文件与其内部校验清单一致；校验清单与上一版相同，使用 CRLF 换行。原 [v0.3.19](https://github.com/fly3457/TapDeck/releases/tag/v0.3.19) 保留为历史版本。
+2026-11-03 已公开 [v0.4.0 Release（测试版）](https://github.com/fly3457/TapDeck/releases/tag/v0.4.0)，GitHub 公开时间 `2026-11-03T09:01:17Z`。附注标签指向实现、版本与验证记录提交 [39f1f27](https://github.com/fly3457/TapDeck/commit/39f1f2718b4453764794237fa4333d22b61bf12b)（2026-11-04 改写历史前为 `686c566`）。13 个资产包括四个带版本号的程序、两份 `--apk-info`、公开 `release-manifest.json`（含 `source_commit` 与内嵌 FFmpeg 哈希）、`SHA256SUMS.txt`、LICENSE、第三方声明、完整 ZIP（69 个文件），以及 LGPL 对应源码 `ffmpeg-8.1.3.tar.xz` 和官方签名 `.asc`。发布后全部下载回独立目录：12 个文件与公开 `SHA256SUMS.txt` 逐项一致，ZIP 内 10 个文件与其内部校验清单一致；校验清单与上一版相同，使用 CRLF 换行。原 [v0.3.19](https://github.com/fly3457/TapDeck/releases/tag/v0.3.19) 保留为历史版本。
 
 ## 0.3.19 Android release 交付与签名检查
 
