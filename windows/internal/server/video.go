@@ -163,25 +163,44 @@ func (ss *session) pointer(m Message) error {
 		_ = ss.send(map[string]any{"type": "error", "code": "touchpad_error", "reason": reason})
 		return nil
 	}
-	if m.Action != "click" && m.Action != "right_click" && m.Action != "move" {
+	switch m.Action {
+	case "click", "right_click", "move", "down", "up":
+	default:
 		return notice("无效的画面点击")
 	}
 	d, ok := ss.s.Video.DisplayFor(ss.id)
 	if !ok {
+		// 画面已关闭时仍要松开拖拽中的左键，避免卡住。
+		if m.Action == "up" {
+			ss.releasePointer()
+		}
 		return notice("电脑画面未打开，无法按位置点击")
 	}
 	px, py := min(max(m.PX, 0), int32(d.Width-1)), min(max(m.PY, 0), int32(d.Height-1))
-	if p := ss.s.Pointer; p != nil {
+	if p := ss.s.Pointer; p != nil && !ss.pointerSoftware {
 		var err error
-		if m.Action == "move" {
-			err = p.Move(d, px, py)
-		} else {
+		switch m.Action {
+		case "click", "right_click":
 			err = p.Click(d, px, py, m.Action == "right_click")
+		case "move":
+			err = p.Move(d, px, py)
+		case "down":
+			if err = p.Down(d, px, py); err == nil {
+				ss.pointerHID.Store(true)
+			}
+		case "up":
+			err = p.Up(d, px, py)
+			ss.pointerHID.Store(false)
 		}
 		if err == nil {
 			return nil
 		}
 		log.Printf("video: 虚拟鼠标失败，改用 SendInput：%v", err)
+		// 同一次按住期间不在两种后端之间切换，避免按下与松开落在不同设备上。
+		ss.pointerSoftware = m.Action == "down"
+	}
+	if m.Action == "up" {
+		defer func() { ss.pointerSoftware = false }()
 	}
 	mover, ok := ss.controller().(absolutePointer)
 	if !ok {
@@ -191,9 +210,12 @@ func (ss *session) pointer(m Message) error {
 	if err := mover.MoveTo(x, y); err != nil {
 		return err
 	}
-	// move：双指滚动前把光标移到手指下方，滚轮才会作用于该区域的窗口。
-	if m.Action == "move" {
+	switch m.Action {
+	case "move":
+		// 双指滚动前把光标移到手指下方；左键按住时即为拖拽。
 		return nil
+	case "up":
+		return ss.mouseButton("left", false)
 	}
 	button := "left"
 	if m.Action == "right_click" {
@@ -208,8 +230,18 @@ func (ss *session) pointer(m Message) error {
 	if err := ss.mouseButton(button, true); err != nil {
 		return err
 	}
+	if m.Action == "down" {
+		return nil
+	}
 	pointerPause(pointerPressDuration)
 	return ss.mouseButton(button, false)
+}
+
+// releasePointer 松开本会话通过虚拟鼠标按住的键（拖拽中断开、画面关闭）。
+func (ss *session) releasePointer() {
+	if ss.pointerHID.Swap(false) && ss.s.Pointer != nil {
+		ss.s.Pointer.Release()
+	}
 }
 
 const (

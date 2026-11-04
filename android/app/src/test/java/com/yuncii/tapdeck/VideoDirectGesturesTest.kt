@@ -15,6 +15,7 @@ class VideoDirectGesturesTest {
         override fun pan(dx: Double, dy: Double) { panX += dx; panY += dy; if (events.lastOrNull() != "pan") events.add("pan") }
         override fun clickAt(x: Double, y: Double, button: String) { events.add("at:$button:${x.toInt()},${y.toInt()}") }
         override fun hoverAt(x: Double, y: Double) { events.add("hover:${x.toInt()},${y.toInt()}") }
+        override fun pointerAt(action: String, x: Double, y: Double) { if (action != "move" || events.lastOrNull()?.startsWith("ptr:move") != true) events.add("ptr:$action:${x.toInt()},${y.toInt()}") }
         override fun pinch(scale: Double, focusX: Double, focusY: Double, panX: Double, panY: Double): Boolean { events.add("pinch"); return true }
     }
     private fun p(id: Int = 1, x: Double = 100.0, y: Double = 100.0) = TouchPoint(id, x, y)
@@ -26,9 +27,42 @@ class VideoDirectGesturesTest {
         g.event(100, TouchPhase.Down, p(x = 120.0, y = 340.0)); g.event(180, TouchPhase.Up, p(x = 122.0, y = 341.0))
         assertEquals(listOf("at:left:120,340"), s.events)
         assertNull(g.nextDeadline)
-        // 第二次轻点立即发出，由 PC 按双击时间判定双击，不会进入拖拽。
-        g.event(250, TouchPhase.Down, p(x = 120.0, y = 340.0)); g.event(300, TouchPhase.Up, p(x = 120.0, y = 340.0))
+        // 相隔较久的第二次轻点是新的单击。
+        g.event(900, TouchPhase.Down, p(x = 120.0, y = 340.0)); g.event(950, TouchPhase.Up, p(x = 120.0, y = 340.0))
         assertEquals(listOf("at:left:120,340", "at:left:120,340"), s.events)
+    }
+
+    @Test fun doubleAndTripleTapPressAtFirstTapPosition() {
+        val s = Sink(); val g = gestures(s)
+        g.event(100, TouchPhase.Down, p(x = 120.0, y = 340.0)); g.event(150, TouchPhase.Up, p(x = 120.0, y = 340.0))
+        // 第二次落点略有偏差，仍按第一次的位置按下，Windows 才判定为双击。
+        g.event(250, TouchPhase.Down, p(x = 124.0, y = 343.0)); g.event(300, TouchPhase.Up, p(x = 124.0, y = 343.0))
+        g.event(400, TouchPhase.Down, p(x = 121.0, y = 339.0)); g.event(450, TouchPhase.Up, p(x = 121.0, y = 339.0))
+        assertEquals(listOf("at:left:120,340", "ptr:down:120,340", "ptr:up:120,340", "ptr:down:120,340", "ptr:up:120,340"), s.events)
+        assertNull("双击按住期间不触发长按右击", g.nextDeadline)
+    }
+
+    @Test fun doubleTapHoldAndMoveDragsWithLeftButton() {
+        val s = Sink(); val g = gestures(s)
+        g.event(100, TouchPhase.Down, p(x = 100.0, y = 100.0)); g.event(150, TouchPhase.Up, p(x = 100.0, y = 100.0))
+        g.event(250, TouchPhase.Down, p(x = 100.0, y = 100.0))
+        g.advance(2000)
+        g.event(2100, TouchPhase.Move, p(x = 140.0, y = 160.0))
+        g.event(2200, TouchPhase.Move, p(x = 180.0, y = 200.0))
+        g.event(2300, TouchPhase.Up, p(x = 180.0, y = 200.0))
+        assertEquals(listOf("at:left:100,100", "ptr:down:100,100", "ptr:move:140,160", "ptr:up:180,200"), s.events)
+        assertTrue("拖拽没有平移画面", s.panX == 0.0)
+        // 拖拽结束后的轻点是新的单击，不会接成三击。
+        g.event(2400, TouchPhase.Down, p(x = 180.0, y = 200.0)); g.event(2450, TouchPhase.Up, p(x = 180.0, y = 200.0))
+        assertEquals("at:left:180,200", s.events.last())
+    }
+
+    @Test fun cancelDuringDragReleasesButton() {
+        val s = Sink(); val g = gestures(s)
+        g.event(100, TouchPhase.Down, p()); g.event(150, TouchPhase.Up, p())
+        g.event(250, TouchPhase.Down, p()); g.event(260, TouchPhase.Move, p(x = 150.0))
+        g.accept(TouchFrame(270, TouchPhase.Cancel, emptyList()))
+        assertEquals("ptr:up:150,100", s.events.last())
     }
 
     @Test fun longPressRightClicksOnceAtPosition() {

@@ -66,6 +66,10 @@ class VideoModeView(
             viewport.pan(dx * density, dy * density)
             placeSurface()
         }
+        override fun pointerAt(action: String, x: Double, y: Double) {
+            val (cx, cy) = viewport.toContentClamped(x * density, y * density) ?: return
+            onPointer(action, cx.toInt(), cy.toInt())
+        }
         override fun hoverAt(x: Double, y: Double) {
             val (cx, cy) = viewport.toContent(x * density, y * density) ?: return
             onPointer("move", cx.toInt(), cy.toInt())

@@ -73,6 +73,12 @@ class VideoViewport(private val followMargin: Double = 0.12, private val smoothi
     /** 单指拖动平移画面（像素），不超出画面边界。 */
     fun pan(dx: Double, dy: Double) = pinch(1.0, 0.0, 0.0, dx, dy)
 
+    /** 视图像素坐标换算为 PC 画面像素并钳制在画面内（拖拽经过黑边时仍能按到边缘、并保证松开）。 */
+    fun toContentClamped(x: Double, y: Double): Pair<Double, Double>? {
+        if (!ready) return null
+        return ((x - offsetX) / scale).coerceIn(0.0, contentWidth - 1) to ((y - offsetY) / scale).coerceIn(0.0, contentHeight - 1)
+    }
+
     /** 视图像素坐标换算为 PC 画面像素；落在画面之外（两侧黑边）时返回 null。 */
     fun toContent(x: Double, y: Double): Pair<Double, Double>? {
         if (!ready) return null

@@ -25,6 +25,8 @@ interface TouchSink {
     fun clickAt(x: Double, y: Double, button: String) {}
     /** 视频模式直接操作：双指滚动开始前把鼠标移到双指中心（dp），滚轮才作用于手指下方的区域。 */
     fun hoverAt(x: Double, y: Double) {}
+    /** 视频模式直接操作：双击后按住左键 down、拖动 move、松开 up（dp）。 */
+    fun pointerAt(action: String, x: Double, y: Double) {}
 }
 
 internal data class TouchPoint(val id: Int, val x: Double, val y: Double)
@@ -57,6 +59,9 @@ internal class TouchpadGestures(
     private var moved = false
     private var leftHeld = false
     private var pendingTap: Tap? = null
+    // 直接操作：上一次轻点（已立即点击），用于识别双击、三击与双击后拖拽；anchor 为按下位置。
+    private var directTap: Tap? = null
+    private var anchor = TouchPoint(-1, 0.0, 0.0)
     private val origins = mutableMapOf<Int, TouchPoint>()
     private var ids = emptyList<Int>()
     val nextDeadline: Long? get() = if (direct) (if (mode == Mode.Single && !moved) started + LONG_PRESS else null) else pendingTap?.let { it.time + TAP_WINDOW }
@@ -82,9 +87,16 @@ internal class TouchpadGestures(
     private fun down(frame: TouchFrame) {
         releaseLeft()
         val point = frame.points.singleOrNull() ?: run { cancel(); return }
-        val tap = pendingTap
-        val second = !direct && tap != null && frame.time - tap.time in 0 until TAP_WINDOW && distance(point, tap.point) <= doubleTapSlop
-        if (second) {
+        val tap = if (direct) directTap else pendingTap
+        val second = tap != null && frame.time - tap.time in 0 until TAP_WINDOW && distance(point, tap.point) <= doubleTapSlop
+        directTap = null
+        if (second && direct) {
+            // 在上一次轻点的位置按下：落点相同，Windows 才会判定为双击／三击。
+            anchor = tap!!.point
+            leftHeld = true
+            sink.pointerAt("down", anchor.x, anchor.y)
+            mode = Mode.Second
+        } else if (second) {
             pendingTap = null
             leftHeld = true
             sink.button("left", true)
@@ -94,13 +106,14 @@ internal class TouchpadGestures(
             mode = Mode.Single
         }
         started = frame.time
-        origin = point; last = point; moved = false
+        origin = point; last = if (direct && mode == Mode.Second) anchor else point; moved = false
         origins.clear(); origins[point.id] = point
         ids = listOf(point.id)
     }
 
     private fun add(frame: TouchFrame) {
         pendingTap = null
+        directTap = null
         releaseLeft()
         if (mode == Mode.Idle || mode == Mode.Consumed || mode == Mode.TwoEnding) { mode = Mode.Consumed; return }
         track(frame.points)
@@ -151,7 +164,12 @@ internal class TouchpadGestures(
                     last = point
                 }
             }
-            Mode.Second, Mode.Drag -> {
+            Mode.Second, Mode.Drag -> if (direct) {
+                val point = points.singleOrNull() ?: return
+                // 双击后按住并移动：左键保持按下，跟随手指的绝对位置拖动（例如拖动窗口）。
+                if (mode == Mode.Second && moved) mode = Mode.Drag
+                if (mode == Mode.Drag) { sink.pointerAt("move", point.x, point.y); last = point }
+            } else {
                 val point = points.singleOrNull() ?: return
                 if (mode == Mode.Second && moved) mode = Mode.Drag
                 // Buffer tap jitter: the double-click's mouse position stays stable.
@@ -208,9 +226,14 @@ internal class TouchpadGestures(
         val elapsed = frame.time - started
         when (mode) {
             Mode.Single -> if (direct) {
-                if (!moved && elapsed in 0 until LONG_PRESS) sink.clickAt(origin.x, origin.y, "left")
+                if (!moved && elapsed in 0 until LONG_PRESS) { sink.clickAt(origin.x, origin.y, "left"); directTap = Tap(frame.time, origin) }
             } else if (!moved && elapsed in 0 until TAP_WINDOW) pendingTap = Tap(frame.time, origin)
-            Mode.Second -> {
+            Mode.Second, Mode.Drag -> if (direct) {
+                val held = mode == Mode.Second
+                releaseLeft()
+                // 双击未拖动：可继续第三次轻点构成三击。
+                if (held && !moved) directTap = Tap(frame.time, anchor)
+            } else if (mode == Mode.Second) {
                 releaseLeft()
                 // The first PC click starts on the SECOND finger-down. Complete the
                 // second PC click only now; a held second tap can never open a file.
@@ -227,9 +250,13 @@ internal class TouchpadGestures(
     private fun flushTap() {
         if (pendingTap != null) { pendingTap = null; sink.click("left") }
     }
-    private fun releaseLeft() { if (leftHeld) { leftHeld = false; sink.button("left", false) } }
+    private fun releaseLeft() {
+        if (!leftHeld) return
+        leftHeld = false
+        if (direct) sink.pointerAt("up", last.x, last.y) else sink.button("left", false)
+    }
     fun cancel() {
-        pendingTap = null; releaseLeft()
+        pendingTap = null; directTap = null; releaseLeft()
         mode = Mode.Idle; origins.clear(); ids = emptyList(); zoomRemainder = 0.0
     }
     private fun distance(a: TouchPoint, b: TouchPoint) = hypot(a.x - b.x, a.y - b.y)

@@ -93,6 +93,7 @@ func (ss *session) abortAudio() {
 // Production inputs own their worker queue. Synchronous test/custom inputs
 // retain their own held chords and never clear another live controller.
 func (ss *session) releaseInputs(holds map[string]string, keys map[string]int, recording uint64, voice recordingVoice) {
+	ss.releasePointer()
 	ss.releaseButtons()
 	if ss.input != nil {
 		ss.input.ReleaseAll()

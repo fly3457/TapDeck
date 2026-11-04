@@ -251,6 +251,9 @@ type session struct {
 	keys           map[string]int
 	input          InputController
 	audioRecording uint64
+	// 视频模式拖拽：虚拟鼠标是否被本会话按住；本次按住是否已退回 SendInput。
+	pointerHID      atomic.Bool
+	pointerSoftware bool
 }
 
 func LocalIPs() []net.IP {

@@ -212,6 +212,26 @@ type fakeClicker struct {
 	fail  bool
 }
 
+func (f *fakeClicker) record(s string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, s)
+}
+func (f *fakeClicker) Down(d video.Display, x, y int32) error {
+	f.record(fmt.Sprintf("down %d,%d", x, y))
+	return nil
+}
+func (f *fakeClicker) Up(d video.Display, x, y int32) error {
+	f.record(fmt.Sprintf("up %d,%d", x, y))
+	return nil
+}
+func (f *fakeClicker) Release() { f.record("release") }
+func (f *fakeClicker) snapshot() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.calls...)
+}
+
 func (f *fakeClicker) Move(d video.Display, x, y int32) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -265,5 +285,51 @@ func TestVideoPointerPrefersHardwareClicker(t *testing.T) {
 		if fail != (len(got) > 0) {
 			t.Fatalf("fail=%v SendInput events %v", fail, got)
 		}
+	}
+}
+
+func TestVideoPointerDragAndReleaseOnDisconnect(t *testing.T) {
+	old := pointerPause
+	pointerPause = func(time.Duration) {}
+	t.Cleanup(func() { pointerPause = old })
+	clicker := &fakeClicker{}
+	s, client := testReceiver(t, func(s *Server) {
+		s.Pointer = clicker
+		s.Video = video.NewManager(testVideoLauncher{launched: make(chan struct{})})
+	})
+	conn, ctx := testSocket(t, s, client, "")
+	testPair(t, s, conn, ctx)
+	s.mu.Lock()
+	var sid uint64
+	for id := range s.sessions {
+		sid = id
+	}
+	s.mu.Unlock()
+	if _, err := s.Video.Start(sid, video.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	// 双击后拖动：第二次按下 down，移动 move，松开 up。
+	steps := []Message{
+		{Type: "pointer", Action: "click", PX: 10, PY: 10},
+		{Type: "pointer", Action: "down", PX: 10, PY: 10},
+		{Type: "pointer", Action: "move", PX: 50, PY: 60},
+		{Type: "pointer", Action: "up", PX: 50, PY: 60},
+		{Type: "pointer", Action: "down", PX: 70, PY: 80},
+	}
+	for i, m := range steps {
+		m.Epoch, m.NextEpoch = uint32(i), uint32(i+1)
+		_ = write(ctx, conn, m)
+	}
+	_ = write(ctx, conn, Message{Type: "heartbeat", Tick: 1})
+	readUntil(t, ctx, conn, "heartbeat")
+	// 拖拽中断开：会话结束时松开虚拟鼠标。
+	conn.CloseNow()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && !slices.Contains(clicker.snapshot(), "release") {
+		time.Sleep(20 * time.Millisecond)
+	}
+	want := []string{"10,10,false", "down 10,10", "move 50,60", "up 50,60", "down 70,80", "release"}
+	if got := clicker.snapshot(); !slices.Equal(got, want) {
+		t.Fatalf("calls %v, want %v", got, want)
 	}
 }
