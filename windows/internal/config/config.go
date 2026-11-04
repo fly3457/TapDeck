@@ -44,6 +44,10 @@ type Config struct {
 	// VideoDisabled 为 PC 端专用开关：为真时拒绝手机查看屏幕。缺省（false）表示允许，
 	// 旧配置无需迁移，schema 版本不变。
 	VideoDisabled bool `json:"video_disabled,omitempty"`
+	// NotifyDisabled 为 PC 端专用开关：为真时不把 Windows 系统通知转发给手机；缺省转发。
+	NotifyDisabled bool `json:"notify_disabled,omitempty"`
+	// NotifyExclude 是不转发的应用名（与通知中心显示的名称一致，忽略大小写）。
+	NotifyExclude []string `json:"notify_exclude,omitempty"`
 }
 
 func Default() Config {

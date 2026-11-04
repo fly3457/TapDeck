@@ -4,6 +4,32 @@
 
 当前：接收端 **0.4.0**、Android **0.4.0 / code 23**· [安装](installation.md) · [版本规则](versioning.md)
 
+## 0.5.0 电脑通知转发与 Agent 完成提醒
+
+2026-11-04 完成，未公开发布。功能说明见[电脑通知转发](notifications.md)。
+
+| 验证项 | 结果 |
+|---|---|
+| 读取 Windows 通知 | 本机 Windows 11 26200：未打包的接收端进程调用 `UserNotificationListener`，权限状态为允许，可读到 Chrome、Windows 安全中心、Claude 桌面版等应用的通知，无需 MSIX／sparse package。纯 Go WinRT 调用的接口 IID 与 vtable 顺序已用 .NET 元数据反射核对 |
+| Toast 往返 | `TAPDECK_LIVE_NOTIFY=1` 实测：以 `Yuncii.TapDeck` 弹出含 emoji 的 Toast，监听器约 0.3 秒内读回，标题与正文一致；仅登记在注册表的 AppUserModelId 没有 AppInfo，因此应用名为空，属预期 |
+| Agent hook | GUI 子系统 EXE 经 `tapdeck-notify.cmd` 从 Git Bash 调用，stdin 正常传入；`--agent-hook claude` 生成 `Claude Code · TapDeck` 通知。单元测试覆盖 Stop（读取会话记录最后一条回复）、Notification、Codex 负载、XML 转义；批处理改用系统代码页，含中文的 EXE 路径也能正确调用 |
+| 协议与心跳 | Go 集成测试：`notify` 能力、广播、排除应用、空通知、关闭转发、`notify_sync` 按 seq／boot 补发、无监听器时报错、后台模式超过 1 秒仍保持连接并收到 PC keepalive、回到前台恢复 1 秒超时 |
+| Android 收件箱 | 单元测试覆盖 seq 去重、boot 变化、多 PC 独立与忘记、100 条上限、已读／清空后保留游标、补发旧通知不弹系统通知 |
+| 实机 nubia NX741J（Android 16） | 前台服务（connectedDevice）随已配对电脑启动；锁屏时 PC 通知以“电脑通知”渠道弹出并带电脑名；App 在后台时为横幅通知；前台时顶部显示白色卡片横幅，顶栏铃铛显示未读角标；接收端重启后手机自动重连。通知权限首次由 adb 授予（App 内请求只在连接后、前台时触发一次） |
+| 锁屏保持连接 | 未豁免电池优化时失败：锁屏约 20 秒后进程被 nubia 系统冻结（`dumpsys activity processes` 显示 `isFrozen=true`，前台服务仍在、网络策略未拦截），PC 在 12:39:57 判定心跳超时，手机也未能重连。以 `dumpsys deviceidle whitelist +com.yuncii.tapdeck`（等同于 App 内“允许后台运行”）豁免后进程解冻。据此增加首次连接时的电池优化引导，以及未豁免时前台服务通知中的提示。豁免后复测：12:48:10 锁屏（Dozing）150 秒后进程 `isFrozen=false`、连接仍在、接收端无心跳超时，随后 PC 弹出的通知送达手机 |
+| 官方构建 | `scripts/build-windows.ps1 -OutputDirectory dist/0.5.0`：版本规则、Android release 构建与单元测试、Go 测试与 vet、三个 EXE 通过；两个接收端 `--apk-info` 为 Android 0.5.0 / code 25、release、不可调试、证书不变，内嵌 ffmpeg 哈希一致；三个 EXE 文件版本 0.5.0；正式 APK 覆盖安装到实机 |
+
+官方交付目录 `dist/0.5.0`：
+
+| 产物 | 字节数 | SHA-256 |
+|---|---:|---|
+| `TapDeck-0.5.0.apk` | 8,615,721 | `16f41c175e80247033972bcd8b580837951206e0cffcff9006bc3aaad506b1c5` |
+| `TapDeck-0.5.0.exe` | 28,254,208 | `2d654685629a2ad43629b49133435c755d22deb8ac790e1eb6babfc293d366f7` |
+| `TapDeck-debug-0.5.0.exe` | 33,847,808 | `7a945382e1dd6e3f87ec0a605538e52f821950c5e032b43562d8d729f2698f22` |
+| `TapDeck-hidprobe-0.5.0.exe` | 8,048,128 | `62e274692b295c0940c103e557c65cf13d47cee52a1e173c7deb7210dde72377` |
+
+日志：`.tools/windows-release-0.5.0-build.log`。待用户实测：锁屏 10 分钟以上、未充电状态下的深度 Doze、App 内电池优化引导弹窗、Claude Code hook 端到端、其他机型的后台保活。
+
 ## 0.4.1 视频模式交互优化与多地址重连
 
 2026-11-04 完成，未公开发布。

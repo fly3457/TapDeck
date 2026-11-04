@@ -33,12 +33,15 @@ data class ClientState(val status: String = "未连接", val peerName: String = 
     val videoSupported: Boolean get() = VIDEO_FEATURE in touchpad.features
     val canSwitch: Boolean get() = mic == "idle"
 }
-class TapClient(private val app: Application, private val scope: CoroutineScope) : TouchSink {
+/** [notifications] 为空时（仪器测试）不接收电脑通知，也不进入后台心跳模式。 */
+class TapClient(private val app: Application, private val scope: CoroutineScope, private val notifications: PcNotificationCenter? = null) : TouchSink {
     private companion object {
         /** 自动重连的退避间隔（毫秒），最后一次会一直沿用。 */
         val RETRY_DELAYS = longArrayOf(1000, 2000, 4000, 8000, 15000, 30000)
         /** App 不在前台时的重试间隔，避免后台无谓地反复连接。 */
         const val IDLE_RETRY_MS = 30000L
+        /** 后台心跳模式：PC 每 20 秒发 keepalive，超过此时长没有任何消息才判定断线。 */
+        const val BACKGROUND_TIMEOUT_MS = 75000L
     }
     private val store = PairStore(app)
     private val pairingPersistence = Mutex()
@@ -90,10 +93,13 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
         val becameForeground = value && !foreground
         foreground = value
         updateWifiLock()
+        applyLinkMode()
         // 回到前台仍未连接时立即重试，不必等退避计时。
         if (becameForeground && reconnect && peer != null && !connected && state.value.phase == ConnectionPhase.Disconnected) { retryAt = 0; scheduleReconnect() }
     }
     @Volatile private var lastResponse = 0L
+    /** 已向 PC 声明后台模式（link_mode background）：停发 250ms 心跳，只回应 PC 的 keepalive。 */
+    @Volatile private var linkBackground = false
     @Volatile private var reconnect = true
     private var heartbeat: Job? = null
     private var reconnectJob: Job? = null
@@ -283,6 +289,7 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
         }
     }
     fun forgetPeer(id: String) {
+        notifications?.forget(id)
         val active = state.value.selectedPeerId == id || peer?.id == id
         if (active && !allowTargetChange()) return
         if (active) beginTargetChange()
@@ -477,6 +484,9 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
                             mutable.update { it.copy(config = c) }
                         }
                         "heartbeat" -> mutable.update { it.copy(rttMs = (SystemClock.elapsedRealtime() - m.long("tick")).coerceAtLeast(0)) }
+                        "keepalive" -> sendOn(ws, message("keepalive"))
+                        "notifications" -> notifications?.receive(p.id, mutable.value.peerName, m.str("boot"),
+                            wireJson.decodeFromJsonElement<List<WireNotification>>(m["items"] ?: JsonArray(emptyList())))
                         "mic_ready" -> {
                             if (m.str("recording") == recording && recordingRequested && foreground) {
                                 try { startRecorder(attempt, gen); mutable.update { it.copy(mic = "transmitting", error = "") } }
@@ -525,8 +535,10 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
         heartbeat?.cancel()
         heartbeat = scope.launch(Dispatchers.Main) {
             while (isActive && current(attempt, gen)) {
-                if (SystemClock.elapsedRealtime() - lastResponse >= 1000) { lost(gen, "电脑心跳超时"); break }
-                sendOn(ws, message("heartbeat", "tick" to SystemClock.elapsedRealtime().j()))
+                val background = linkBackground
+                if (SystemClock.elapsedRealtime() - lastResponse >= if (background) BACKGROUND_TIMEOUT_MS else 1000) { lost(gen, "电脑心跳超时"); break }
+                if (!background) sendOn(ws, message("heartbeat", "tick" to SystemClock.elapsedRealtime().j()))
+                // 后台同样 250ms 检查一次：CPU 休眠时计时器不会唤醒设备，切回前台后心跳也能立即恢复。
                 delay(250)
             }
         }
@@ -546,11 +558,38 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
                     mutable.update { it.copy(status = "已连接", phase = ConnectionPhase.Connected, selectedPeerId = saved.id,
                         peerName = next.find(saved.id)!!.displayName, connected = true, error = "", touchpad = capabilities) }
                 }
+                if (NOTIFY_FEATURE in capabilities.features) syncNotifications(ws, saved.id, attempt, gen)
             } catch (e: CancellationException) { throw e } catch (e: Exception) {
                 if (current(attempt, gen)) { stopAttempt("无法保存配对", "电脑列表读写失败，请重试"); storageError(e) }
             }
         }
     }
+    /** 连接就绪后补收离线期间的通知，并按前后台状态声明心跳模式。 */
+    private fun syncNotifications(ws: WebSocket, peerId: String, attempt: Long, gen: Long) {
+        val center = notifications ?: return
+        scope.launch(Dispatchers.Main.immediate) {
+            val cursor = center.cursor(peerId)
+            if (!current(attempt, gen)) return@launch
+            sendOn(ws, message("notify_sync", "boot" to (cursor?.boot ?: "").j(), "after" to (cursor?.seq ?: 0L).j()))
+            synchronized(lock) { applyLinkMode() }
+        }
+    }
+    /**
+     * 后台且开启“后台接收电脑通知”时请求 PC 改由其发起 keepalive，手机不必每 250ms 唤醒；
+     * 回到前台恢复手机心跳。需持有 [lock]。
+     */
+    private fun applyLinkMode() {
+        if (!connected) return
+        val background = !foreground && notifications?.backgroundEnabled?.value == true && NOTIFY_FEATURE in state.value.touchpad.features
+        if (background == linkBackground) return
+        if (send(message("link_mode", "mode" to (if (background) "background" else "foreground").j()))) {
+            linkBackground = background
+            lastResponse = SystemClock.elapsedRealtime()
+            // 切回前台立即补一次心跳，PC 的 1 秒超时从此刻重新计算。
+            if (!background) send(message("heartbeat", "tick" to SystemClock.elapsedRealtime().j()))
+        }
+    }
+    fun refreshLinkMode() = synchronized(lock) { applyLinkMode() }
     fun confirmPair() {
         val code = mutable.value.pairing
         if (code.isNotEmpty()) send(message("pair_confirm", "code" to code.j()))
@@ -599,6 +638,7 @@ class TapClient(private val app: Application, private val scope: CoroutineScope)
         stopMic(true)
         synchronized(lock) {
             generation++; connected = false; recordingRequested = false; recording = ""; voiceMouseButtons.clear()
+            linkBackground = false
             updateWifiLock()
             bootstrapCall?.cancel(); bootstrapCall = null
             socket?.cancel(); socket = null

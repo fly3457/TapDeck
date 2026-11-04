@@ -97,6 +97,19 @@ The phone then opens `GET /video` on the same pinned TLS port. Its first text me
 
 Cursor coordinates are physical pixels relative to the captured display's top-left corner. They are polled every 8 ms and sent only when they change. `visible=0` means the cursor is hidden or on another display. The PC sends the configuration frame first and never drops it. Each stream begins with an IDR frame; GOP is two seconds, with no B-frames. When more than six frames are queued, the PC discards the backlog and drops frames until the next IDR, so latency cannot accumulate. Android likewise drops to the next key frame when its decoder input falls behind. Write stalls longer than two seconds end the stream with `video_error`.
 
+## Notifications
+
+Windows 0.5.0 advertises `notify` in `ready.features` when it reads Windows system notifications through the public WinRT `UserNotificationListener`. The same capability means the PC accepts `link_mode`. Android 0.5.0 sends neither message to a PC without it. The wire version remains 2 and the PC configuration schema remains 3. The optional PC-only fields `notify_disabled` (missing means forward) and `notify_exclude` (application display names, case-insensitive) filter what is forwarded.
+
+| Message | Direction | Fields and behaviour |
+|---|---|---|
+| `notifications` | PC → phone | `boot` (random ID per receiver start), `items[]` with `seq` (1-based, increasing within a boot), `app`, `title`, `body` (≤500 characters), `time` (Unix ms). The PC pushes each new notification as a one-item batch to every connected session. |
+| `notify_sync` | phone → PC | `boot`, `after`: the last notification the phone stored for this PC. The PC answers with one `notifications` batch: items with `seq > after` when `boot` matches, otherwise its whole buffer (at most 100). It returns an empty batch while forwarding is disabled, and `error` when the PC has no listener. |
+| `link_mode` | phone → PC | `mode` `background` or `foreground`. In background mode the phone stops its 250 ms heartbeat. The PC sends `keepalive` every 20 s and disconnects after 60 s without any message. Foreground restores the 1 s timeout; Android sends a heartbeat immediately after switching back. |
+| `keepalive` | both | Background liveness. The phone echoes each PC `keepalive`; the PC treats it like any other inbound message. |
+
+The PC reads the notification center once per second and forwards only IDs that were not present on the previous read. Notifications already present when the receiver starts, or when access is granted, form the baseline and are not sent. Android stores up to 100 notifications per installation, encrypted with its pairing key, and deduplicates by PC, `boot` and `seq`. Replayed items older than ten minutes enter the list without raising a phone notification.
+
 ## UDP encoding
 
 All integers are little endian. Packets are at most 1200 bytes.

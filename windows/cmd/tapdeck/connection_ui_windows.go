@@ -31,7 +31,8 @@ func connectionIntro(address **walk.LineEdit, qr **walk.ImageView, url string, c
 func updateSaveVisibility(tabs *walk.TabWidget, save *walk.PushButton) {
 	if tabs != nil && save != nil {
 		index := tabs.CurrentIndex()
-		save.SetVisible(index >= 1 && index <= 3)
+		// 首页“连接”与末页“关于”没有可保存的设置。
+		save.SetVisible(index >= 1 && index < tabs.Pages().Len()-1)
 	}
 }
 

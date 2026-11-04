@@ -29,6 +29,10 @@ class PairStore(private val context: Context) {
     private val videoQualityKey = stringPreferencesKey("video_quality")
     private val videoBallX = floatPreferencesKey("video_ball_x")
     private val videoBallY = floatPreferencesKey("video_ball_y")
+    private val inboxKey = stringPreferencesKey("protected_pc_notifications_v1")
+    private val notifyBackgroundKey = booleanPreferencesKey("notify_background")
+    private val notifyPermissionAskedKey = booleanPreferencesKey("notify_permission_asked")
+    private val notifyBatteryAskedKey = booleanPreferencesKey("notify_battery_asked")
     private fun key(): SecretKey {
         val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         (ks.getKey("tapdeck-pair", null) as? SecretKey)?.let { return it }
@@ -127,4 +131,30 @@ class PairStore(private val context: Context) {
         val value = settings.normalized()
         context.dataStore.edit { it[sensitivityKey] = value.sensitivity; it[hapticsKey] = value.haptics }
     }
+
+    /** 电脑通知收件箱：通知正文可能是聊天内容，与配对凭据一样加密保存。损坏时返回空收件箱。 */
+    suspend fun loadInbox(): NotificationInbox {
+        val raw = context.dataStore.data.first()[inboxKey] ?: return NotificationInbox()
+        return runCatching { wireJson.decodeFromString<NotificationInbox>(decrypt(raw)).validated() }.getOrDefault(NotificationInbox())
+    }
+
+    suspend fun saveInbox(inbox: NotificationInbox) {
+        val text = encrypt(wireJson.encodeToString(inbox))
+        context.dataStore.edit { it[inboxKey] = text }
+    }
+
+    /** “后台接收电脑通知”开关（默认开）与是否已请求过通知权限。 */
+    suspend fun loadNotifyPreferences(): Pair<Boolean, Boolean> {
+        val p = context.dataStore.data.first()
+        return (p[notifyBackgroundKey] ?: true) to (p[notifyPermissionAskedKey] ?: false)
+    }
+
+    suspend fun saveNotifyBackground(on: Boolean) { context.dataStore.edit { it[notifyBackgroundKey] = on } }
+
+    suspend fun markNotifyPermissionAsked() { context.dataStore.edit { it[notifyPermissionAskedKey] = true } }
+
+    /** 是否已提示过关闭电池优化（努比亚等机型不豁免时会冻结后台进程）。 */
+    suspend fun loadBatteryAsked(): Boolean = context.dataStore.data.first()[notifyBatteryAskedKey] ?: false
+
+    suspend fun markBatteryAsked() { context.dataStore.edit { it[notifyBatteryAskedKey] = true } }
 }

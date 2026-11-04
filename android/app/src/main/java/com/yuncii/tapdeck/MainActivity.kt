@@ -57,6 +57,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.delay
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -65,7 +67,9 @@ import com.journeyapps.barcodescanner.ScanOptions
 import kotlin.math.min
 
 class TapViewModel(app: Application) : AndroidViewModel(app) {
-    val client = TapClient(app, viewModelScope)
+    // 连接与电脑通知是进程级的：前台服务在后台继续使用同一个客户端。
+    val client = (app as TapDeckApp).client
+    val notifications = (app as TapDeckApp).notifications
     private val store = PairStore(app)
     val ballPosition = MutableStateFlow<Pair<Float, Float>?>(null)
     val selectedVoice = MutableStateFlow<VoiceProfile?>(null)
@@ -82,7 +86,6 @@ class TapViewModel(app: Application) : AndroidViewModel(app) {
     val videoBall = MutableStateFlow<Pair<Float, Float>?>(null)
     init {
         viewModelScope.launch { val (quality, ball) = store.loadVideoPreferences(); videoQuality.value = quality; videoBall.value = ball }
-        viewModelScope.launch { client.restore() }
         viewModelScope.launch { ballPosition.value = store.loadBallPosition() }
         viewModelScope.launch {
             val (_, keyboard) = store.loadUiMode()
@@ -135,7 +138,6 @@ class TapViewModel(app: Application) : AndroidViewModel(app) {
         keyboardOn.value = on
         viewModelScope.launch { store.saveKeyboardMode(on) }
     }
-    override fun onCleared() { client.close() }
 }
 class MainActivity : ComponentActivity() {
     private val vm: TapViewModel by viewModels()
@@ -151,6 +153,15 @@ class MainActivity : ComponentActivity() {
     private var deferredLink: String? = null
     private var deferredPeerId: String? = null
     private var settings by mutableStateOf(false)
+    private var notificationsOpen by mutableStateOf(false)
+    /** 前台收到的最新电脑通知，短暂显示在顶部。 */
+    private var banner by mutableStateOf<PcNotification?>(null)
+    private var notificationPermissionChecked = false
+    /** 首次连上支持通知转发的电脑且未豁免电池优化时，说明原因并引导到系统设置。 */
+    private var batteryPrompt by mutableStateOf(false)
+    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!granted) android.widget.Toast.makeText(this, "未允许通知：App 在后台时电脑通知不会弹出，可在“连接与设置”中重新开启", android.widget.Toast.LENGTH_LONG).show()
+    }
     private var pickerOpen by mutableStateOf(false)
     private var managingPeers by mutableStateOf(false)
     private var awaitingNewPeer = false
@@ -244,11 +255,12 @@ class MainActivity : ComponentActivity() {
                 val state by vm.client.state.collectAsStateWithLifecycle()
                 val peers by vm.client.peers.collectAsStateWithLifecycle()
                 val keyboardOn by vm.keyboardOn.collectAsStateWithLifecycle()
+                val inbox by vm.notifications.inbox.collectAsStateWithLifecycle()
                 ConnectionHeader(
                     state,
                     keyboardOn,
                     scale = dimensions.value.scale,
-                    reminderEnabled = pageResumed && !settings && !pickerOpen && !managingPeers && !sensitivitySettings && state.pairing.isEmpty() && !state.connected,
+                    reminderEnabled = pageResumed && !settings && !pickerOpen && !managingPeers && !sensitivitySettings && !notificationsOpen && state.pairing.isEmpty() && !state.connected,
                     peers = peers,
                     pickerOpen = pickerOpen,
                     onPicker = { touchpad?.cancel(); pickerOpen = it },
@@ -265,6 +277,8 @@ class MainActivity : ComponentActivity() {
                     },
                     onSettings = { touchpad?.cancel(); feedbackAvailability = feedbackController.availability(); feedbackTestMessage = ""; settings = true },
                     onVideo = ::enterVideo,
+                    unread = inbox.unread,
+                    onNotifications = { touchpad?.cancel(); notificationsOpen = true },
                 )
             }.apply { id = R.id.connection_header }
             addView(headerView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0))
@@ -415,6 +429,18 @@ class MainActivity : ComponentActivity() {
             val peers by vm.client.peers.collectAsStateWithLifecycle()
             val inputSettings by vm.client.inputSettings.collectAsStateWithLifecycle()
             val videoQuality by vm.videoQuality.collectAsStateWithLifecycle()
+            val inbox by vm.notifications.inbox.collectAsStateWithLifecycle()
+            val backgroundReceive by vm.notifications.backgroundEnabled.collectAsStateWithLifecycle()
+            if (notificationsOpen) {
+                // 打开列表即视为已读，并撤下已弹出的系统通知。
+                LaunchedEffect(inbox.unread) { vm.notifications.markRead() }
+                NotificationList(inbox.items, onClear = vm.notifications::clear) { notificationsOpen = false }
+            }
+            banner?.let { n -> if (!notificationsOpen) NotificationBanner(n) { banner = null; notificationsOpen = true } }
+            if (batteryPrompt) AlertDialog(onDismissRequest = { batteryPrompt = false }, title = { Text("允许 TapDeck 后台运行") }, text = {
+                Text("努比亚等手机会在锁屏后冻结未豁免电池优化的应用，TapDeck 就收不到电脑通知。请在接下来的系统弹窗中选择“允许”。以后也可在“连接与设置”中开启。")
+            }, confirmButton = { TextButton(onClick = { batteryPrompt = false; requestBatteryExemption() }) { Text("去允许") } },
+                dismissButton = { TextButton(onClick = { batteryPrompt = false }) { Text("以后再说") } })
             if (managingPeers) PeerManager(peers, state, vm.client::renamePeer, vm.client::forgetPeer) { managingPeers = false }
             if (sensitivitySettings) SensitivitySettings(inputSettings, vm.client::setSensitivity) { sensitivitySettings = false }
             if (settings) AlertDialog(onDismissRequest = { settings = false }, title = {
@@ -468,6 +494,22 @@ class MainActivity : ComponentActivity() {
                     }
                     Text("下次打开视频模式时生效", style = MaterialTheme.typography.bodySmall)
                     HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("后台接收电脑通知", Modifier.weight(1f))
+                        Switch(checked = backgroundReceive, onCheckedChange = { on ->
+                            vm.notifications.setBackgroundEnabled(on)
+                            if (on && !vm.notifications.permissionGranted()) requestNotificationPermission()
+                        }, modifier = Modifier.semantics { contentDescription = "后台接收电脑通知" })
+                    }
+                    Text("开启后 App 在后台或锁屏时保持连接，电脑上的 Windows 通知会以手机通知弹出，并常驻一条“后台连接”通知。", style = MaterialTheme.typography.bodySmall)
+                    if (state.connected && NOTIFY_FEATURE !in state.touchpad.features) Text("当前电脑端不支持通知转发，请升级到 TapDeck 0.5.0 或更新版本", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    // 读取 pageResumed：从系统设置返回后重新检查权限与电池优化状态。
+                    if (pageResumed && backgroundReceive) {
+                        if (!vm.notifications.permissionGranted()) TextButton(onClick = ::requestNotificationPermission) { Text("允许 TapDeck 发送通知") }
+                        if (!ignoringBatteryOptimizations()) TextButton(onClick = ::requestBatteryExemption) { Text("允许后台运行（关闭电池优化）") }
+                        Text("部分机型（如努比亚、小米）还需在系统设置中允许 TapDeck 自启动与后台运行，锁屏后才不会被清理。", style = MaterialTheme.typography.bodySmall)
+                    }
+                    HorizontalDivider(Modifier.padding(vertical = 8.dp))
                     TextButton(onClick = { settings = false; managingPeers = true }) { Text("管理电脑（${peers.peers.size}）") }
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text("输入PC连接窗口URL", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
@@ -507,6 +549,20 @@ class MainActivity : ComponentActivity() {
                 // 本地记录的模式是异步读出来的：读到以后要重新应用到界面。
                 launch {
                     vm.keyboardOn.collect { modeViews?.invoke() }
+                }
+                launch {
+                    // 新通知替换旧横幅并重新计时 3 秒。
+                    vm.notifications.banner.collectLatest { n -> banner = n; delay(3000); if (banner == n) banner = null }
+                }
+                launch {
+                    // 首次连上支持通知转发的电脑时请求一次通知权限。
+                    vm.client.state.collect { state ->
+                        if (!notificationPermissionChecked && state.connected && NOTIFY_FEATURE in state.touchpad.features) {
+                            notificationPermissionChecked = true
+                            if (vm.notifications.shouldAskPermission()) requestNotificationPermission()
+                            if (vm.notifications.shouldAskBattery()) batteryPrompt = true
+                        }
+                    }
                 }
                 launch {
                     combine(vm.client.state, vm.videoOn, vm.videoBall) { state, on, ball -> Triple(state, on, ball) }.collect { (state, on, ball) ->
@@ -560,7 +616,7 @@ class MainActivity : ComponentActivity() {
         // Activity 重建（例如系统字体变化）时 ViewModel 仍处于视频模式，重新套用界面。
         if (vm.videoOn.value) applyVideoMode()
         // A restored task can carry the original system Intent after process death.
-        if (savedInstanceState == null) consumePairingIntent(intent) else intent?.data = null
+        if (savedInstanceState == null) { consumeNotificationIntent(intent); consumePairingIntent(intent) } else intent?.data = null
     }
     private fun fullscreen() {
         // 保留系统状态栏（电池、时间等），只把布局延伸到状态栏后面，并按安全区留白。
@@ -694,14 +750,47 @@ class MainActivity : ComponentActivity() {
         intent.data = null
         enter(link)
     }
-    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); consumePairingIntent(intent) }
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); consumeNotificationIntent(intent); consumePairingIntent(intent) }
+    /** 点击电脑通知打开 App 时直接显示通知列表。 */
+    private fun consumeNotificationIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra(PcNotificationCenter.EXTRA_OPEN_NOTIFICATIONS, false) != true) return
+        intent.removeExtra(PcNotificationCenter.EXTRA_OPEN_NOTIFICATIONS)
+        if (!vm.videoOn.value) { settings = false; pickerOpen = false }
+        notificationsOpen = true
+    }
+    private fun requestNotificationPermission() {
+        if (vm.notifications.permissionGranted()) return
+        if (Build.VERSION.SDK_INT >= 33 && !notificationPermissionAskedOnce) {
+            notificationPermissionAskedOnce = true
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
+        // 本次已请求过（或系统级关闭）：到系统设置中开启。
+        runCatching { startActivity(Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, packageName)) }
+    }
+    private var notificationPermissionAskedOnce = false
+    private fun ignoringBatteryOptimizations(): Boolean =
+        getSystemService(android.os.PowerManager::class.java)?.isIgnoringBatteryOptimizations(packageName) ?: true
+    private fun requestBatteryExemption() {
+        val direct = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, android.net.Uri.parse("package:$packageName"))
+        runCatching { startActivity(direct) }.onFailure {
+            runCatching { startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+        }
+    }
     override fun onResume() {
         super.onResume(); pageResumed = true; fullscreen(); modeViews?.invoke()
         if (settings) { feedbackAvailability = feedbackController.availability(); feedbackTestMessage = "" }
     }
     override fun onPause() { pageResumed = false; super.onPause() }
-    override fun onStart() { super.onStart(); vm.client.setForeground(true) }
+    override fun onStart() {
+        super.onStart()
+        vm.notifications.foreground = true
+        vm.client.setForeground(true)
+        // 前台服务只能在 App 可见时启动：被系统拒绝或回收后在此补启动。
+        (application as TapDeckApp).ensureLinkService()
+    }
     override fun onStop() {
+        vm.notifications.foreground = false
         touchpad?.cancel(); microphone?.cancel(); videoView?.cancel()
         vm.client.stopMic(true)
         // 后台不传画面；回到前台后由状态收集自动重新请求。
@@ -746,6 +835,8 @@ class MainActivity : ComponentActivity() {
     onKeyboardToggle: (Boolean) -> Unit,
     onSettings: () -> Unit,
     onVideo: () -> Unit,
+    unread: Int,
+    onNotifications: () -> Unit,
 ) {
     val feedback = LocalKeyFeedback.current
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -804,6 +895,28 @@ class MainActivity : ComponentActivity() {
                 }
             }
             // Explicit click bounds avoid Material's minimum size enlarging a 0.10W header.
+            Box(
+                Modifier.width(width * 0.10f).fillMaxHeight()
+                    .clip(RoundedCornerShape(width * ControllerStyle.CORNER))
+                    .clickable(role = Role.Button) { feedback(KeyFeedback.Press); onNotifications() }
+                    .semantics { contentDescription = if (unread > 0) "电脑通知，$unread 条未读" else "电脑通知" },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_lucide_bell),
+                    contentDescription = null,
+                    tint = if (unread > 0 || (state.connected && NOTIFY_FEATURE in state.touchpad.features)) Color(0xFF000000) else Color(0xFFAAAAAA),
+                    modifier = Modifier.size(iconSize),
+                )
+                if (unread > 0) Box(
+                    Modifier.align(Alignment.TopEnd).padding(top = width * 0.012f, end = width * 0.006f)
+                        .clip(RoundedCornerShape(50)).background(Color(0xFFD92D20)).padding(horizontal = width * 0.008f),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(if (unread > 99) "99+" else unread.toString(), color = Color.White, fontSize = titleSize * 0.7f, lineHeight = titleSize * 0.8f, maxLines = 1)
+                }
+            }
+            Spacer(Modifier.width(width * 0.01f))
             Box(
                 Modifier.width(width * 0.10f).fillMaxHeight()
                     .clip(RoundedCornerShape(width * ControllerStyle.CORNER))

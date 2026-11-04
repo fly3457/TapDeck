@@ -22,6 +22,9 @@ func (ss *session) features() []string {
 	if ss.s.Video.Available() {
 		f = append(f, VideoFeature)
 	}
+	if ss.s.notificationRing() != nil {
+		f = append(f, NotifyFeature)
+	}
 	return f
 }
 

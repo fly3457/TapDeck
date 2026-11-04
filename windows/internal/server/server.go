@@ -26,6 +26,7 @@ import (
 	"tapdeck/internal/config"
 	"tapdeck/internal/input"
 	"tapdeck/internal/keyboard"
+	"tapdeck/internal/notify"
 	"tapdeck/internal/protocol"
 	"tapdeck/internal/secure"
 	"tapdeck/internal/video"
@@ -72,6 +73,9 @@ type Message struct {
 	// pointer：视频画面上的点击位置，单位为所捕获显示器的物理像素。
 	PX int32 `json:"px,omitempty"`
 	PY int32 `json:"py,omitempty"`
+	// notify_sync：手机已收到的最后一条通知（接收端启动标识与序号）。
+	Boot  string `json:"boot,omitempty"`
+	After uint64 `json:"after,omitempty"`
 }
 type Pending struct {
 	ID       string
@@ -222,6 +226,8 @@ type Server struct {
 	apkData    []byte
 	apkSHA     string
 	apkVersion string
+	// notifications 为空时不声明 notify 能力；见 EnableNotifications。
+	notifications *notify.Ring
 }
 type session struct {
 	closeOnce                sync.Once
@@ -254,6 +260,8 @@ type session struct {
 	// 视频模式拖拽：虚拟鼠标是否被本会话按住；本次按住是否已退回 SendInput。
 	pointerHID      atomic.Bool
 	pointerSoftware bool
+	// background 为真时手机在后台：心跳由 PC 发起且超时放宽，见 notify.go。
+	background atomic.Bool
 }
 
 func LocalIPs() []net.IP {
@@ -302,6 +310,7 @@ func (s *Server) Config() config.Config {
 	c := s.cfg
 	c.Sensitivity = config.PointerBaseSensitivity
 	c.Shortcuts = append([]config.Shortcut(nil), c.Shortcuts...)
+	c.NotifyExclude = append([]string(nil), c.NotifyExclude...)
 	c.Voice = c.Voice.Normalized()
 	return c
 }
@@ -743,14 +752,20 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
+		var lastPing time.Time
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if time.Since(time.Unix(0, ss.lastSeen.Load())) > time.Second {
+				if time.Since(time.Unix(0, ss.lastSeen.Load())) > ss.heartbeatTimeout() {
 					ss.close("心跳超时")
 					return
+				}
+				// 后台模式由 PC 定期唤醒手机确认连接。
+				if ss.background.Load() && time.Since(lastPing) >= backgroundPing {
+					lastPing = time.Now()
+					_ = ss.send(map[string]any{"type": "keepalive"})
 				}
 				ss.mu.Lock()
 				if ss.active && ss.recording != 0 {
@@ -856,6 +871,12 @@ func (ss *session) handle(m Message) error {
 	switch m.Type {
 	case "heartbeat":
 		return ss.send(map[string]any{"type": "heartbeat", "tick": m.Tick})
+	case "keepalive":
+		return nil
+	case "link_mode":
+		return ss.setLinkMode(m.Mode)
+	case "notify_sync":
+		return ss.syncNotifications(m)
 	case "mouse_button":
 		return ss.controlBarrier(m, func() error { return ss.mouseButton(m.Button, m.Down) })
 	case "zoom", "gesture":

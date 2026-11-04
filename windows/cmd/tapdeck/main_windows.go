@@ -53,9 +53,16 @@ func main() {
 	probe := flag.Int("audio-probe", 0, "capture only CABLE Output and print level metrics for N seconds")
 	autostartOn := flag.Bool("autostart-on", false, "register the receiver to start at Windows sign-in, then exit")
 	autostartOff := flag.Bool("autostart-off", false, "remove the sign-in startup entry, then exit")
+	notifyTitle := flag.String("notify-title", "", "以 TapDeck 身份弹出一条 Windows 通知（标题），然后退出")
+	notifyBody := flag.String("notify-body", "", "--notify-title 的正文")
+	agentHook := flag.String("agent-hook", "", "解析 Agent hook 数据（claude 读 stdin，codex 取最后一个参数）并弹出通知，然后退出")
 	flag.Parse()
 	if *showVersion {
 		fmt.Printf("TapDeck %s\n", appVersion)
+		return
+	}
+	if *notifyTitle != "" || *agentHook != "" {
+		runNotifyCLI(*notifyTitle, *notifyBody, *agentHook, flag.Args())
 		return
 	}
 	if *autostartOn || *autostartOff {
@@ -210,6 +217,8 @@ func main() {
 	}
 	// 后台预先探测视频编码器（约数秒），手机首次打开视频模式即可直接出画面。
 	s.Video.Prewarm()
+	// 读取 Windows 系统通知并转发给手机；Agent hook 弹出的 Toast 也经此同步。
+	startNotifications(context.Background(), s, *data)
 	if *headless {
 		// 与常规模式一样创建窗口与托盘图标，只是先隐藏设置窗口：
 		// 开机自启不弹窗，但用户可以随时从托盘打开设置或退出。
@@ -270,6 +279,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 	var videoBox *walk.CheckBox
 	var autostartBox *walk.CheckBox
 	var autostartLabel *walk.Label
+	var notifyUI notifySettings
 	var labels, keys [config.ShortcutCount]*walk.LineEdit
 	var enabled [config.ShortcutCount]*walk.CheckBox
 	var prompts pairingPrompts
@@ -489,6 +499,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 		c.Sensitivity = config.PointerBaseSensitivity
 		c.NaturalScroll = natural.Checked()
 		c.VideoDisabled = !videoBox.Checked()
+		notifyUI.apply(&c)
 		c.KeyboardBackend = backendIDs[max(0, backend.CurrentIndex())]
 		c.AudioDevice = deviceIDs[max(0, devices.CurrentIndex())]
 		for i := range voiceEditors {
@@ -569,6 +580,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 					walk.MsgBox(mw, "启动失败", e.Error(), walk.MsgBoxIconError)
 				}
 			}}, d.PushButton{Text: "停止接收", OnClicked: s.Stop}, d.PushButton{Text: "打开日志", OnClicked: func() { open(filepath.Join(dir, "tapdeck.log")) }}}}, d.VSpacer{}}},
+			notifySettingsPage(func() walk.Form { return mw }, dir, cfg, &notifyUI),
 			{Title: "关于", Layout: d.VBox{}, Children: []d.Widget{
 				d.Label{Text: "TapDeck", Font: d.Font{Family: "Microsoft YaHei UI", PointSize: 20, Bold: true}},
 				d.Label{Text: "Windows 接收端 · 版本 " + appVersion},
@@ -600,6 +612,8 @@ func window(s *server.Server, dir string, startHidden bool) error {
 	}
 	natural.SetChecked(cfg.NaturalScroll)
 	videoBox.SetChecked(!cfg.VideoDisabled)
+	notifyUI.enabled.SetChecked(!cfg.NotifyDisabled)
+	notifyUI.refresh()
 	updateSaveVisibility(tabs, saveButton)
 	defer mw.Dispose()
 	defer func() {
@@ -723,6 +737,7 @@ func window(s *server.Server, dir string, startHidden bool) error {
 						text += " · " + v.VideoDevice + " 正在查看屏幕"
 					}
 					_ = status.SetText(text)
+					notifyUI.refresh()
 					applyKeyboardStatus()
 					_ = audioStatus.SetText(fmt.Sprintf("输入电平 %.0f%%", v.Level*100))
 					_ = audioStatus.SetToolTipText(v.AudioStatus)
