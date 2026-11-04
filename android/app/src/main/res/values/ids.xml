@@ -13,4 +13,5 @@
     <item name="video_shortcuts_button" type="id" />
     <item name="video_keyboard_button" type="id" />
     <item name="video_keyboard_host" type="id" />
+    <item name="video_shortcut_host" type="id" />
 </resources>

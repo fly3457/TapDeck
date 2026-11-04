@@ -148,3 +148,26 @@ fun videoKeyboardSize(viewWidth: Int, viewHeight: Int, mode: VideoKeyboard): Vid
     val padding = (width * 0.01f * scale).toInt()
     return VideoKeyboardSize(width, (width * content * scale).toInt() + padding * 2, padding, scale)
 }
+
+/** 跟随悬浮球的快捷键面板网格：竖屏 2 列竖排，横屏 2 行横排。 */
+data class ShortcutPanelGrid(val columns: Int, val rows: Int)
+
+fun shortcutPanelGrid(count: Int, landscape: Boolean): ShortcutPanelGrid {
+    val n = count.coerceIn(1, 8)
+    val half = (n + 1) / 2
+    val pair = if (n > 1) 2 else 1
+    return if (landscape) ShortcutPanelGrid(columns = half, rows = pair) else ShortcutPanelGrid(columns = pair, rows = half)
+}
+
+/**
+ * 面板左上角位置：默认在悬浮球正下方、水平居中；下方放不下时改到球上方，
+ * 并始终钳制在视图内。
+ */
+fun shortcutPanelPosition(ballX: Float, ballY: Float, ballRadius: Float, panelWidth: Float, panelHeight: Float,
+                          viewWidth: Float, viewHeight: Float, gap: Float): Pair<Float, Float> {
+    val x = (ballX - panelWidth / 2).coerceIn(0f, (viewWidth - panelWidth).coerceAtLeast(0f))
+    val below = ballY + ballRadius + gap
+    val above = ballY - ballRadius - gap - panelHeight
+    val y = if (below + panelHeight <= viewHeight || above < 0f) below else above
+    return x to y.coerceIn(0f, (viewHeight - panelHeight).coerceAtLeast(0f))
+}

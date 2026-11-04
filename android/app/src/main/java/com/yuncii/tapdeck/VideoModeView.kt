@@ -94,15 +94,33 @@ class VideoModeView(
     }
 
     private fun pill(color: Int) = GradientDrawable().apply { cornerRadius = 18 * density; setColor(color) }
-    private val statusButton = TextView(context).apply {
-        id = R.id.video_exit_button
+    // 左上角连接信息：固定宽度，超出省略，图标不会因文字长短跳动；“光标在其他显示器”单独一行。
+    private val statusLine = TextView(context).apply {
         setTextColor(Color.WHITE)
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+        isSingleLine = true
+        ellipsize = android.text.TextUtils.TruncateAt.END
+    }
+    private val cursorLine = TextView(context).apply {
+        setTextColor(0xFFFFD27A.toInt())
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        isSingleLine = true
+        ellipsize = android.text.TextUtils.TruncateAt.END
+        text = "光标在其他显示器"
+        visibility = GONE
+    }
+    private val statusButton = android.widget.LinearLayout(context).apply {
+        id = R.id.video_exit_button
+        orientation = android.widget.LinearLayout.VERTICAL
+        gravity = Gravity.CENTER_VERTICAL
+        minimumHeight = (36 * density).roundToInt()
         val pad = (10 * density).roundToInt()
         setPadding(pad, (6 * density).roundToInt(), pad, (6 * density).roundToInt())
         background = pill(0x99000000.toInt())
-        maxLines = 1
+        isClickable = true
         contentDescription = "退出视频模式"
+        addView(statusLine, android.widget.LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        addView(cursorLine, android.widget.LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         setOnClickListener { cancel(); onExit() }
     }
     private val message = TextView(context).apply {
@@ -145,14 +163,22 @@ class VideoModeView(
     private val keyboardButton = iconButton(R.id.video_keyboard_button, R.drawable.ic_lucide_keyboard, "显示全键盘") {
         showKeyboard(if (keyboard == VideoKeyboard.Full) VideoKeyboard.None else VideoKeyboard.Full)
     }
+    // 图标固定在屏幕右上角，右对齐。
     private val toolbar = android.widget.LinearLayout(context).apply {
         orientation = android.widget.LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         val icon = (36 * density).roundToInt(); val gap = (8 * density).roundToInt()
-        addView(statusButton, android.widget.LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, icon))
-        for (b in listOf(resetButton, shortcutsButton, keyboardButton))
-            addView(b, android.widget.LinearLayout.LayoutParams(icon, icon).apply { leftMargin = gap })
+        for ((i, b) in listOf(resetButton, shortcutsButton, keyboardButton).withIndex())
+            addView(b, android.widget.LinearLayout.LayoutParams(icon, icon).apply { if (i > 0) leftMargin = gap })
     }
+
+    /** 跟随悬浮球的快捷键面板容器；网格由屏幕方向决定（竖屏 2 列、横屏 2 行）。 */
+    val shortcutHost = FrameLayout(context).apply { id = R.id.video_shortcut_host; visibility = GONE; isMotionEventSplittingEnabled = true }
+    var onShortcutGrid: (ShortcutPanelGrid) -> Unit = {}
+    /** PC 当前启用的快捷键数量，决定面板行列。 */
+    var shortcutCount = 8
+        set(v) { if (field != v) { field = v; requestLayout() } }
+    private var shortcutGrid: ShortcutPanelGrid? = null
 
     private var state = VideoState()
     private var rttMs = 0L
@@ -162,16 +188,17 @@ class VideoModeView(
         id = R.id.video_mode
         setBackgroundColor(Color.BLACK)
         isMotionEventSplittingEnabled = true
-        statusButton.gravity = Gravity.CENTER_VERTICAL
         addView(surface, LayoutParams(0, 0))
         addView(touchLayer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         // 键盘只占自身区域，区域外的触摸仍落到下面的手势层。
         addView(keyboardHost, LayoutParams(0, 0, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
+        addView(shortcutHost, LayoutParams(0, 0))
         addView(message, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.CENTER))
-        addView(toolbar, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.START).apply {
-            leftMargin = (12 * density).roundToInt(); topMargin = (12 * density).roundToInt()
-        })
+        val margin = (12 * density).roundToInt()
+        addView(statusButton, LayoutParams((STATUS_WIDTH_DP * density).roundToInt(), LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.START).apply { leftMargin = margin; topMargin = margin })
+        addView(toolbar, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END).apply { rightMargin = margin; topMargin = margin })
         addView(mic, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        mic.onMoved = { placeShortcuts() }
         render()
     }
 
@@ -180,7 +207,8 @@ class VideoModeView(
         if (keyboard == mode) return
         keyboard = mode
         onKeyboardChange(mode)
-        keyboardHost.visibility = if (mode == VideoKeyboard.None) GONE else VISIBLE
+        keyboardHost.visibility = if (mode == VideoKeyboard.Full) VISIBLE else GONE
+        shortcutHost.visibility = if (mode == VideoKeyboard.Shortcuts) VISIBLE else GONE
         val active = 0xCC175CD3.toInt(); val idle = 0x99000000.toInt()
         shortcutsButton.background = pill(if (mode == VideoKeyboard.Shortcuts) active else idle)
         keyboardButton.background = pill(if (mode == VideoKeyboard.Full) active else idle)
@@ -211,13 +239,11 @@ class VideoModeView(
 
     private fun render() {
         val fps = decoder.fps
-        statusButton.text = buildString {
+        statusLine.text = buildString {
             append("‹ 退出")
-            if (state.phase == VideoPhase.Streaming) {
-                append(" · ").append(fps).append(" fps · ").append(rttMs).append(" ms")
-                if (!state.cursorVisible) append(" · 光标在其他显示器")
-            }
+            if (state.phase == VideoPhase.Streaming) append(" · ").append(fps).append(" fps · ").append(rttMs).append(" ms")
         }
+        cursorLine.visibility = if (state.phase == VideoPhase.Streaming && !state.cursorVisible) VISIBLE else GONE
         val text = when (state.phase) {
             VideoPhase.Idle, VideoPhase.Starting -> if (connected) "正在打开电脑画面…" else "正在连接电脑…"
             VideoPhase.Error -> state.error + "\n点击重试"
@@ -246,7 +272,13 @@ class VideoModeView(
         state.format?.let { viewport.resize(w.toDouble(), h.toDouble(), it.screenWidth.toDouble(), it.screenHeight.toDouble()) }
         surface.layoutParams.width = viewport.displayWidth.roundToInt().coerceAtLeast(1)
         surface.layoutParams.height = viewport.displayHeight.roundToInt().coerceAtLeast(1)
-        val size = videoKeyboardSize(w, h, keyboard)
+        // 底部叠加只用于全键盘；快捷键改为跟随悬浮球的小面板。
+        val size = videoKeyboardSize(w, h, if (keyboard == VideoKeyboard.Full) VideoKeyboard.Full else VideoKeyboard.None)
+        val grid = shortcutPanelGrid(shortcutCount, landscape = w > h)
+        val cellW = SHORTCUT_CELL_W_DP * density; val cellH = SHORTCUT_CELL_H_DP * density; val gap = SHORTCUT_GAP_DP * density
+        shortcutHost.layoutParams.width = (grid.columns * cellW + (grid.columns + 1) * gap).roundToInt()
+        shortcutHost.layoutParams.height = (grid.rows * cellH + (grid.rows + 1) * gap).roundToInt()
+        if (grid != shortcutGrid) { shortcutGrid = grid; post { onShortcutGrid(grid) } }
         keyboardHost.layoutParams.width = size?.width ?: 0
         keyboardHost.layoutParams.height = size?.height ?: 0
         if (size != keyboardSize) { keyboardSize = size; post { onKeyboardSize(keyboardSize) } }
@@ -256,6 +288,7 @@ class VideoModeView(
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         super.onLayout(changed, left, top, right, bottom)
         placeSurface()
+        placeShortcuts()
         if (Build.VERSION.SDK_INT >= 29) {
             // 尽量减少单指从屏幕边缘滑动时误触系统返回手势（系统限制每侧最多 200dp）。
             val h = bottom - top; val w = right - left
@@ -263,6 +296,15 @@ class VideoModeView(
             val y = (h - band) / 2
             touchLayer.systemGestureExclusionRects = listOf(Rect(0, y, edge, y + band), Rect(w - edge, y, w, y + band))
         }
+    }
+
+    /** 快捷键面板跟随悬浮球：在球下方居中，下方放不下时改到上方。 */
+    private fun placeShortcuts() {
+        val w = shortcutHost.measuredWidth; val h = shortcutHost.measuredHeight
+        if (w <= 0 || h <= 0 || mic.width <= 0) return
+        val (bx, by) = mic.ballCenter()
+        val (x, y) = shortcutPanelPosition(bx, by, mic.ballRadius, w.toFloat(), h.toFloat(), width.toFloat(), height.toFloat(), 8 * density)
+        shortcutHost.layout(x.roundToInt(), y.roundToInt(), x.roundToInt() + w, y.roundToInt() + h)
     }
 
     private fun placeSurface() {
@@ -302,3 +344,8 @@ class VideoModeView(
     override fun onAttachedToWindow() { super.onAttachedToWindow(); handler.post(statusTicker) }
     override fun onDetachedFromWindow() { cancel(); handler.removeCallbacks(statusTicker); super.onDetachedFromWindow() }
 }
+
+private const val STATUS_WIDTH_DP = 176
+private const val SHORTCUT_CELL_W_DP = 62
+private const val SHORTCUT_CELL_H_DP = 40
+private const val SHORTCUT_GAP_DP = 4

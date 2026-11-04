@@ -25,7 +25,12 @@ class FloatingMicView(
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
     private val box = RectF()
-    private val radius = 32 * density
+    // 视频模式画面优先：比最初的 32dp 缩小 20%。
+    private val radius = 32 * 0.8f * density
+    /** 球的位置变化（拖动、恢复位置、尺寸变化）时回调，跟随的快捷键面板据此重新定位。 */
+    var onMoved: () -> Unit = {}
+    val ballRadius: Float get() = radius
+    fun ballCenter(): Pair<Float, Float> = center()
     private var nx = 0.86f; private var ny = 0.78f
     private var restored = false; private var moved = false
     private var pointer = -1
@@ -71,11 +76,12 @@ class FloatingMicView(
         val w = width - margin * 2; val h = height - margin * 2
         nx = if (w > 0) ((x - margin) / w).coerceIn(0f, 1f) else 0.5f
         ny = if (h > 0) ((y - margin) / h).coerceIn(0f, 1f) else 0.5f
-        moved = true; invalidate()
+        moved = true; invalidate(); onMoved()
     }
     fun restorePosition(x: Float, y: Float) {
-        if (!restored && !moved && x.isFinite() && y.isFinite()) { nx = x.coerceIn(0f, 1f); ny = y.coerceIn(0f, 1f); restored = true; invalidate() }
+        if (!restored && !moved && x.isFinite() && y.isFinite()) { nx = x.coerceIn(0f, 1f); ny = y.coerceIn(0f, 1f); restored = true; invalidate(); onMoved() }
     }
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) { super.onSizeChanged(w, h, oldw, oldh); onMoved() }
 
     private fun hit(x: Float, y: Float): Boolean {
         val (cx, cy) = center()

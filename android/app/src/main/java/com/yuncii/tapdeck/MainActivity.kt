@@ -170,6 +170,7 @@ class MainActivity : ComponentActivity() {
     private var videoKeyHold = KeyHold({}, {})
     private var videoKeyboardMode by mutableStateOf(VideoKeyboard.None)
     private var videoKeyboardSize by mutableStateOf<VideoKeyboardSize?>(null)
+    private var videoShortcutGrid by mutableStateOf<ShortcutPanelGrid?>(null)
     /** 切换全键盘 / 快捷键+语音两种下半区布局。 */
     private var modeViews: (() -> Unit)? = null
     private val microphonePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (!granted) android.widget.Toast.makeText(this, "麦克风权限未授予，键鼠仍可使用", android.widget.Toast.LENGTH_LONG).show() }
@@ -353,28 +354,19 @@ class MainActivity : ComponentActivity() {
             view.keyboardHost.addView(compose {
                 val state by vm.client.state.collectAsStateWithLifecycle()
                 val epoch = state.connectionEpoch
-                val shortcutSession = remember(epoch) { ShortcutHold(
-                    { slot, token -> vm.client.inputInSession(epoch) { vm.client.shortcutHoldStart(slot, token) } },
-                    { token -> vm.client.inputInSession(epoch) { vm.client.shortcutHoldStop(token) } },
-                ) }
                 val keySession = remember(epoch) { KeyHold(
                     { chord -> vm.client.inputInSession(epoch) { vm.client.keyDown(chord) } },
                     { chord -> vm.client.inputInSession(epoch) { vm.client.keyUp(chord) } },
                 ) }
-                SideEffect { videoShortcutHold = shortcutSession; videoKeyHold = keySession }
-                DisposableEffect(shortcutSession, keySession) { onDispose { shortcutSession.cancelAll(); keySession.releaseAll() } }
+                SideEffect { videoKeyHold = keySession }
+                DisposableEffect(keySession) { onDispose { keySession.releaseAll() } }
                 val size = videoKeyboardSize
                 val mode = videoKeyboardMode
-                if (size != null && mode != VideoKeyboard.None) {
+                if (size != null && mode == VideoKeyboard.Full) {
                     val pad = with(LocalDensity.current) { size.padding.toDp() }
                     // 50% 透明度叠加在画面上；只占键盘自身区域，区域外仍是触控板。
                     Box(Modifier.fillMaxSize().graphicsLayer { alpha = 0.5f }.background(Color(ControllerStyle.PANEL)).padding(vertical = pad)) {
-                        if (mode == VideoKeyboard.Shortcuts) ShortcutButtons(state, shortcutSession, scale = size.scale, stopRecording = {
-                            val active = vm.client.state.value.micMode == MicBallView.MODE_TOGGLE && vm.client.state.value.mic in listOf("preparing", "transmitting", "stopping")
-                            if (active) vm.client.inputInSession(epoch) { vm.client.stopMic() }
-                            active
-                        })
-                        else key(epoch) { KeyboardView(
+                        key(epoch) { KeyboardView(
                             connected = state.connected,
                             voiceActive = state.mic == "preparing" || state.mic == "transmitting",
                             scale = size.scale,
@@ -382,6 +374,28 @@ class MainActivity : ComponentActivity() {
                             beginVoice = { m -> var started = false; vm.client.inputInSession(epoch) { started = beginMic(m, firstVoiceProfile()) }; started },
                             stopVoice = { vm.client.inputInSession(epoch) { vm.client.stopMic() } },
                         ) }
+                    }
+                }
+            }, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            view.onShortcutGrid = { videoShortcutGrid = it }
+            // 快捷键面板跟随悬浮球：竖屏 2 列竖排、横屏 2 行横排，50% 透明度。
+            view.shortcutHost.addView(compose {
+                val state by vm.client.state.collectAsStateWithLifecycle()
+                val epoch = state.connectionEpoch
+                val shortcutSession = remember(epoch) { ShortcutHold(
+                    { slot, token -> vm.client.inputInSession(epoch) { vm.client.shortcutHoldStart(slot, token) } },
+                    { token -> vm.client.inputInSession(epoch) { vm.client.shortcutHoldStop(token) } },
+                ) }
+                SideEffect { videoShortcutHold = shortcutSession }
+                DisposableEffect(shortcutSession) { onDispose { shortcutSession.cancelAll() } }
+                val grid = videoShortcutGrid
+                if (videoKeyboardMode == VideoKeyboard.Shortcuts && grid != null) {
+                    Box(Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp)).graphicsLayer { alpha = 0.5f }.background(Color(ControllerStyle.PANEL)).padding(top = 4.dp)) {
+                        ShortcutButtons(state, shortcutSession, scale = 3f, fixedColumns = grid.columns, stopRecording = {
+                            val active = vm.client.state.value.micMode == MicBallView.MODE_TOGGLE && vm.client.state.value.mic in listOf("preparing", "transmitting", "stopping")
+                            if (active) vm.client.inputInSession(epoch) { vm.client.stopMic() }
+                            active
+                        })
                     }
                 }
             }, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
@@ -498,6 +512,7 @@ class MainActivity : ComponentActivity() {
                     combine(vm.client.state, vm.videoOn, vm.videoBall) { state, on, ball -> Triple(state, on, ball) }.collect { (state, on, ball) ->
                         val view = videoView ?: return@collect
                         view.connected = state.connected
+                        view.shortcutCount = state.config.visibleShortcuts().size
                         view.update(state.video, state.rttMs)
                         ball?.let { view.mic.restorePosition(it.first, it.second) }
                         view.mic.apply {
@@ -839,12 +854,13 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable internal fun ShortcutButtons(state: ClientState, hold: ShortcutHold, scale: Float, stopRecording: () -> Boolean) {
+/** fixedColumns 用于视频模式跟随悬浮球的小面板：固定列数（竖屏 2 列、横屏按 2 行折算）。 */
+@Composable internal fun ShortcutButtons(state: ClientState, hold: ShortcutHold, scale: Float, fixedColumns: Int? = null, stopRecording: () -> Boolean) {
     val feedback by rememberUpdatedState(LocalKeyFeedback.current)
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val visible = state.config.visibleShortcuts()
-        val rows = if (visible.size > 4) 2 else 1
-        val columns = if (rows == 2) 4 else visible.size.coerceAtLeast(1)
+        val rows = if (fixedColumns != null) ((visible.size + fixedColumns - 1) / fixedColumns).coerceAtLeast(1) else if (visible.size > 4) 2 else 1
+        val columns = fixedColumns ?: if (rows == 2) 4 else visible.size.coerceAtLeast(1)
         val width = maxWidth
         val side = width * KeyboardGeometry.SIDE.toFloat()
         val gap = width * KeyboardGeometry.GAP.toFloat()
