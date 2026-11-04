@@ -1,6 +1,6 @@
 # TapDeck
 
-通过 Wi-Fi 局域网，把 Android 手机变成 Windows 电脑的麦克风、触控板和键盘，方便 Vibe Coding 和日常操作。
+通过 Wi-Fi 局域网，把 Android 手机变成 Windows 电脑的麦克风、触控板、键盘和随身屏幕，并把电脑通知同步到手机，方便 Vibe Coding 和日常操作。
 
 **[Windows EXE](https://github.com/fly3457/TapDeck/releases/download/v0.4.0/TapDeck-0.4.0.exe) · [Android APK](https://github.com/fly3457/TapDeck/releases/download/v0.4.0/TapDeck-0.4.0.apk) · [完整下载与校验](https://github.com/fly3457/TapDeck/releases/tag/v0.4.0)**
 
@@ -12,8 +12,8 @@ Android APK 使用不可调试的 release 构建，现有官方版可覆盖升�
 
 - 手机麦克风传音到 PC，配合输入法或支持语音输入的 Agent 软件转成文字。
 - 触控板支持点击、拖拽、双指滚动与缩放、三指窗口操作。
-- 视频模式把手机整屏变成 PC 显示器：硬件 H.264 低延迟传画面，点哪里就操作哪里，双指滚动与缩放，配有语音悬浮球和半透明叠加键盘，横竖屏都可用，见[视频模式](docs/video-mode.md)。
-- 电脑上的 Windows 系统通知直接转发到手机，后台、锁屏也能收到；Claude Code 等 Agent 完成任务时可同步提醒，见[电脑通知转发](docs/notifications.md)。
+- 视频模式把手机整屏变成 PC 显示器：硬件 H.264 低延迟传画面，点哪里就操作哪里，双指滚动与缩放，配有语音悬浮球、半透明叠加键盘和通知铃铛，横竖屏都可用，见[视频模式](docs/video-mode.md)。
+- 电脑上的 Windows 系统通知直接转发到手机，无需逐个软件对接，后台、锁屏也能收到；Claude Code、Codex 等 Agent 完成任务时可同步提醒，见[电脑通知转发](docs/notifications.md)。
 - 可切换全键盘，输入字母、数字、符号和组合键。
 - 最多八个自定义快捷键、三组语音配置，支持长按和单击起停。
 - 一部手机可配对多台 PC 并切换控制；一台 PC 最多连接五个控制端。
@@ -26,6 +26,7 @@ Android APK 使用不可调试的 release 构建，现有官方版可覆盖升�
 2. 手机扫码填写 PC 连接网址，点击“连接”；在 PC 核对校验码并允许。
 3. 首次运行时会检测虚拟键盘和虚拟声卡，缺失时提示安装。虚拟键盘用于触发豆包等输入法的语音热键，虚拟声卡用于将手机音频接入电脑麦克风。只用触控板和普通键盘可不安装。
 4. 使用语音输入时，系统、输入法或 Agent 的麦克风选 **CABLE Output**。语音热键与目标软件触发快捷键设置一致，留空则无法触发目标软件，只能直接传输音频。保存配置并让目标输入框获得焦点，再从手机开始语音。
+5. 转发电脑通知时，在 Windows“设置 → 隐私和安全性 → 通知”中允许应用访问通知；手机上允许 TapDeck 发送通知并后台运行（关闭电池优化），否则锁屏后可能收不到。Agent 提醒的配置在 PC“通知”页一键复制。
 
 推荐配合[豆包输入法 Windows 版](https://ime.doubao.com/pc)使用。TapDeck 负责传音和触发热键，语音识别由输入法或 Agent 软件完成。详细步骤见[安装与配对](docs/installation.md)。
 
