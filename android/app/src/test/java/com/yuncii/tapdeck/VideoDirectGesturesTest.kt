@@ -22,39 +22,54 @@ class VideoDirectGesturesTest {
     private fun TouchpadGestures.event(time: Long, phase: TouchPhase, vararg points: TouchPoint, changed: Int = points.first().id) = accept(TouchFrame(time, phase, points.toList(), changed))
     private fun gestures(sink: Sink) = TouchpadGestures(sink, 8.0, 40.0, direct = true)
 
-    @Test fun tapClicksAtTouchedPositionImmediately() {
+    @Test fun tapClicksAtTouchedPositionAfterConfirmWindow() {
         val s = Sink(); val g = gestures(s)
         g.event(100, TouchPhase.Down, p(x = 120.0, y = 340.0)); g.event(180, TouchPhase.Up, p(x = 122.0, y = 341.0))
+        // 与触控板一致：等待可能的第二次按下，超时后在第一次的位置单击。
+        assertTrue(s.events.isEmpty())
+        assertEquals(180L + TouchpadGestures.TAP_WINDOW, g.nextDeadline)
+        g.advance(479); assertTrue(s.events.isEmpty())
+        g.advance(480)
         assertEquals(listOf("at:left:120,340"), s.events)
-        assertNull(g.nextDeadline)
-        // 相隔较久的第二次轻点是新的单击。
-        g.event(900, TouchPhase.Down, p(x = 120.0, y = 340.0)); g.event(950, TouchPhase.Up, p(x = 120.0, y = 340.0))
-        assertEquals(listOf("at:left:120,340", "at:left:120,340"), s.events)
+        // 稍慢（超过确认窗口、未到长按）的轻点立即单击。
+        g.event(900, TouchPhase.Down, p(x = 50.0, y = 60.0)); g.event(1300, TouchPhase.Up, p(x = 50.0, y = 60.0))
+        assertEquals("at:left:50,60", s.events.last())
     }
 
     @Test fun doubleAndTripleTapPressAtFirstTapPosition() {
         val s = Sink(); val g = gestures(s)
         g.event(100, TouchPhase.Down, p(x = 120.0, y = 340.0)); g.event(150, TouchPhase.Up, p(x = 120.0, y = 340.0))
-        // 第二次落点略有偏差，仍按第一次的位置按下，Windows 才判定为双击。
+        // 第二次落点略有偏差，仍按第一次的位置按下；快速抬起补发一次点击，PC 收到两次点击即双击。
         g.event(250, TouchPhase.Down, p(x = 124.0, y = 343.0)); g.event(300, TouchPhase.Up, p(x = 124.0, y = 343.0))
+        assertEquals(listOf("ptr:down:120,340", "ptr:up:120,340", "at:left:120,340"), s.events)
+        // 第三次轻点立即在同一位置按下抬起，构成三击。
         g.event(400, TouchPhase.Down, p(x = 121.0, y = 339.0)); g.event(450, TouchPhase.Up, p(x = 121.0, y = 339.0))
-        assertEquals(listOf("at:left:120,340", "ptr:down:120,340", "ptr:up:120,340", "ptr:down:120,340", "ptr:up:120,340"), s.events)
-        assertNull("双击按住期间不触发长按右击", g.nextDeadline)
+        assertEquals(listOf("ptr:down:120,340", "ptr:up:120,340", "at:left:120,340", "ptr:down:120,340", "ptr:up:120,340"), s.events)
+        g.advance(5000)
+        assertEquals("三击后没有多余的延迟点击", 5, s.events.size)
     }
 
-    @Test fun doubleTapHoldAndMoveDragsWithLeftButton() {
+    @Test fun doubleTapHoldAndMoveDragsWithSinglePress() {
         val s = Sink(); val g = gestures(s)
         g.event(100, TouchPhase.Down, p(x = 100.0, y = 100.0)); g.event(150, TouchPhase.Up, p(x = 100.0, y = 100.0))
         g.event(250, TouchPhase.Down, p(x = 100.0, y = 100.0))
+        assertNull("双击按住期间不触发长按右击", g.nextDeadline)
         g.advance(2000)
         g.event(2100, TouchPhase.Move, p(x = 140.0, y = 160.0))
         g.event(2200, TouchPhase.Move, p(x = 180.0, y = 200.0))
         g.event(2300, TouchPhase.Up, p(x = 180.0, y = 200.0))
-        assertEquals(listOf("at:left:100,100", "ptr:down:100,100", "ptr:move:140,160", "ptr:up:180,200"), s.events)
+        // 首次轻点被这次按住取代：PC 只收到一次按下，拖动标题栏不会被双击最大化。
+        assertEquals(listOf("ptr:down:100,100", "ptr:move:140,160", "ptr:up:180,200"), s.events)
         assertTrue("拖拽没有平移画面", s.panX == 0.0)
-        // 拖拽结束后的轻点是新的单击，不会接成三击。
-        g.event(2400, TouchPhase.Down, p(x = 180.0, y = 200.0)); g.event(2450, TouchPhase.Up, p(x = 180.0, y = 200.0))
-        assertEquals("at:left:180,200", s.events.last())
+        g.event(2400, TouchPhase.Down, p(x = 180.0, y = 200.0)); g.event(2450, TouchPhase.Up, p(x = 180.0, y = 200.0)); g.advance(3000)
+        assertEquals("拖拽后的轻点是新的单击", "at:left:180,200", s.events.last())
+    }
+
+    @Test fun heldSecondTapReleasesWithoutDoubleClick() {
+        val s = Sink(); val g = gestures(s)
+        g.event(100, TouchPhase.Down, p()); g.event(150, TouchPhase.Up, p())
+        g.event(250, TouchPhase.Down, p()); g.advance(2000); g.event(2000, TouchPhase.Up, p())
+        assertEquals(listOf("ptr:down:100,100", "ptr:up:100,100"), s.events)
     }
 
     @Test fun cancelDuringDragReleasesButton() {

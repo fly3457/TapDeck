@@ -59,16 +59,20 @@ internal class TouchpadGestures(
     private var moved = false
     private var leftHeld = false
     private var pendingTap: Tap? = null
-    // 直接操作：上一次轻点（已立即点击），用于识别双击、三击与双击后拖拽；anchor 为按下位置。
+    // 直接操作：与触控板一致，首次轻点延迟 [TAP_WINDOW] 确认（pendingTap），期间再次按下即取消该次点击、
+    // 在原位置按住左键——快速抬起补发一次点击构成双击，按住移动即拖拽（拖动窗口不会被双击最大化）。
+    // directTap 为刚完成的双击，紧接着的轻点立即在同一位置按下构成三击。anchor 为按下位置。
     private var directTap: Tap? = null
+    private var completeDouble = false
     private var anchor = TouchPoint(-1, 0.0, 0.0)
     private val origins = mutableMapOf<Int, TouchPoint>()
     private var ids = emptyList<Int>()
-    val nextDeadline: Long? get() = if (direct) (if (mode == Mode.Single && !moved) started + LONG_PRESS else null) else pendingTap?.let { it.time + TAP_WINDOW }
+    private val longPressDeadline: Long? get() = if (direct && mode == Mode.Single && !moved) started + LONG_PRESS else null
+    val nextDeadline: Long? get() = listOfNotNull(longPressDeadline, pendingTap?.let { it.time + TAP_WINDOW }).minOrNull()
 
     fun advance(now: Long) {
-        if (nextDeadline?.let { now >= it } != true) return
-        if (direct) { sink.clickAt(origin.x, origin.y, "right"); mode = Mode.Consumed } else flushTap()
+        pendingTap?.let { if (now >= it.time + TAP_WINDOW) flushTap() }
+        longPressDeadline?.let { if (now >= it) { sink.clickAt(origin.x, origin.y, "right"); mode = Mode.Consumed } }
     }
 
     fun accept(frame: TouchFrame) {
@@ -87,11 +91,15 @@ internal class TouchpadGestures(
     private fun down(frame: TouchFrame) {
         releaseLeft()
         val point = frame.points.singleOrNull() ?: run { cancel(); return }
-        val tap = if (direct) directTap else pendingTap
-        val second = tap != null && frame.time - tap.time in 0 until TAP_WINDOW && distance(point, tap.point) <= doubleTapSlop
+        val near = { t: Tap? -> t != null && frame.time - t.time in 0 until TAP_WINDOW && distance(point, t.point) <= doubleTapSlop }
+        val tap = if (direct && !near(pendingTap) && near(directTap)) directTap else pendingTap
+        val second = near(tap)
         directTap = null
         if (second && direct) {
-            // 在上一次轻点的位置按下：落点相同，Windows 才会判定为双击／三击。
+            // 在上一次轻点的位置按下：落点相同，Windows 才会判定为双击／三击。待确认的首次点击被取消，
+            // 由本次按下充当，快速抬起时再补一次点击。
+            completeDouble = tap === pendingTap
+            pendingTap = null
             anchor = tap!!.point
             leftHeld = true
             sink.pointerAt("down", anchor.x, anchor.y)
@@ -226,13 +234,20 @@ internal class TouchpadGestures(
         val elapsed = frame.time - started
         when (mode) {
             Mode.Single -> if (direct) {
-                if (!moved && elapsed in 0 until LONG_PRESS) { sink.clickAt(origin.x, origin.y, "left"); directTap = Tap(frame.time, origin) }
+                // 快速轻点等待可能的第二次按下；稍慢的轻点（未到长按）立即单击。
+                if (!moved && elapsed in 0 until TAP_WINDOW) pendingTap = Tap(frame.time, origin)
+                else if (!moved && elapsed in 0 until LONG_PRESS) sink.clickAt(origin.x, origin.y, "left")
             } else if (!moved && elapsed in 0 until TAP_WINDOW) pendingTap = Tap(frame.time, origin)
             Mode.Second, Mode.Drag -> if (direct) {
                 val held = mode == Mode.Second
                 releaseLeft()
-                // 双击未拖动：可继续第三次轻点构成三击。
-                if (held && !moved) directTap = Tap(frame.time, anchor)
+                if (held && !moved) {
+                    // 与触控板相同：第二次快速抬起才补发点击构成双击；按住不动后松开不会打开文件。
+                    val shortLimit = min(TAP_WINDOW, (sink.doubleClickMs - 50).coerceAtLeast(1).toLong())
+                    if (completeDouble && elapsed in 0 until shortLimit) sink.clickAt(anchor.x, anchor.y, "left")
+                    // 继续轻点构成三击。
+                    directTap = Tap(frame.time, anchor)
+                }
             } else if (mode == Mode.Second) {
                 releaseLeft()
                 // The first PC click starts on the SECOND finger-down. Complete the
@@ -248,7 +263,9 @@ internal class TouchpadGestures(
     }
 
     private fun flushTap() {
-        if (pendingTap != null) { pendingTap = null; sink.click("left") }
+        val tap = pendingTap ?: return
+        pendingTap = null
+        if (direct) sink.clickAt(tap.point.x, tap.point.y, "left") else sink.click("left")
     }
     private fun releaseLeft() {
         if (!leftHeld) return
