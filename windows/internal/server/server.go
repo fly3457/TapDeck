@@ -189,10 +189,11 @@ type Server struct {
 	generation   uint64
 	cfg          config.Config
 	dir          string
-	host         string
+	host         string // 非空时固定作为配对地址（测试用），否则见 currentHostLocked
 	name         string
 	pin          string
 	cert         tls.Certificate
+	certMu       sync.Mutex
 	paired       map[string]pairedRecord
 	pairEpoch    map[string]uint64
 	buttonMu     sync.Mutex
@@ -264,24 +265,6 @@ type session struct {
 	background atomic.Bool
 }
 
-func LocalIPs() []net.IP {
-	result := []net.IP{net.ParseIP("127.0.0.1")}
-	is, _ := net.Interfaces()
-	for _, i := range is {
-		if i.Flags&net.FlagUp == 0 || i.Flags&net.FlagLoopback != 0 {
-			continue
-		}
-		as, _ := i.Addrs()
-		for _, a := range as {
-			ip, _, e := net.ParseCIDR(a.String())
-			if e == nil && ip.To4() != nil && !ip.IsLinkLocalUnicast() {
-				result = append(result, ip.To4())
-			}
-		}
-	}
-	sort.Slice(result[1:], func(i, j int) bool { return result[i+1].String() < result[j+1].String() })
-	return result
-}
 func New(dir string) (*Server, error) {
 	c, err := config.Load(dir)
 	if err != nil {
@@ -292,12 +275,8 @@ func New(dir string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	host := "127.0.0.1"
-	if len(ips) > 1 {
-		host = ips[1].String()
-	}
 	name, _ := os.Hostname()
-	s := &Server{cfg: c, dir: dir, host: host, name: name, pin: pin, cert: cert, pairEpoch: map[string]uint64{}, pending: map[string]*Pending{}, pairTimeout: 120 * time.Second, sessions: map[uint64]*session{}, Input: input.New(), Audio: audio.New(), Video: video.NewManager(video.NewLauncher())}
+	s := &Server{cfg: c, dir: dir, name: name, pin: pin, cert: cert, pairEpoch: map[string]uint64{}, pending: map[string]*Pending{}, pairTimeout: 120 * time.Second, sessions: map[uint64]*session{}, Input: input.New(), Audio: audio.New(), Video: video.NewManager(video.NewLauncher())}
 	if s.paired, err = loadPaired(dir); err != nil {
 		return nil, err
 	}
@@ -387,7 +366,7 @@ func (s *Server) Update(c config.Config) error {
 func (s *Server) PairURL() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return fmt.Sprintf("http://%s:%d/pair", s.host, s.cfg.HTTPPort)
+	return fmt.Sprintf("http://%s:%d/pair", s.currentHostLocked(), s.cfg.HTTPPort)
 }
 func (s *Server) QRURI() string {
 	return s.PairURL()
@@ -395,7 +374,7 @@ func (s *Server) QRURI() string {
 func (s *Server) metadata() map[string]any {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return map[string]any{"version": ControlVersion, "host": s.host, "wss_port": s.cfg.WSSPort, "http_port": s.cfg.HTTPPort, "pin": s.pin, "name": s.name}
+	return map[string]any{"version": ControlVersion, "host": s.currentHostLocked(), "wss_port": s.cfg.WSSPort, "http_port": s.cfg.HTTPPort, "pin": s.pin, "name": s.name}
 }
 func (s *Server) Start() error {
 	s.lifecycleMu.Lock()
@@ -440,7 +419,7 @@ func (s *Server) Start() error {
 	wm := http.NewServeMux()
 	wm.HandleFunc("GET /ws", s.connect)
 	wm.HandleFunc("GET /video", s.videoConnect)
-	s.wss = &http.Server{Handler: wm, ReadHeaderTimeout: 5 * time.Second, TLSConfig: &tls.Config{Certificates: []tls.Certificate{s.cert}, MinVersion: tls.VersionTLS12}}
+	s.wss = &http.Server{Handler: wm, ReadHeaderTimeout: 5 * time.Second, TLSConfig: &tls.Config{GetCertificate: s.certificate, MinVersion: tls.VersionTLS12}}
 	hs := s.http
 	ws := s.wss
 	certCfg := ws.TLSConfig
@@ -492,7 +471,7 @@ func (s *Server) Stop() {
 }
 func (s *Server) Snapshot() Snapshot {
 	s.mu.Lock()
-	v := Snapshot{Running: s.running, URL: fmt.Sprintf("http://%s:%d/pair", s.host, s.cfg.HTTPPort), Error: s.lastError}
+	v := Snapshot{Running: s.running, URL: fmt.Sprintf("http://%s:%d/pair", s.currentHostLocked(), s.cfg.HTTPPort), Error: s.lastError}
 	for _, ss := range s.sessions {
 		v.Devices = append(v.Devices, ss.name)
 	}

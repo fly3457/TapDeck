@@ -69,7 +69,7 @@ func (s *Server) apkURL(r *http.Request) string {
 	host := r.Host
 	if host == "" {
 		s.mu.Lock()
-		host = fmt.Sprintf("%s:%d", s.host, s.cfg.HTTPPort)
+		host = fmt.Sprintf("%s:%d", s.currentHostLocked(), s.cfg.HTTPPort)
 		s.mu.Unlock()
 	}
 	return "http://" + host + "/apk"

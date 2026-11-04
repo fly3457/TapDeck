@@ -454,7 +454,8 @@ class TapClient(private val app: Application, private val scope: CoroutineScope,
             }
         }
         val tls = SSLContext.getInstance("TLS").apply { init(null, arrayOf(manager), SecureRandom()) }
-        val client = http.newBuilder().sslSocketFactory(tls.socketFactory, manager).readTimeout(0, java.util.concurrent.TimeUnit.SECONDS).build()
+        // 身份只认证书指纹（上面的 manager）：不再校验证书里的 IP，电脑换网络后旧接收端的证书没有新地址也能连上。
+        val client = http.newBuilder().sslSocketFactory(tls.socketFactory, manager).hostnameVerifier { _, _ -> true }.readTimeout(0, java.util.concurrent.TimeUnit.SECONDS).build()
         val ws = client.newWebSocket(Request.Builder().url("wss://" + p.host + ":" + p.wssPort + "/ws").build(), object : WebSocketListener() {
             private fun dispatch(action: () -> Unit) {
                 scope.launch(Dispatchers.Main.immediate) { if (current(attempt, gen)) action() }
