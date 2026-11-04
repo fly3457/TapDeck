@@ -471,7 +471,12 @@ class MainActivity : ComponentActivity() {
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
                     if (pairingScanError.isNotEmpty()) Text(pairingScanError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                     if (!state.canSwitch) Text("请先结束语音输入", color = MaterialTheme.colorScheme.error)
-                    TextButton(onClick = { settings = false; managingPeers = true }) { Text("管理电脑（${peers.peers.size}）") }
+                    // “连接”紧挨网址，不再放在弹窗底部；底部只留“关闭”。
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = { settings = false; managingPeers = true }) { Text("管理电脑（${peers.peers.size}）") }
+                        Spacer(Modifier.weight(1f))
+                        Button(enabled = state.canSwitch, onClick = { enter(address); settings = false }) { Text("连接") }
+                    }
                     HorizontalDivider(Modifier.padding(vertical = 8.dp))
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text("按键震动反馈", Modifier.weight(1f))
@@ -525,7 +530,7 @@ class MainActivity : ComponentActivity() {
                         Text("部分机型（如努比亚、小米）还需在系统设置中允许 TapDeck 自启动与后台运行，锁屏后才不会被清理。", style = MaterialTheme.typography.bodySmall)
                     }
                 }
-            }, confirmButton = { TextButton(enabled = state.canSwitch, onClick = { enter(address); settings = false }) { Text("连接") } }, dismissButton = { TextButton(onClick = { settings = false }) { Text("关闭") } })
+            }, confirmButton = { TextButton(onClick = { settings = false }) { Text("关闭") } })
             if (state.pairing.isNotEmpty()) AlertDialog(onDismissRequest = ::cancelPairing, title = { Text("等待电脑允许连接") }, text = { Column { Text("核对电脑弹窗中的校验码，一致后在电脑上点“允许连接”。"); Spacer(Modifier.height(12.dp)); Text(state.pairing, fontSize = 19.sp); Spacer(Modifier.height(12.dp)); Text("电脑允许后会自动连接。") } }, confirmButton = {}, dismissButton = { TextButton(onClick = ::cancelPairing) { Text("取消") } })
         }
         val root = FrameLayout(this).apply {
