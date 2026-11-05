@@ -284,6 +284,8 @@ class VideoModeView(
     private var state = VideoState()
     private var rttMs = 0L
     private var lastStatus = 0L
+    /** 连接信息被缩短（窄屏竖屏）时省去“延迟”“RTT”字样，只显示毫秒数。 */
+    private var compactStatus = false
 
     init {
         id = R.id.video_mode
@@ -345,8 +347,9 @@ class VideoModeView(
             append("‹ 退出")
             // 有帧时间（PC 0.5.11 起）时显示画面端到端延迟；旧版 PC 只能显示控制通道往返时间。
             val latency = decoder.latencyMs
-            if (state.phase == VideoPhase.Streaming) append(" · ").append(fps).append(" fps · ")
-                .append(if (latency >= 0) "延迟 $latency ms" else "RTT $rttMs ms")
+            // 窄屏竖屏时连接信息被缩短，只显示毫秒数，避免“延迟”二字把数字挤成省略号。
+            if (state.phase == VideoPhase.Streaming) append(" · ").append(fps).append("fps · ")
+                .append(when { latency >= 0 && compactStatus -> "${latency}ms"; latency >= 0 -> "延迟${latency}ms"; compactStatus -> "${rttMs}ms"; else -> "RTT${rttMs}ms" })
         }
         cursorLine.visibility = if (state.phase == VideoPhase.Streaming && !state.cursorVisible) VISIBLE else GONE
         val text = when (state.phase) {
@@ -388,6 +391,8 @@ class VideoModeView(
         val margin = 12 * density
         val tools = (TOOLBAR_ICONS * TOOLBAR_ICON_DP + (TOOLBAR_ICONS - 1) * TOOLBAR_GAP_DP) * density
         statusButton.layoutParams.width = minOf(STATUS_WIDTH_DP * density, w - tools - 3 * margin).roundToInt().coerceAtLeast((96 * density).roundToInt())
+        val compact = statusButton.layoutParams.width < (STATUS_WIDTH_DP * density).roundToInt()
+        if (compact != compactStatus) { compactStatus = compact; post { render() } }
         keyboardHost.layoutParams.width = size?.width ?: 0
         keyboardHost.layoutParams.height = size?.height ?: 0
         if (size != keyboardSize) { keyboardSize = size; post { onKeyboardSize(keyboardSize) } }

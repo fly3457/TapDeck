@@ -175,5 +175,7 @@ func (p Plan) Args(probe bool) []string {
 	if probe {
 		return append(args, "-frames:v", "5", "-f", "null", "-")
 	}
-	return append(args, "-flush_packets", "1", "-f", "flv", "-flvflags", "no_duration_filesize", "pipe:1")
+	// 输出线程队列默认 8 个包（约 133ms）：管道写出稍慢就会排满且不再回落。限制为 2 个包，
+	// 积压时由编码端等待、ddagrab 推迟截屏，延迟不会累积。
+	return append(args, "-thread_queue_size", "2", "-flush_packets", "1", "-f", "flv", "-flvflags", "no_duration_filesize", "pipe:1")
 }

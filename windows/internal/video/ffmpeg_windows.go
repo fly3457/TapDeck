@@ -160,6 +160,7 @@ func (f *FFmpeg) Prepare(r Request) (Plan, error) {
 
 type process struct {
 	cmd    *exec.Cmd
+	out    *os.File
 	reader *flvReader
 	stderr *tail
 	once   sync.Once
@@ -171,18 +172,28 @@ func (f *FFmpeg) Launch(ctx context.Context, p Plan) (Source, error) {
 		return nil, err
 	}
 	cmd := command(ctx, bin, p.Args(false))
-	out, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
+	// 匿名管道默认缓冲只有约 4KB：运动画面每帧三四十 KB，要分十几次写、每次等读端取走，
+	// 实测滚动网页时截屏到读出的延迟从约 15ms 涨到 120–165ms。自建 4MB 缓冲的管道。
+	var r, w windows.Handle
+	if err := windows.CreatePipe(&r, &w, nil, pipeBuffer); err != nil {
+		return nil, fmt.Errorf("无法创建编码输出管道：%w", err)
 	}
+	out, wf := os.NewFile(uintptr(r), "ffmpeg-stdout"), os.NewFile(uintptr(w), "ffmpeg-stdout-w")
+	cmd.Stdout = wf
 	t := &tail{}
 	cmd.Stderr = t
-	if err = cmd.Start(); err != nil {
+	err = cmd.Start()
+	// 子进程已继承写端；父进程关闭自己的副本，编码进程退出时读端才能收到 EOF。
+	wf.Close()
+	if err != nil {
+		out.Close()
 		return nil, fmt.Errorf("无法启动编码进程：%w", err)
 	}
 	assignJob(cmd.Process.Pid)
-	return &process{cmd: cmd, reader: newFLVReader(out), stderr: t}, nil
+	return &process{cmd: cmd, out: out, reader: newFLVReader(out), stderr: t}, nil
 }
+
+const pipeBuffer = 4 << 20
 
 func (p *process) Next() (Frame, error) {
 	f, err := p.reader.Next()
@@ -196,6 +207,7 @@ func (p *process) Close() error {
 	p.once.Do(func() {
 		_ = p.cmd.Process.Kill()
 		_ = p.cmd.Wait()
+		_ = p.out.Close()
 	})
 	return nil
 }
