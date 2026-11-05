@@ -22,14 +22,16 @@ class MotionPanTest {
         val (sx, sy, last) = steady(0.0, -1.0)
         assertTrue("画面应向左移", sx < 0)
         assertEquals(0.0, sy, 1e-9)
-        // 持续转动时滤波收敛，每步平移等于（角速度 − 死区）× 时间 × 系数。
-        assertEquals(-(1.0 - MotionPan.DEAD_ZONE) * dt * px, last.first, 0.5)
+        // 持续转动时滤波收敛，每步平移等于（角速度 − 死区）× 加速度倍率 × 时间 × 系数。
+        val rate = 1.0 - MotionPan.DEAD_ZONE
+        assertEquals(-rate * MotionPan.gain(rate) * dt * px, last.first, 0.5)
     }
 
-    @Test fun tiltingTopTowardUserMovesContentUp() {
+    @Test fun tiltingTopTowardUserMovesContentDown() {
+        // 按实测要求上下反转：顶部朝自己倾斜（绕设备 x 轴正向）时画面向下移。
         val (sx, sy, _) = steady(1.0, 0.0)
         assertEquals(0.0, sx, 1e-9)
-        assertTrue("画面应向上移", sy < 0)
+        assertTrue("画面应向下移", sy > 0)
     }
 
     @Test fun landscapeUsesScreenAxes() {
@@ -43,6 +45,24 @@ class MotionPanTest {
         check(0.0, 1.0, 2, 0.0, -1.0) // ROTATION_180：上下左右都翻转
         check(0.0, -1.0, 1, 1.0, 0.0)
         assertTrue(steady(-1.0, 0.0, rotation = 1).first < 0)
+    }
+
+    @Test fun fasterTurnMovesFartherForSameAngle() {
+        // 同样向右转 0.5 rad：2 rad/s 用 0.25 秒，0.25 rad/s 用 2 秒。
+        fun distance(rate: Double): Double {
+            val m = MotionPan(); var sum = 0.0
+            repeat((0.5 / rate / dt).toInt()) { sum += m.step(0.0, -rate, 0, dt, px).first }
+            return abs(sum)
+        }
+        val fast = distance(2.0); val slow = distance(0.25)
+        assertTrue("快转 $fast px 应远大于慢转 $slow px", fast > slow * 2)
+    }
+
+    @Test fun gainIsSmoothAndBounded() {
+        assertEquals(MotionPan.SLOW_GAIN, MotionPan.gain(0.0), 1e-12)
+        assertEquals(MotionPan.FAST_GAIN, MotionPan.gain(10.0), 1e-12)
+        var prev = 0.0
+        for (i in 0..100) { val g = MotionPan.gain(i * 0.02); assertTrue(g >= prev); prev = g }
     }
 
     @Test fun handTremorIsSuppressed() {
@@ -66,7 +86,7 @@ class MotionPanTest {
         val m = MotionPan()
         m.step(0.0, -1.0, 0, dt, px)
         val capped = m.step(0.0, -1.0, 0, 5.0, px).first
-        assertTrue("间隔应按 ${MotionPan.MAX_DT}s 封顶", abs(capped) <= MotionPan.MAX_DT * px)
+        assertTrue("间隔应按 ${MotionPan.MAX_DT}s 封顶", abs(capped) <= MotionPan.MAX_DT * MotionPan.FAST_GAIN * px)
         assertEquals(0.0 to 0.0, m.step(0.0, -1.0, 0, 0.0, px))
     }
 
