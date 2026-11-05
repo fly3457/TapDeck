@@ -19,8 +19,8 @@ internal class MotionPan {
     companion object {
         /** 滤波后角速度低于该值（rad/s）视为静止，不平移；超过部分才计入，起步不突跳。 */
         const val DEAD_ZONE = 0.05
-        /** 每弧度平移的基准距离为视图长边的倍数，再乘以加速度倍率 [gain]。 */
-        const val PAN_PER_RAD = 1.2
+        /** 每弧度平移的基准距离为视图长边的倍数，再乘以加速度倍率 [gain]；0.5.8 起由 1.2 降为 0.96（整体速度 80%）。 */
+        const val PAN_PER_RAD = 0.96
         /** 两次采样间隔上限（秒）：暂停后恢复时不按很长的间隔一次性跳动。 */
         const val MAX_DT = 0.1
         /** One Euro 参数：静止截止频率（Hz）、随角加速度提高截止频率的系数、角加速度估计的截止频率（Hz）。 */

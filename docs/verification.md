@@ -2,7 +2,29 @@
 
 测试日期：2026-10-06 至 2026-11-04。使用页描述当前行为；历史结果按当时版本理解。截图中的示例连接和录音状态不作为实机识别证明。
 
-当前：接收端 **0.5.7**、Android **0.5.7 / code 32**· [安装](installation.md) · [版本规则](versioning.md)
+当前：接收端 **0.5.8**、Android **0.5.8 / code 33**· [安装](installation.md) · [版本规则](versioning.md)
+
+## 0.5.8 移除回归中心，体感整体降速到 80%
+
+2026-11-05 完成，未公开发布。按用户要求彻底移除“回归中心”按钮，任何模式都不再显示；同时删除 Lucide `locate-fixed` 图标、`VideoViewport.center()` 及其测试。体感每弧度的基准平移由 1.2 降为 0.96 个视图长边（整体速度 80%），快慢倍率 0.5×／1.5× 不变。
+
+| 验证项 | 结果 |
+|---|---|
+| 单元测试 | `MotionPanTest` 9 项、`VideoViewportTest` 8 项通过 |
+| 构建过程 | 第一次构建失败：删除代码时一条 perl 替换以 `\|` 为分隔符，正则里的 `\|\|` 被当作“或”，把一段代码错插到 `VideoModeView.kt` 开头，导致编译错误。删除错插内容、核对差异后重建；降速需求随后并入同一次迭代，未另升版 |
+| 官方构建 | `scripts/build-windows.ps1 -OutputDirectory dist/0.5.8` 通过；`--apk-info` 为 Android 0.5.8 / code 33、release、不可调试、证书不变；已覆盖安装到 nubia NX741J |
+| 手感 | 待用户手持实测 |
+
+官方交付目录 `dist/0.5.8`：
+
+| 产物 | 字节数 | SHA-256 |
+|---|---:|---|
+| `TapDeck-0.5.8.apk` | 8,617,249 | `053dedaaa56ec4445bd0bea6041daff950717c26a2f1dea3392f2b26d21dfb16` |
+| `TapDeck-0.5.8.exe` | 28,266,496 | `b3ad71d5c9ae11fc8705f80fd91fa0387bac0318110f2a5799e5e1d95d23500d` |
+| `TapDeck-debug-0.5.8.exe` | 33,865,728 | `526b1b2a96c88837047c60648eb08d3cf0edac9112c965873b3b09abcf520aba` |
+| `TapDeck-hidprobe-0.5.8.exe` | 8,048,128 | `f5c7f5ff780f7ff8ef2c5a7b081a1a788744cd905bb4c1d078c2766f40013e7b` |
+
+日志：`.tools/windows-release-0.5.8-build.log`。
 
 ## 0.5.7 两段式“更多”、1:1 图标与快转倍率
 

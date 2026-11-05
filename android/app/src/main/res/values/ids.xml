@@ -13,7 +13,6 @@
     <item name="video_more_button" type="id" />
     <item name="video_reset_button" type="id" />
     <item name="video_motion_button" type="id" />
-    <item name="video_center_button" type="id" />
     <item name="video_shortcuts_button" type="id" />
     <item name="video_keyboard_button" type="id" />
     <item name="video_keyboard_host" type="id" />

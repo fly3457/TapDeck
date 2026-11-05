@@ -203,10 +203,6 @@ class VideoModeView(
         for ((i, b) in listOf(resetButton, motionButton).withIndex())
             addView(b, android.widget.LinearLayout.LayoutParams(icon, icon).apply { if (i > 0) topMargin = gap })
     }
-    // 体感开启时常驻“回归中心”：菜单展开时在菜单下方，收起时在“更多”正下方；关闭体感即隐藏。保持缩放，把电脑画面中心移回屏幕中心。
-    private val centerButton = iconButton(R.id.video_center_button, R.drawable.ic_lucide_locate_fixed, "回归画面中心") {
-        viewport.center(); motionPan.reset(); placeSurface()
-    }.apply { visibility = GONE }
 
     // 体感控制：转动手机由陀螺仪平移画面（见 MotionPan）；只在视频模式可见且开关打开时监听传感器。
     private val sensors = context.getSystemService(SensorManager::class.java)
@@ -245,11 +241,8 @@ class VideoModeView(
         requestLayout()
     }
 
-    /** 菜单展开或体感控制开启时“更多”显示为蓝色；体感开启时显示“回归中心”。 */
-    private fun updateMoreButton() {
-        moreButton.background = pill(if (menuOpen || motion) ACTIVE_PILL else IDLE_PILL)
-        centerButton.visibility = if (motion) VISIBLE else GONE
-    }
+    /** 菜单展开或体感控制开启时“更多”显示为蓝色。 */
+    private fun updateMoreButton() { moreButton.background = pill(if (menuOpen || motion) ACTIVE_PILL else IDLE_PILL) }
 
     private fun updateGyro() {
         val want = motion && visibleNow && isAttachedToWindow
@@ -306,8 +299,6 @@ class VideoModeView(
         addView(statusButton, LayoutParams((STATUS_WIDTH_DP * density).roundToInt(), LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.START).apply { leftMargin = margin; topMargin = margin })
         addView(toolbar, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END).apply { rightMargin = margin; topMargin = margin })
         addView(menu, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
-        val icon = (TOOLBAR_ICON_DP * density).roundToInt()
-        addView(centerButton, LayoutParams(icon, icon))
         if (gyroscope == null) motionButton.alpha = 0.4f
         addView(mic, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         mic.onMoved = { placeShortcuts() }
@@ -404,11 +395,11 @@ class VideoModeView(
         super.onLayout(changed, left, top, right, bottom)
         placeSurface()
         placeShortcuts()
-        // 菜单在“更多”按钮正下方并与其左对齐；“回归中心”接在菜单下方，菜单收起时直接在“更多”下方。
-        val below = toolbar.bottom + (TOOLBAR_GAP_DP * density).roundToInt(); val x = toolbar.left + moreButton.left
-        var y = below
-        if (menu.visibility == VISIBLE) { menu.layout(x, y, x + menu.measuredWidth, y + menu.measuredHeight); y += menu.measuredHeight + (TOOLBAR_GAP_DP * density).roundToInt() }
-        if (centerButton.visibility == VISIBLE) centerButton.layout(x, y, x + centerButton.measuredWidth, y + centerButton.measuredHeight)
+        // 菜单在“更多”按钮正下方，与其左对齐。
+        if (menu.visibility == VISIBLE) {
+            val x = toolbar.left + moreButton.left; val y = toolbar.bottom + (TOOLBAR_GAP_DP * density).roundToInt()
+            menu.layout(x, y, x + menu.measuredWidth, y + menu.measuredHeight)
+        }
         if (Build.VERSION.SDK_INT >= 29) {
             // 尽量减少单指从屏幕边缘滑动时误触系统返回手势（系统限制每侧最多 200dp）。
             val h = bottom - top; val w = right - left
