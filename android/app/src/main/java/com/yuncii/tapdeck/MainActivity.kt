@@ -415,7 +415,8 @@ class MainActivity : ComponentActivity() {
                 }
             }, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         }
-        videoDecoder.onError = { reason -> runOnUiThread { vm.client.stopVideo(); android.widget.Toast.makeText(this, reason, android.widget.Toast.LENGTH_LONG).show(); exitVideo() } }
+        // exitVideo 会先退出视频模式再停流；这里不能先停流，否则会被当成需要重连而再请求一路视频。
+        videoDecoder.onError = { reason -> runOnUiThread { android.widget.Toast.makeText(this, reason, android.widget.Toast.LENGTH_LONG).show(); exitVideo() } }
         // 旋转等导致解码器中途重建：重开视频流，PC 新的编码进程会立即发出关键帧（约 0.3 秒恢复）。
         videoDecoder.onKeyFrameNeeded = { runOnUiThread { if (vm.videoOn.value && vm.client.state.value.video.phase == VideoPhase.Streaming) vm.client.stopVideo() } }
         videoDecoder.toLocal = vm.client.clock::toLocal
@@ -716,8 +717,10 @@ class MainActivity : ComponentActivity() {
         if (!vm.videoOn.value) return
         videoView?.cancel()
         videoView?.showKeyboard(VideoKeyboard.None)
-        vm.client.stopVideo()
+        // 先退出视频模式再停流：状态收集在主线程立即执行，若先停流，会在“仍处于视频模式、画面已空闲”
+        // 的瞬间自动重新请求一路视频，电脑端就多出一个无人观看的编码进程。
         vm.videoOn.value = false
+        vm.client.stopVideo()
         applyVideoMode()
     }
 
