@@ -204,6 +204,10 @@ class VideoModeView(
         for ((i, b) in listOf(resetButton, motionButton).withIndex())
             addView(b, android.widget.LinearLayout.LayoutParams(icon, icon).apply { if (i > 0) topMargin = gap })
     }
+    // 体感开启且菜单收起时，“更多”正下方常驻“回归中心”：保持缩放，把电脑画面中心移回屏幕中心。
+    private val centerButton = iconButton(R.id.video_center_button, R.drawable.ic_lucide_locate_fixed, "回归画面中心") {
+        viewport.center(); motionPan.reset(); placeSurface()
+    }.apply { visibility = GONE }
 
     // 体感控制：转动手机由陀螺仪平移画面（见 MotionPan）；只在视频模式可见且开关打开时监听传感器。
     private val sensors = context.getSystemService(SensorManager::class.java)
@@ -213,11 +217,12 @@ class VideoModeView(
     private var visibleNow = false
     private var gyroListening = false
     private var lastGyro = 0L
+    private val motionPan = MotionPan()
     private val gyroListener = object : SensorEventListener {
         override fun onSensorChanged(e: SensorEvent) {
             val prev = lastGyro; lastGyro = e.timestamp
             if (prev == 0L || !connected || !viewport.ready) return
-            val (dx, dy) = MotionPan.delta(e.values[0].toDouble(), e.values[1].toDouble(), display?.rotation ?: 0,
+            val (dx, dy) = motionPan.step(e.values[0].toDouble(), e.values[1].toDouble(), display?.rotation ?: 0,
                 (e.timestamp - prev) / 1e9, MotionPan.PAN_PER_RAD * maxOf(width, height))
             if (dx != 0.0 || dy != 0.0) { viewport.pan(dx, dy); placeSurface() }
         }
@@ -240,14 +245,17 @@ class VideoModeView(
         requestLayout()
     }
 
-    /** 菜单展开或体感控制开启时“更多”显示为蓝色，提示菜单里有功能正在生效。 */
-    private fun updateMoreButton() { moreButton.background = pill(if (menuOpen || motion) ACTIVE_PILL else IDLE_PILL) }
+    /** 菜单展开或体感控制开启时“更多”显示为蓝色；体感开启且菜单收起时显示“回归中心”。 */
+    private fun updateMoreButton() {
+        moreButton.background = pill(if (menuOpen || motion) ACTIVE_PILL else IDLE_PILL)
+        centerButton.visibility = if (motion && !menuOpen) VISIBLE else GONE
+    }
 
     private fun updateGyro() {
         val want = motion && visibleNow && isAttachedToWindow
         if (want == gyroListening) return
         gyroListening = want
-        if (want) { lastGyro = 0L; sensors?.registerListener(gyroListener, gyroscope, SensorManager.SENSOR_DELAY_GAME) }
+        if (want) { lastGyro = 0L; motionPan.reset(); sensors?.registerListener(gyroListener, gyroscope, SensorManager.SENSOR_DELAY_GAME) }
         else sensors?.unregisterListener(gyroListener)
     }
 
@@ -263,12 +271,12 @@ class VideoModeView(
     private val keyboardButton = iconButton(R.id.video_keyboard_button, R.drawable.ic_lucide_keyboard, "显示全键盘") {
         showKeyboard(if (keyboard == VideoKeyboard.Full) VideoKeyboard.None else VideoKeyboard.Full)
     }
-    // 图标固定在屏幕右上角，右对齐：铃铛、更多、快捷键盘、全键盘。
+    // 图标固定在屏幕右上角，右对齐：铃铛、快捷键盘、全键盘、更多（最右）。
     private val toolbar = android.widget.LinearLayout(context).apply {
         orientation = android.widget.LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         val icon = (TOOLBAR_ICON_DP * density).roundToInt(); val gap = (TOOLBAR_GAP_DP * density).roundToInt()
-        for ((i, b) in listOf(notificationsButton, moreButton, shortcutsButton, keyboardButton).withIndex())
+        for ((i, b) in listOf(notificationsButton, shortcutsButton, keyboardButton, moreButton).withIndex())
             addView(b, android.widget.LinearLayout.LayoutParams(icon, icon).apply { if (i > 0) leftMargin = gap })
     }
 
@@ -298,6 +306,8 @@ class VideoModeView(
         addView(statusButton, LayoutParams((STATUS_WIDTH_DP * density).roundToInt(), LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.START).apply { leftMargin = margin; topMargin = margin })
         addView(toolbar, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END).apply { rightMargin = margin; topMargin = margin })
         addView(menu, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
+        val icon = (TOOLBAR_ICON_DP * density).roundToInt()
+        addView(centerButton, LayoutParams(icon, icon))
         if (gyroscope == null) motionButton.alpha = 0.4f
         addView(mic, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         mic.onMoved = { placeShortcuts() }
@@ -394,11 +404,10 @@ class VideoModeView(
         super.onLayout(changed, left, top, right, bottom)
         placeSurface()
         placeShortcuts()
-        // 菜单在“更多”按钮正下方，与工具栏图标左对齐。
-        if (menu.visibility == VISIBLE) {
-            val x = toolbar.left + moreButton.left; val y = toolbar.bottom + (TOOLBAR_GAP_DP * density).roundToInt()
-            menu.layout(x, y, x + menu.measuredWidth, y + menu.measuredHeight)
-        }
+        // 菜单与“回归中心”都在“更多”按钮正下方，与其左对齐（两者不会同时显示）。
+        val below = toolbar.bottom + (TOOLBAR_GAP_DP * density).roundToInt(); val x = toolbar.left + moreButton.left
+        if (menu.visibility == VISIBLE) menu.layout(x, below, x + menu.measuredWidth, below + menu.measuredHeight)
+        if (centerButton.visibility == VISIBLE) centerButton.layout(x, below, x + centerButton.measuredWidth, below + centerButton.measuredHeight)
         if (Build.VERSION.SDK_INT >= 29) {
             // 尽量减少单指从屏幕边缘滑动时误触系统返回手势（系统限制每侧最多 200dp）。
             val h = bottom - top; val w = right - left

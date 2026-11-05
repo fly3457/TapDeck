@@ -89,4 +89,15 @@ class VideoViewportTest {
         val onScreen = v.offsetX + 1700.0 * v.scale
         assertTrue(onScreen in 0.0..1080.0)
     }
+
+    @Test fun centerKeepsZoomAndCentersContent() {
+        val v = VideoViewport(); v.resize(1080.0, 2400.0, 1920.0, 1080.0)
+        v.pinch(1.5, 0.0, 0.0, 0.0, 0.0)
+        v.pan(-300.0, -200.0)
+        val zoomed = v.scale
+        v.center()
+        assertEquals(zoomed, v.scale, 1e-9)
+        assertEquals((1080.0 - v.displayWidth) / 2, v.offsetX, 1e-6)
+        assertEquals((2400.0 - v.displayHeight) / 2, v.offsetY, 1e-6)
+    }
 }

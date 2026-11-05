@@ -2,7 +2,29 @@
 
 测试日期：2026-10-06 至 2026-11-04。使用页描述当前行为；历史结果按当时版本理解。截图中的示例连接和录音状态不作为实机识别证明。
 
-当前：接收端 **0.5.4**、Android **0.5.4 / code 29**· [安装](installation.md) · [版本规则](versioning.md)
+当前：接收端 **0.5.5**、Android **0.5.5 / code 30**· [安装](installation.md) · [版本规则](versioning.md)
+
+## 0.5.5 “更多”移到最右、回归中心与体感防抖
+
+2026-11-05 完成，未公开发布。工具栏改为铃铛、快捷键盘、全键盘、更多（最右）。体感开启且菜单收起时，“更多”正下方常驻“回归中心”（Lucide `locate-fixed`），点击后保持缩放、把电脑画面中心移回屏幕中心。陀螺仪角速度先经 One Euro 自适应低通滤波（静止截止 1.2 Hz、β 0.2），再减去 0.05 rad/s 死区。
+
+| 验证项 | 结果 |
+|---|---|
+| 单元测试 | `MotionPanTest` 7 项：方向与横屏换算、持续转动收敛、8 Hz／0.15 rad/s 手抖滤波后累计平移小于 2 px（不足未滤波的 10%）、静止噪声不漂移、长间隔封顶、重置后不带惯性。`VideoViewportTest` 新增“回归中心保持缩放” |
+| 实机 nubia NX741J（Android 0.5.5 + 接收端 0.5.2，横屏） | 截图确认：“更多”在最右，开启体感后变蓝，正下方出现定位图标；21:29:47 以 20 ms 采样注册陀螺仪 |
+| 防抖手感 | 待用户手持实测 |
+| 官方构建 | `scripts/build-windows.ps1 -OutputDirectory dist/0.5.5` 通过；`--apk-info` 为 Android 0.5.5 / code 30、release、不可调试、证书不变 |
+
+官方交付目录 `dist/0.5.5`：
+
+| 产物 | 字节数 | SHA-256 |
+|---|---:|---|
+| `TapDeck-0.5.5.apk` | 8,617,965 | `6c455191bfafbe03f3ba0ad0ddc33df26562e4bb13e62be6398f6e90afd9d02e` |
+| `TapDeck-0.5.5.exe` | 28,267,520 | `e0b962fadb110ab5d725ea05416e4a39d0ad542f2c365637eef5e763dc2566f8` |
+| `TapDeck-debug-0.5.5.exe` | 33,866,752 | `9343c0c20491938106f55f0cd3acfa1bf706e4844b8add5b5cb335fdb0df528c` |
+| `TapDeck-hidprobe-0.5.5.exe` | 8,048,128 | `2fa6f431a2a590ae88424549920d0f6c3c4cf5ffd6dff51fe2b0ce235e1ebcb3` |
+
+日志：`.tools/windows-release-0.5.5-build.log`。
 
 ## 0.5.4 视频模式“更多”菜单与体感控制
 

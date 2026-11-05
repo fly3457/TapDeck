@@ -54,6 +54,15 @@ class VideoViewport(private val followMargin: Double = 0.12, private val smoothi
         targetX = offsetX; targetY = offsetY
     }
 
+    /** 保持当前缩放，把 PC 画面中心移到视图中心（体感控制的“回归中心”）。 */
+    fun center() {
+        if (!ready) return
+        offsetX = (viewWidth - displayWidth) / 2
+        offsetY = (viewHeight - displayHeight) / 2
+        clamp()
+        targetX = offsetX; targetY = offsetY
+    }
+
     /** 以双指中心为焦点缩放，同时随双指中心平移。 */
     fun pinch(factor: Double, focusX: Double, focusY: Double, panX: Double, panY: Double) {
         if (!ready || !factor.isFinite() || factor <= 0) return
