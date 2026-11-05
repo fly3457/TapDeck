@@ -186,14 +186,13 @@ class VideoModeView(
         notificationBadge.visibility = if (count > 0) VISIBLE else GONE
         findViewById<View>(R.id.video_notifications_button).contentDescription = if (count > 0) "电脑通知，$count 条未读" else "电脑通知"
     }
-    // “更多”：点击在下方弹出恢复默认比例与体感控制两个图标，点画面其他位置收起。
+    // “更多”是两段式开关：点一下在下方展开恢复默认比例与体感控制，再点一下收起；点菜单项或画面都不会收起。
     private var menuOpen = false
-    private val moreButton = iconButton(R.id.video_more_button, R.drawable.ic_lucide_ellipsis, "更多画面操作") { showMenu(!menuOpen) }
-    private val resetButton = iconButton(R.id.video_reset_button, R.drawable.ic_lucide_scan, "恢复默认画面比例") {
-        viewport.reset(aroundCursor = false); requestLayout(); showMenu(false)
+    private val moreButton = iconButton(R.id.video_more_button, R.drawable.ic_lucide_ellipsis, "展开更多画面操作") { showMenu(!menuOpen) }
+    private val resetButton = iconButton(R.id.video_reset_button, R.drawable.ic_ratio_1_1, "恢复默认画面比例") {
+        viewport.reset(aroundCursor = false); requestLayout()
     }
     private val motionButton = iconButton(R.id.video_motion_button, R.drawable.ic_lucide_rotate_3d, "开启体感控制") {
-        showMenu(false)
         if (gyroscope == null) android.widget.Toast.makeText(context, "这台手机没有陀螺仪，无法使用体感控制", android.widget.Toast.LENGTH_SHORT).show()
         else setMotion(!motion)
     }
@@ -204,7 +203,7 @@ class VideoModeView(
         for ((i, b) in listOf(resetButton, motionButton).withIndex())
             addView(b, android.widget.LinearLayout.LayoutParams(icon, icon).apply { if (i > 0) topMargin = gap })
     }
-    // 体感开启且菜单收起时，“更多”正下方常驻“回归中心”：保持缩放，把电脑画面中心移回屏幕中心。
+    // 体感开启时常驻“回归中心”：菜单展开时在菜单下方，收起时在“更多”正下方；关闭体感即隐藏。保持缩放，把电脑画面中心移回屏幕中心。
     private val centerButton = iconButton(R.id.video_center_button, R.drawable.ic_lucide_locate_fixed, "回归画面中心") {
         viewport.center(); motionPan.reset(); placeSurface()
     }.apply { visibility = GONE }
@@ -241,14 +240,15 @@ class VideoModeView(
         if (menuOpen == open) return
         menuOpen = open
         menu.visibility = if (open) VISIBLE else GONE
+        moreButton.contentDescription = if (open) "收起更多画面操作" else "展开更多画面操作"
         updateMoreButton()
         requestLayout()
     }
 
-    /** 菜单展开或体感控制开启时“更多”显示为蓝色；体感开启且菜单收起时显示“回归中心”。 */
+    /** 菜单展开或体感控制开启时“更多”显示为蓝色；体感开启时显示“回归中心”。 */
     private fun updateMoreButton() {
         moreButton.background = pill(if (menuOpen || motion) ACTIVE_PILL else IDLE_PILL)
-        centerButton.visibility = if (motion && !menuOpen) VISIBLE else GONE
+        centerButton.visibility = if (motion) VISIBLE else GONE
     }
 
     private fun updateGyro() {
@@ -404,10 +404,11 @@ class VideoModeView(
         super.onLayout(changed, left, top, right, bottom)
         placeSurface()
         placeShortcuts()
-        // 菜单与“回归中心”都在“更多”按钮正下方，与其左对齐（两者不会同时显示）。
+        // 菜单在“更多”按钮正下方并与其左对齐；“回归中心”接在菜单下方，菜单收起时直接在“更多”下方。
         val below = toolbar.bottom + (TOOLBAR_GAP_DP * density).roundToInt(); val x = toolbar.left + moreButton.left
-        if (menu.visibility == VISIBLE) menu.layout(x, below, x + menu.measuredWidth, below + menu.measuredHeight)
-        if (centerButton.visibility == VISIBLE) centerButton.layout(x, below, x + centerButton.measuredWidth, below + centerButton.measuredHeight)
+        var y = below
+        if (menu.visibility == VISIBLE) { menu.layout(x, y, x + menu.measuredWidth, y + menu.measuredHeight); y += menu.measuredHeight + (TOOLBAR_GAP_DP * density).roundToInt() }
+        if (centerButton.visibility == VISIBLE) centerButton.layout(x, y, x + centerButton.measuredWidth, y + centerButton.measuredHeight)
         if (Build.VERSION.SDK_INT >= 29) {
             // 尽量减少单指从屏幕边缘滑动时误触系统返回手势（系统限制每侧最多 200dp）。
             val h = bottom - top; val w = right - left
@@ -435,7 +436,6 @@ class VideoModeView(
     }
 
     private fun touch(e: MotionEvent): Boolean {
-        if (e.actionMasked == MotionEvent.ACTION_DOWN) showMenu(false)
         if (!connected) return true
         parent?.requestDisallowInterceptTouchEvent(true)
         val phase = when (e.actionMasked) {

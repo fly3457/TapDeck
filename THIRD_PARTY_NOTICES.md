@@ -54,7 +54,7 @@ Gradle Wrapper 的原始版权和许可头保留在 `android/gradlew` 与 `andro
 
 ## Lucide 图标
 
-Android 使用 Lucide 的 `keyboard`、`mic-audio-lines`、`mic-signal`、`plug`、`arrow-big-up`、`corner-down-left`、`delete`、`sliders-horizontal`、`scan-line`、`chevron-right`、`monitor`、`scan`、`layout-grid`、`bell`、`ellipsis`、`rotate-3d` 和 `locate-fixed` 矢量图标；Shift+Enter 组合 `arrow-big-up` 与 `corner-down-left`。图标适用 ISC 许可及其原始版权声明。完整上游原文（含 Feather 来源附录）保留在 [Lucide-LICENSE.txt](licenses/Lucide-LICENSE.txt)，同一份声明也随 APK 的 `assets/Lucide-LICENSE.txt` 分发。
+Android 使用 Lucide 的 `keyboard`、`mic-audio-lines`、`mic-signal`、`plug`、`arrow-big-up`、`corner-down-left`、`delete`、`sliders-horizontal`、`scan-line`、`chevron-right`、`monitor`、`layout-grid`、`bell`、`ellipsis`、`rotate-3d` 和 `locate-fixed` 矢量图标（视频模式“恢复默认比例”为 TapDeck 自绘的 1:1 图标，不属于 Lucide）；Shift+Enter 组合 `arrow-big-up` 与 `corner-down-left`。图标适用 ISC 许可及其原始版权声明。完整上游原文（含 Feather 来源附录）保留在 [Lucide-LICENSE.txt](licenses/Lucide-LICENSE.txt)，同一份声明也随 APK 的 `assets/Lucide-LICENSE.txt` 分发。
 
 ## VB-CABLE 原包与分发
 

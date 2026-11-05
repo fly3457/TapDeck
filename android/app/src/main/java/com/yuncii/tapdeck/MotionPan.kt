@@ -29,7 +29,7 @@ internal class MotionPan {
         const val D_CUTOFF = 1.0
         /** 加速度曲线：转得慢时倍率 SLOW_GAIN、转得快时 FAST_GAIN，在 SLOW_RATE..FAST_RATE（rad/s）之间平滑过渡。 */
         const val SLOW_GAIN = 0.5
-        const val FAST_GAIN = 2.5
+        const val FAST_GAIN = 1.5
         const val SLOW_RATE = 0.2
         const val FAST_RATE = 1.5
 
