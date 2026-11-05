@@ -8,11 +8,11 @@
 
 | 字段 | 当前值 | 用途 |
 |---|---|---|
-| `receiver.version` | `0.5.8` | Windows 接收端、诊断版和 HID 工具 |
-| `controller.android.version` | `0.5.8` | Android 内部版本及 APK 文件名 |
-| `controller.android.versionCode` | `33` | Android 覆盖安装序号 |
+| `receiver.version` | `0.5.9` | Windows 接收端、诊断版和 HID 工具 |
+| `controller.android.version` | `0.5.9` | Android 内部版本及 APK 文件名 |
+| `controller.android.versionCode` | `34` | Android 覆盖安装序号 |
 
-两端独立演进。例如只改接收端可发布 `0.5.9` 并内嵌 Android `0.5.8 / code 33`；每次 Android 更新必须同时递增接收端补丁版本并重建 EXE。接收端打包始终重新构建和核验清单指定的 Android。
+两端独立演进。例如只改接收端可发布 `0.5.10` 并内嵌 Android `0.5.9 / code 34`；每次 Android 更新必须同时递增接收端补丁版本并重建 EXE。接收端打包始终重新构建和核验清单指定的 Android。
 
 应用版本为 `major.minor.patch`，默认加 patch；加 minor／major 时后续段归零，各段范围 0–65535。Android code 每次新交付递增，范围 1–2100000000，跨 major／minor 不重置，见 [Android 版本说明](https://developer.android.com/studio/publish/versioning)。
 

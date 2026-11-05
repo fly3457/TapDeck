@@ -2,7 +2,27 @@
 
 测试日期：2026-10-06 至 2026-11-04。使用页描述当前行为；历史结果按当时版本理解。截图中的示例连接和录音状态不作为实机识别证明。
 
-当前：接收端 **0.5.8**、Android **0.5.8 / code 33**· [安装](installation.md) · [版本规则](versioning.md)
+当前：接收端 **0.5.9**、Android **0.5.9 / code 34**· [安装](installation.md) · [版本规则](versioning.md)
+
+## 0.5.9 体感速度恢复 100%
+
+2026-11-05 完成，未公开发布。用户实测后要求撤销 0.5.8 的降速：体感每弧度基准平移恢复为 1.2 个视图长边，快慢倍率 0.5×／1.5× 不变，其余与 0.5.8 相同。
+
+| 验证项 | 结果 |
+|---|---|
+| 单元测试 | `MotionPanTest` 9 项通过 |
+| 官方构建 | `scripts/build-windows.ps1 -OutputDirectory dist/0.5.9` 通过；`--apk-info` 为 Android 0.5.9 / code 34、release、不可调试、证书不变；已覆盖安装到 nubia NX741J |
+
+官方交付目录 `dist/0.5.9`：
+
+| 产物 | 字节数 | SHA-256 |
+|---|---:|---|
+| `TapDeck-0.5.9.apk` | 8,617,249 | `4eabe1c5863ea472d7910a9f82db5cf8bc6aa181796c91dd3a3fbdefb46a946d` |
+| `TapDeck-0.5.9.exe` | 28,266,496 | `7f1731aa34aa2f1d595408d5cadf3c92a1e4aa6f226609ffdcb2a7a8d251b190` |
+| `TapDeck-debug-0.5.9.exe` | 33,865,728 | `8a9b9e633e9c38588e6d4d8432e3cdf08c63c834c0e8e65a78289b79fdee16f3` |
+| `TapDeck-hidprobe-0.5.9.exe` | 8,048,128 | `1a3416a189e5bf97ab2aed06f4ed2ca7e19e34d9f14bef694963bf7606eb698b` |
+
+日志：`.tools/windows-release-0.5.9-build.log`。
 
 ## 0.5.8 移除回归中心，体感整体降速到 80%
 
