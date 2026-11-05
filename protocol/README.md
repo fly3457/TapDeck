@@ -36,7 +36,7 @@ Keyboard queues, held keys, mouse-button references and voice tokens belong to a
 
 ### Heartbeat and mouse barriers
 
-`heartbeat` echoes client monotonic `tick`; send every 250 ms, disconnect after 1 second without inbound controls. Clock values are used for RTT, not cross-host one-way subtraction.
+`heartbeat` echoes client monotonic `tick`; send every 250 ms, disconnect after 1 second without inbound controls. From Windows 0.5.11 the echo also carries `pc_us` (PC wall clock, Unix µs). Android estimates the clock offset from the echo with the shortest round trip (assuming a symmetric path) and uses it only for video latency statistics; RTT itself never subtracts clocks across hosts.
 
 `mouse_button`: button (`left`, `right`, `middle`), `down`, old `epoch`, `next_epoch`, cumulative `x/y/scroll_x/scroll_y`. PC flushes the old totals, applies the button, advances epoch, then applies any buffered new-epoch movement. Totals continue across epochs.
 
@@ -94,6 +94,8 @@ The phone then opens `GET /video` on the same pinned TLS port. Its first text me
 | 5 | — | int32 y |
 | 9 | — | uint8 visible |
 | 10 | H.264 Annex-B access unit (4-byte start codes) | — |
+
+From Windows 0.5.11 each frame is preceded by a timing message (type 3, 25 bytes): offset 0 `0x03`; 1 int64 presentation time (µs, matching the following frame); 9 uint32 capture-to-encoder-output time (µs); 13 uint32 time waiting in the PC send queue (µs); 17 int64 send time (PC wall clock, Unix µs). ddagrab timestamps are monotonic capture times relative to the first frame, so the PC takes the smallest observed `receive time − pts` as the origin; the capture segment therefore excludes the fastest frame's own few milliseconds. Android adds network (arrival − send time, using the heartbeat clock offset) and decode (arrival → decoder output) and shows the one-second median as the video-mode latency; screen composition and scan-out (about one or two refreshes) are not included. Older Android ignores unknown types; older PCs send no timing messages and Android falls back to showing RTT. Timing and frame messages are queued in pairs, so the queue holds twice as many entries for the same six-frame limit.
 
 Cursor coordinates are physical pixels relative to the captured display's top-left corner. They are polled every 8 ms and sent only when they change. `visible=0` means the cursor is hidden or on another display. The PC sends the configuration frame first and never drops it. Each stream begins with an IDR frame; GOP is two seconds, with no B-frames. When more than six frames are queued, the PC discards the backlog and drops frames until the next IDR, so latency cannot accumulate. Android likewise drops to the next key frame when its decoder input falls behind. Write stalls longer than two seconds end the stream with `video_error`.
 

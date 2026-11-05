@@ -192,3 +192,40 @@ func TestRunWritesFramesAndCursor(t *testing.T) {
 		t.Fatal("finished stream still active")
 	}
 }
+
+func TestTimingMessageAndSendStamp(t *testing.T) {
+	recv := time.UnixMicro(1_700_000_000_000_000)
+	b := TimingMessage(1500*time.Millisecond, 7*time.Millisecond, recv)
+	if len(b) != 25 || b[0] != MessageTiming {
+		t.Fatalf("timing %x", b)
+	}
+	stampSend(b, recv.Add(3*time.Millisecond))
+	if pts := binary.LittleEndian.Uint64(b[1:]); pts != 1_500_000 {
+		t.Fatalf("pts %d", pts)
+	}
+	if enc := binary.LittleEndian.Uint32(b[9:]); enc != 7000 {
+		t.Fatalf("encode %d", enc)
+	}
+	if wait := binary.LittleEndian.Uint32(b[13:]); wait != 3000 {
+		t.Fatalf("queue wait %d", wait)
+	}
+	if sent := int64(binary.LittleEndian.Uint64(b[17:])); sent != recv.Add(3*time.Millisecond).UnixMicro() {
+		t.Fatalf("send time %d", sent)
+	}
+}
+
+// 截屏起点取“收到时刻 − pts”的最小值：最快一帧为 0，其后的帧报告多出的耗时。
+func TestCaptureClockUsesFastestFrameAsOrigin(t *testing.T) {
+	var c captureClock
+	t0 := time.Unix(100, 0)
+	if d := c.encode(t0.Add(20*time.Millisecond), 0); d != 0 {
+		t.Fatalf("first %v", d)
+	}
+	// 第二帧 pts 16ms、收到于 30ms：比第一帧快 6ms，成为新的起点。
+	if d := c.encode(t0.Add(30*time.Millisecond), 16*time.Millisecond); d != 0 {
+		t.Fatalf("faster frame %v", d)
+	}
+	if d := c.encode(t0.Add(60*time.Millisecond), 33*time.Millisecond); d != 13*time.Millisecond {
+		t.Fatalf("slower frame %v", d)
+	}
+}

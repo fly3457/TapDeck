@@ -849,7 +849,8 @@ func (ss *session) handle(m Message) error {
 	}
 	switch m.Type {
 	case "heartbeat":
-		return ss.send(map[string]any{"type": "heartbeat", "tick": m.Tick})
+		// pc_us 为 PC 墙钟（Unix 微秒），手机据此估计两端时钟差，用于视频端到端延迟统计。
+		return ss.send(map[string]any{"type": "heartbeat", "tick": m.Tick, "pc_us": time.Now().UnixMicro()})
 	case "keepalive":
 		return nil
 	case "link_mode":

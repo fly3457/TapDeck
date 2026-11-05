@@ -70,6 +70,8 @@ class TapClient(private val app: Application, private val scope: CoroutineScope,
     private var videoRequest = 0L
     /** 视频消息在 OkHttp 线程上回调，画面帧不经过主线程。 */
     @Volatile var videoSink: ((VideoMessage) -> Unit)? = null
+    /** 与当前电脑的时钟差，供视频延迟统计把 PC 时刻换算到手机时钟；每次新连接清空。 */
+    internal val clock = ClockSync()
     private var udp: DatagramSocket? = null
     @Volatile private var peer: Peer? = null
     private var target: InetAddress? = null
@@ -416,6 +418,7 @@ class TapClient(private val app: Application, private val scope: CoroutineScope,
     }
     private suspend fun connect(saved: Peer, attempt: Long) {
         val gen = synchronized(lock) { if (!current(attempt)) return; generation++; generation }
+        clock.reset()
         mutable.update { it.copy(status = "正在连接", phase = ConnectionPhase.Connecting, connectionEpoch = gen, pairing = "", pairingConfirmed = false, error = "") }
         val metadata: JsonObject
         val p: Peer
@@ -484,7 +487,11 @@ class TapClient(private val app: Application, private val scope: CoroutineScope,
                             c.voiceProfiles(mutable.value.voiceProfilesSupported)
                             mutable.update { it.copy(config = c) }
                         }
-                        "heartbeat" -> mutable.update { it.copy(rttMs = (SystemClock.elapsedRealtime() - m.long("tick")).coerceAtLeast(0)) }
+                        "heartbeat" -> {
+                            mutable.update { it.copy(rttMs = (SystemClock.elapsedRealtime() - m.long("tick")).coerceAtLeast(0)) }
+                            // PC 0.5.11 起回带墙钟，用于视频延迟统计的时钟对齐。
+                            if (m["pc_us"] != null) clock.sample(m.long("tick") * 1000, SystemClock.elapsedRealtimeNanos() / 1000, m.long("pc_us"))
+                        }
                         "keepalive" -> sendOn(ws, message("keepalive"))
                         "notifications" -> notifications?.receive(p.id, mutable.value.peerName, m.str("boot"),
                             wireJson.decodeFromJsonElement<List<WireNotification>>(m["items"] ?: JsonArray(emptyList())))
@@ -864,7 +871,7 @@ class TapClient(private val app: Application, private val scope: CoroutineScope,
             }
             override fun onMessage(ws: WebSocket, bytes: okio.ByteString) {
                 if (!live()) { ws.cancel(); return }
-                val msg = parseVideoMessage(bytes.toByteArray()) ?: return
+                val msg = parseVideoMessage(bytes.toByteArray(), SystemClock.elapsedRealtimeNanos() / 1000) ?: return
                 if (msg is VideoCursor && msg.visible != mutable.value.video.cursorVisible)
                     mutable.update { it.copy(video = it.video.copy(cursorVisible = msg.visible)) }
                 videoSink?.invoke(msg)

@@ -31,6 +31,12 @@ class VideoDecoder {
     private var windowStart = SystemClock.elapsedRealtime()
     /** 最近一秒实际渲染的帧数，用于状态按钮。 */
     @Volatile var fps = 0; private set
+    /** 最近一秒端到端延迟的中位数（毫秒，PC 截屏到手机解码输出）；PC 版本过旧或时钟尚未对齐时为 -1。 */
+    @Volatile var latencyMs = -1; private set
+    /** 把 PC 墙钟（Unix 微秒）换算为手机单调时钟（微秒），由 TapClient 的心跳对时提供。 */
+    @Volatile var toLocal: (Long) -> Long? = { null }
+    private val latency = VideoLatency()
+    private var lastLatencyLog = 0L
     /** 在解码线程上回调。 */
     var onError: (String) -> Unit = {}
 
@@ -61,6 +67,9 @@ class VideoDecoder {
 
     fun setFormat(w: Int, h: Int) = handler.post { if (w != width || h != height) { width = w; height = h; restart() } }
 
+    /** 画面帧之前的帧时间（PC 0.5.11 起）。 */
+    fun timing(t: VideoTiming) = handler.post { latency.timing(t) }
+
     fun submit(frame: VideoFrame) = handler.post {
         if (frame.config) {
             config = frame
@@ -74,13 +83,14 @@ class VideoDecoder {
                 if (!frame.key) return@post
             }
             needKey = false
+            latency.arrived(frame.ptsUs, frame.arrivedUs)
             pending.add(frame)
         }
         feed()
     }
 
     /** 新的视频流：丢弃旧配置，等待新的 SPS/PPS。 */
-    fun reset() = handler.post { config = null; pending.clear(); needKey = true; restart() }
+    fun reset() = handler.post { config = null; pending.clear(); needKey = true; latency.reset(); latencyMs = -1; restart() }
 
     fun release() {
         handler.post { stopCodec() }
@@ -130,6 +140,7 @@ class VideoDecoder {
                     if (codec !== mc) return
                     try { mc.releaseOutputBuffer(index, true) } catch (_: IllegalStateException) { return }
                     countFrame()
+                    measure(info.presentationTimeUs)
                 }
                 override fun onError(mc: MediaCodec, e: MediaCodec.CodecException) {
                     Log.w("TapDeck", "解码错误", e)
@@ -161,6 +172,18 @@ class VideoDecoder {
             } catch (e: IllegalStateException) {
                 Log.w("TapDeck", "解码器状态异常", e); return
             }
+        }
+    }
+
+    private fun measure(ptsUs: Long) {
+        val now = SystemClock.elapsedRealtimeNanos() / 1000
+        latency.decoded(ptsUs, now, toLocal) ?: return
+        val m = latency.median() ?: return
+        latencyMs = ((m.totalUs + 500) / 1000).toInt()
+        // 每 2 秒在 logcat 输出各段中位数，便于定位延迟来源。
+        if (now - lastLatencyLog >= 2_000_000) {
+            lastLatencyLog = now
+            Log.i("TapDeck", "视频延迟中位数 ${m.totalUs / 1000}ms：截屏编码 ${m.encodeUs / 1000} · 发送排队 ${m.queueUs / 1000} · 网络 ${m.networkUs / 1000} · 解码 ${m.decodeUs / 1000}")
         }
     }
 

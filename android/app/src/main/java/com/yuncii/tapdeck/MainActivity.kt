@@ -418,8 +418,10 @@ class MainActivity : ComponentActivity() {
         videoDecoder.onError = { reason -> runOnUiThread { vm.client.stopVideo(); android.widget.Toast.makeText(this, reason, android.widget.Toast.LENGTH_LONG).show(); exitVideo() } }
         // 旋转等导致解码器中途重建：重开视频流，PC 新的编码进程会立即发出关键帧（约 0.3 秒恢复）。
         videoDecoder.onKeyFrameNeeded = { runOnUiThread { if (vm.videoOn.value && vm.client.state.value.video.phase == VideoPhase.Streaming) vm.client.stopVideo() } }
+        videoDecoder.toLocal = vm.client.clock::toLocal
         vm.client.videoSink = { msg ->
             when (msg) {
+                is VideoTiming -> videoDecoder.timing(msg)
                 is VideoFrame -> videoDecoder.submit(msg)
                 is VideoCursor -> video.post { video.cursor(msg) }
             }

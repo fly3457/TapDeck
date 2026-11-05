@@ -343,7 +343,10 @@ class VideoModeView(
         val fps = decoder.fps
         statusLine.text = buildString {
             append("‹ 退出")
-            if (state.phase == VideoPhase.Streaming) append(" · ").append(fps).append(" fps · ").append(rttMs).append(" ms")
+            // 有帧时间（PC 0.5.11 起）时显示画面端到端延迟；旧版 PC 只能显示控制通道往返时间。
+            val latency = decoder.latencyMs
+            if (state.phase == VideoPhase.Streaming) append(" · ").append(fps).append(" fps · ")
+                .append(if (latency >= 0) "延迟 $latency ms" else "RTT $rttMs ms")
         }
         cursorLine.visibility = if (state.phase == VideoPhase.Streaming && !state.cursorVisible) VISIBLE else GONE
         val text = when (state.phase) {

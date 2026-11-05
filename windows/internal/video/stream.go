@@ -40,6 +40,8 @@ type Writer func(ctx context.Context, b []byte) error
 const (
 	MessageFrame  byte = 1
 	MessageCursor byte = 2
+	// MessageTiming 紧接在对应画面帧之前发送，供手机统计端到端延迟；旧版手机忽略未知类型。
+	MessageTiming byte = 3
 
 	FlagKey    byte = 1
 	FlagConfig byte = 2
@@ -62,6 +64,8 @@ type Stream struct {
 	claimed atomic.Bool
 	Sent    atomic.Uint64
 	Dropped atomic.Uint64
+	// Timing 为真时每个画面帧前附带帧时间消息（Manager.Start 创建的流都开启）。
+	Timing bool
 }
 
 func (st *Stream) Done() <-chan struct{} { return st.ctx.Done() }
@@ -101,7 +105,7 @@ func (m *Manager) Start(owner uint64, r Request) (*Stream, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	st := &Stream{ID: randomHex(8), Token: randomBytes(32), Owner: owner, Plan: plan, created: m.now(), ctx: ctx, cancel: cancel}
+	st := &Stream{ID: randomHex(8), Token: randomBytes(32), Owner: owner, Plan: plan, created: m.now(), ctx: ctx, cancel: cancel, Timing: true}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.busyLocked(owner) {
@@ -213,7 +217,8 @@ func (m *Manager) Run(ctx context.Context, st *Stream, w Writer) error {
 	defer src.Close()
 	go func() { <-ctx.Done(); src.Close() }()
 
-	queue := make(chan []byte, queueFrames)
+	// 开启帧时间时每帧占两条（时间 + 画面），容量翻倍以保持约 100ms 的积压上限。
+	queue := make(chan []byte, queueFrames*2)
 	readErr := make(chan error, 1)
 	go func() { readErr <- pump(src, queue, st) }()
 
@@ -230,10 +235,15 @@ func (m *Manager) Run(ctx context.Context, st *Stream, w Writer) error {
 			}
 			return err
 		case b := <-queue:
+			if b[0] == MessageTiming {
+				stampSend(b, time.Now())
+			}
 			if err := w(ctx, b); err != nil {
 				return err
 			}
-			st.Sent.Add(1)
+			if b[0] == MessageFrame {
+				st.Sent.Add(1)
+			}
 		case <-cursor.C:
 			x, y, visible := m.launcher.Cursor(st.Plan.Display)
 			if sentCursor && x == lastX && y == lastY && visible == lastVisible {
@@ -251,11 +261,13 @@ func (m *Manager) Run(ctx context.Context, st *Stream, w Writer) error {
 // 关键帧，保证手机画面延迟不会累积；配置帧从不丢弃。
 func pump(src Source, queue chan []byte, st *Stream) error {
 	needKey := false
+	var clock captureClock
 	for {
 		f, err := src.Next()
 		if err != nil {
 			return err
 		}
+		recv := time.Now()
 		msg := FrameMessage(f)
 		if f.Config {
 			needKey = true
@@ -267,20 +279,68 @@ func pump(src Source, queue chan []byte, st *Stream) error {
 			st.Dropped.Add(1)
 			continue
 		}
-		select {
-		case queue <- msg:
-			needKey = false
-		default:
-			drain(queue, st)
-			st.Dropped.Add(1)
-			needKey = true
-			if f.Key {
-				queue <- msg
-				needKey = false
-			}
-			log.Printf("video: 网络积压，丢弃到下一个关键帧")
+		// 帧时间与画面成对入队：只有一个生产者，空位只会变多，检查后连续放入不会拆散。
+		batch := [][]byte{msg}
+		if st.Timing {
+			batch = [][]byte{TimingMessage(f.PTS, clock.encode(recv, f.PTS), recv), msg}
 		}
+		if cap(queue)-len(queue) >= len(batch) {
+			for _, b := range batch {
+				queue <- b
+			}
+			needKey = false
+			continue
+		}
+		drain(queue, st)
+		st.Dropped.Add(1)
+		needKey = true
+		if f.Key {
+			for _, b := range batch {
+				queue <- b
+			}
+			needKey = false
+		}
+		log.Printf("video: 网络积压，丢弃到下一个关键帧")
 	}
+}
+
+// captureClock 估计 ffmpeg 内部（截屏到编码输出）的耗时。ddagrab 的 pts 是截屏时刻相对第一帧的
+// 单调时钟，起点无法直接得知：取“收到时刻 − pts”的历史最小值作为起点，因此得到的是相对最快一帧
+// 多出的耗时，会少算最快一帧本身约几毫秒的编码时间。
+type captureClock struct {
+	base   time.Time
+	origin time.Duration
+	ready  bool
+}
+
+func (c *captureClock) encode(recv time.Time, pts time.Duration) time.Duration {
+	if c.base.IsZero() {
+		c.base = recv
+	}
+	est := recv.Sub(c.base) - pts
+	if !c.ready || est < c.origin {
+		c.origin, c.ready = est, true
+	}
+	return est - c.origin
+}
+
+// TimingMessage：类型 3、int64 pts（微秒）、uint32 截屏到编码输出（微秒）、uint32 发送队列等待（微秒，
+// 发送时填写）、int64 发送时刻（PC 墙钟 Unix 微秒；入队时暂存收到时刻），均为小端。
+func TimingMessage(pts, encode time.Duration, recv time.Time) []byte {
+	b := make([]byte, 25)
+	b[0] = MessageTiming
+	binary.LittleEndian.PutUint64(b[1:], uint64(pts.Microseconds()))
+	binary.LittleEndian.PutUint32(b[9:], uint32(max(0, min(encode.Microseconds(), 1<<31))))
+	binary.LittleEndian.PutUint64(b[17:], uint64(recv.UnixMicro()))
+	return b
+}
+
+// stampSend 在写出帧时间消息前填入发送队列等待时长与发送时刻。
+func stampSend(b []byte, now time.Time) {
+	recv := int64(binary.LittleEndian.Uint64(b[17:]))
+	wait := max(0, min(now.UnixMicro()-recv, 1<<31))
+	binary.LittleEndian.PutUint32(b[13:], uint32(wait))
+	binary.LittleEndian.PutUint64(b[17:], uint64(now.UnixMicro()))
 }
 
 func drain(queue chan []byte, st *Stream) {

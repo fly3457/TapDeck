@@ -2,7 +2,29 @@
 
 测试日期：2026-10-06 至 2026-11-04。使用页描述当前行为；历史结果按当时版本理解。截图中的示例连接和录音状态不作为实机识别证明。
 
-当前：接收端 **0.5.10**、Android **0.5.10 / code 35**· [安装](installation.md) · [版本规则](versioning.md)
+当前：接收端 **0.5.11**、Android **0.5.11 / code 36**· [安装](installation.md) · [版本规则](versioning.md)
+
+## 0.5.11 视频端到端延迟统计
+
+2026-11-05 完成，未公开发布。用户反馈：顶部显示 7–20 ms，但对比显示器与手机，双指滚动网页的体感延迟约 200–300 ms。经核对，顶部数字是控制通道心跳的往返时间（RTT），不包括截屏、编码、发送排队、解码与显示，不能代表画面延迟。0.5.11 改为分段统计：电脑在每个画面帧前发送帧时间消息（类型 3），心跳回应带 PC 墙钟；手机按最短往返对时，按 pts 把截屏编码、发送排队、网络、解码四段相加，顶部显示一秒中位数“延迟 X ms”，并每 2 秒在 logcat 输出分段。协议见[控制协议](../protocol/README.md#video)。
+
+| 验证项 | 结果 |
+|---|---|
+| 单元测试 | Go：帧时间消息编码与发送打点、截屏起点取最快一帧。Android `VideoLatencyTest` 5 项：最短往返对时、四段相加、缺少帧时间或时钟未对齐时不出数、中位数忽略单帧尖峰与窗口外样本、解析类型 3 与到达时刻 |
+| 构建过程 | 第一次构建失败：`TapClient.clock` 为 public 而 `ClockSync` 为 internal，改为 internal 后重建通过 |
+| 官方构建 | `scripts/build-windows.ps1 -OutputDirectory dist/0.5.11` 通过；`--apk-info` 为 Android 0.5.11 / code 36、release、不可调试、证书不变 |
+| 实机分段延迟 | 待测：需换上 0.5.11 接收端（新 EXE 需在防火墙中放行），手机重新连接 adb |
+
+官方交付目录 `dist/0.5.11`：
+
+| 产物 | 字节数 | SHA-256 |
+|---|---:|---|
+| `TapDeck-0.5.11.apk` | 8,633,637 | `b25ef4f3fbda5d6ebdcfdb9be31c37cf2d5d5e0e78ce0715d29168fc7b639ff2` |
+| `TapDeck-0.5.11.exe` | 28,286,976 | `284a6dabd41fd760a990b2fb2f5b19ec169bfc4684f9bd31accb5626f6b604b3` |
+| `TapDeck-debug-0.5.11.exe` | 33,887,744 | `57522151d9fc68f79c0e0d5010dfee171b0ea9ab7845e30e28195e190e51e217` |
+| `TapDeck-hidprobe-0.5.11.exe` | 8,048,128 | `d55b1ace03494faf8fd77ce296ef215f609179ab3fccf726bf6335f68a08f554` |
+
+日志：`.tools/windows-release-0.5.11-build.log`。
 
 ## 0.5.10 体感快慢只影响速度，不影响距离
 
