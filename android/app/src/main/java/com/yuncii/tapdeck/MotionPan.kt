@@ -2,24 +2,25 @@ package com.yuncii.tapdeck
 
 import kotlin.math.PI
 import kotlin.math.abs
-import kotlin.math.hypot
-import kotlin.math.sign
 
 /**
  * 视频模式体感控制：把陀螺仪角速度换算成画面平移，效果等同单指拖动画面。
  *
  * 向右转看到右边（画面向左移）；手机顶部朝自己倾斜，画面向下移、看到上面（与“窗口”直觉相反，按用户实测要求反转）。
- * 平移带加速度：同样转过一个角度，转得快画面移动远，转得慢移动近，便于大范围移动与精细对准兼顾。
+ * 平移只与转过的角度成正比：转得快慢只影响画面移动得快慢，同样的转角始终移动同样的距离（0.5.6–0.5.9 曾有加速度曲线，0.5.10 按用户要求去掉）。
  * 绕屏幕法线的转动（在桌面上旋转手机）不参与。
  *
  * 防抖分两步：先用 One Euro 自适应低通滤波压掉手抖（慢时截止频率低、更平稳，快转时截止频率升高、不拖沓），
- * 再减去死区，静止或零漂时完全不动。每次开始监听传感器时调用 [reset]。
+ * 再经平滑门限：低于 [DEAD_ZONE] 完全不动，[DEAD_ZONE]..[FULL_RATE] 之间逐渐放开，超过后原样计入、不扣减距离。
+ * 每次开始监听传感器时调用 [reset]。
  */
 internal class MotionPan {
     companion object {
-        /** 滤波后角速度低于该值（rad/s）视为静止，不平移；超过部分才计入，起步不突跳。 */
+        /** 滤波后角速度低于该值（rad/s）视为静止或零漂，不平移。 */
         const val DEAD_ZONE = 0.05
-        /** 每弧度平移的基准距离为视图长边的倍数，再乘以加速度倍率 [gain]（0.5.8 曾降为 0.96，0.5.9 按实测恢复）。 */
+        /** 角速度达到该值（rad/s，约 6°/s）起原样计入；与 [DEAD_ZONE] 之间平滑过渡，起步不突跳。 */
+        const val FULL_RATE = 0.1
+        /** 每弧度平移的距离为视图长边的倍数（0.5.8 曾降为 0.96，0.5.9 按实测恢复）。 */
         const val PAN_PER_RAD = 1.2
         /** 两次采样间隔上限（秒）：暂停后恢复时不按很长的间隔一次性跳动。 */
         const val MAX_DT = 0.1
@@ -27,17 +28,6 @@ internal class MotionPan {
         const val MIN_CUTOFF = 1.2
         const val BETA = 0.2
         const val D_CUTOFF = 1.0
-        /** 加速度曲线：转得慢时倍率 SLOW_GAIN、转得快时 FAST_GAIN，在 SLOW_RATE..FAST_RATE（rad/s）之间平滑过渡。 */
-        const val SLOW_GAIN = 0.5
-        const val FAST_GAIN = 1.5
-        const val SLOW_RATE = 0.2
-        const val FAST_RATE = 1.5
-
-        /** 角速度大小（rad/s）对应的平移倍率：同样转过一个角度，转得越快画面移动越远，越慢越精细。 */
-        fun gain(rate: Double): Double {
-            val t = ((rate - SLOW_RATE) / (FAST_RATE - SLOW_RATE)).coerceIn(0.0, 1.0)
-            return SLOW_GAIN + (FAST_GAIN - SLOW_GAIN) * t * t * (3 - 2 * t)
-        }
 
         /** 设备坐标系角速度 (wx, wy) 按屏幕方向换算为（绕屏幕横轴的俯仰, 绕屏幕竖轴的偏航）。ROTATION_90 表示手机逆时针转了 90°。 */
         fun screenRates(wx: Double, wy: Double, rotation: Int): Pair<Double, Double> {
@@ -51,7 +41,11 @@ internal class MotionPan {
             return wx * sx.first + wy * sx.second to wx * sy.first + wy * sy.second
         }
 
-        private fun deadZone(v: Double) = if (abs(v) <= DEAD_ZONE) 0.0 else v - sign(v) * DEAD_ZONE
+        /** 平滑门限：死区内为 0，到 [FULL_RATE] 时为原值，中间按 smoothstep 过渡。 */
+        fun gate(v: Double): Double {
+            val t = ((abs(v) - DEAD_ZONE) / (FULL_RATE - DEAD_ZONE)).coerceIn(0.0, 1.0)
+            return v * t * t * (3 - 2 * t)
+        }
     }
 
     private val pitch = OneEuro(MIN_CUTOFF, BETA, D_CUTOFF)
@@ -67,9 +61,8 @@ internal class MotionPan {
         val t = dt.coerceIn(0.0, MAX_DT)
         if (t <= 0.0) return 0.0 to 0.0
         val (p, y) = screenRates(wx, wy, rotation)
-        val fp = deadZone(pitch.filter(p, t)); val fy = deadZone(yaw.filter(y, t))
-        val k = gain(hypot(fp, fy)) * t * pxPerRad
-        return fy * k to fp * k
+        val k = t * pxPerRad
+        return gate(yaw.filter(y, t)) * k to gate(pitch.filter(p, t)) * k
     }
 }
 

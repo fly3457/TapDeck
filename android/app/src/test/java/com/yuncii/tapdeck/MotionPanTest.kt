@@ -22,9 +22,8 @@ class MotionPanTest {
         val (sx, sy, last) = steady(0.0, -1.0)
         assertTrue("画面应向左移", sx < 0)
         assertEquals(0.0, sy, 1e-9)
-        // 持续转动时滤波收敛，每步平移等于（角速度 − 死区）× 加速度倍率 × 时间 × 系数。
-        val rate = 1.0 - MotionPan.DEAD_ZONE
-        assertEquals(-rate * MotionPan.gain(rate) * dt * px, last.first, 0.5)
+        // 超过门限后原样计入：每步平移等于角速度 × 时间 × 系数，不扣减死区。
+        assertEquals(-1.0 * dt * px, last.first, 1e-6)
     }
 
     @Test fun tiltingTopTowardUserMovesContentDown() {
@@ -47,22 +46,23 @@ class MotionPanTest {
         assertTrue(steady(-1.0, 0.0, rotation = 1).first < 0)
     }
 
-    @Test fun fasterTurnMovesFartherForSameAngle() {
-        // 同样向右转 0.5 rad：2 rad/s 用 0.25 秒，0.25 rad/s 用 2 秒。
+    @Test fun sameAngleMovesSameDistanceAtAnySpeed() {
+        // 同样向右转 0.4 rad（各速度都是整数个 20 ms 采样）：2 rad/s 用 0.2 秒，0.25 rad/s 用 1.6 秒；快慢只影响移动速度，距离相同。
         fun distance(rate: Double): Double {
             val m = MotionPan(); var sum = 0.0
-            repeat((0.5 / rate / dt).toInt()) { sum += m.step(0.0, -rate, 0, dt, px).first }
+            repeat(Math.round(0.4 / rate / dt).toInt()) { sum += m.step(0.0, -rate, 0, dt, px).first }
             return abs(sum)
         }
-        val fast = distance(2.0); val slow = distance(0.25)
-        assertTrue("快转 $fast px 应远大于慢转 $slow px", fast > slow * 2)
+        val expected = 0.4 * px
+        for (rate in listOf(0.25, 0.5, 1.0, 2.0)) assertEquals("角速度 $rate rad/s", expected, distance(rate), expected * 0.01)
     }
 
-    @Test fun gainIsSmoothAndBounded() {
-        assertEquals(MotionPan.SLOW_GAIN, MotionPan.gain(0.0), 1e-12)
-        assertEquals(MotionPan.FAST_GAIN, MotionPan.gain(10.0), 1e-12)
+    @Test fun gateIsSmoothAndPassesThroughAboveFullRate() {
+        assertEquals(0.0, MotionPan.gate(MotionPan.DEAD_ZONE), 1e-12)
+        assertEquals(0.3, MotionPan.gate(0.3), 1e-12)
+        assertEquals(-MotionPan.FULL_RATE, MotionPan.gate(-MotionPan.FULL_RATE), 1e-12)
         var prev = 0.0
-        for (i in 0..100) { val g = MotionPan.gain(i * 0.02); assertTrue(g >= prev); prev = g }
+        for (i in 0..100) { val g = MotionPan.gate(i * 0.002); assertTrue(g >= prev); prev = g }
     }
 
     @Test fun handTremorIsSuppressed() {
@@ -71,7 +71,7 @@ class MotionPanTest {
         repeat(250) { i ->
             val w = 0.15 * sin(2 * PI * 8 * i * dt)
             total += abs(m.step(w, w, 0, dt, px).first)
-            raw += abs((abs(w) - MotionPan.DEAD_ZONE).coerceAtLeast(0.0)) * dt * px
+            raw += abs(MotionPan.gate(w)) * dt * px
         }
         assertTrue("滤波后抖动累计 $total px 应远小于未滤波的 $raw px", total < raw * 0.1)
         assertTrue("抖动累计应小于 2 px，实际 $total", total < 2.0)
@@ -86,7 +86,7 @@ class MotionPanTest {
         val m = MotionPan()
         m.step(0.0, -1.0, 0, dt, px)
         val capped = m.step(0.0, -1.0, 0, 5.0, px).first
-        assertTrue("间隔应按 ${MotionPan.MAX_DT}s 封顶", abs(capped) <= MotionPan.MAX_DT * MotionPan.FAST_GAIN * px)
+        assertTrue("间隔应按 ${MotionPan.MAX_DT}s 封顶", abs(capped) <= MotionPan.MAX_DT * px + 1e-9)
         assertEquals(0.0 to 0.0, m.step(0.0, -1.0, 0, 0.0, px))
     }
 
