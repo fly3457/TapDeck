@@ -4,6 +4,10 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -182,21 +186,89 @@ class VideoModeView(
         notificationBadge.visibility = if (count > 0) VISIBLE else GONE
         findViewById<View>(R.id.video_notifications_button).contentDescription = if (count > 0) "电脑通知，$count 条未读" else "电脑通知"
     }
+    // “更多”：点击在下方弹出恢复默认比例与体感控制两个图标，点画面其他位置收起。
+    private var menuOpen = false
+    private val moreButton = iconButton(R.id.video_more_button, R.drawable.ic_lucide_ellipsis, "更多画面操作") { showMenu(!menuOpen) }
     private val resetButton = iconButton(R.id.video_reset_button, R.drawable.ic_lucide_scan, "恢复默认画面比例") {
-        viewport.reset(aroundCursor = false); requestLayout()
+        viewport.reset(aroundCursor = false); requestLayout(); showMenu(false)
     }
+    private val motionButton = iconButton(R.id.video_motion_button, R.drawable.ic_lucide_rotate_3d, "开启体感控制") {
+        showMenu(false)
+        if (gyroscope == null) android.widget.Toast.makeText(context, "这台手机没有陀螺仪，无法使用体感控制", android.widget.Toast.LENGTH_SHORT).show()
+        else setMotion(!motion)
+    }
+    private val menu = android.widget.LinearLayout(context).apply {
+        orientation = android.widget.LinearLayout.VERTICAL
+        visibility = GONE
+        val icon = (TOOLBAR_ICON_DP * density).roundToInt(); val gap = (TOOLBAR_GAP_DP * density).roundToInt()
+        for ((i, b) in listOf(resetButton, motionButton).withIndex())
+            addView(b, android.widget.LinearLayout.LayoutParams(icon, icon).apply { if (i > 0) topMargin = gap })
+    }
+
+    // 体感控制：转动手机由陀螺仪平移画面（见 MotionPan）；只在视频模式可见且开关打开时监听传感器。
+    private val sensors = context.getSystemService(SensorManager::class.java)
+    private val gyroscope: Sensor? = sensors?.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
+    var motion = false
+        private set
+    private var visibleNow = false
+    private var gyroListening = false
+    private var lastGyro = 0L
+    private val gyroListener = object : SensorEventListener {
+        override fun onSensorChanged(e: SensorEvent) {
+            val prev = lastGyro; lastGyro = e.timestamp
+            if (prev == 0L || !connected || !viewport.ready) return
+            val (dx, dy) = MotionPan.delta(e.values[0].toDouble(), e.values[1].toDouble(), display?.rotation ?: 0,
+                (e.timestamp - prev) / 1e9, MotionPan.PAN_PER_RAD * maxOf(width, height))
+            if (dx != 0.0 || dy != 0.0) { viewport.pan(dx, dy); placeSurface() }
+        }
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+    }
+
+    fun setMotion(on: Boolean) {
+        motion = on && gyroscope != null
+        motionButton.background = pill(if (motion) ACTIVE_PILL else IDLE_PILL)
+        motionButton.contentDescription = if (motion) "关闭体感控制" else "开启体感控制"
+        updateMoreButton()
+        updateGyro()
+    }
+
+    private fun showMenu(open: Boolean) {
+        if (menuOpen == open) return
+        menuOpen = open
+        menu.visibility = if (open) VISIBLE else GONE
+        updateMoreButton()
+        requestLayout()
+    }
+
+    /** 菜单展开或体感控制开启时“更多”显示为蓝色，提示菜单里有功能正在生效。 */
+    private fun updateMoreButton() { moreButton.background = pill(if (menuOpen || motion) ACTIVE_PILL else IDLE_PILL) }
+
+    private fun updateGyro() {
+        val want = motion && visibleNow && isAttachedToWindow
+        if (want == gyroListening) return
+        gyroListening = want
+        if (want) { lastGyro = 0L; sensors?.registerListener(gyroListener, gyroscope, SensorManager.SENSOR_DELAY_GAME) }
+        else sensors?.unregisterListener(gyroListener)
+    }
+
+    override fun onVisibilityAggregated(isVisible: Boolean) {
+        super.onVisibilityAggregated(isVisible)
+        visibleNow = isVisible
+        updateGyro()
+    }
+
     private val shortcutsButton = iconButton(R.id.video_shortcuts_button, R.drawable.ic_lucide_layout_grid, "显示快捷键盘") {
         showKeyboard(if (keyboard == VideoKeyboard.Shortcuts) VideoKeyboard.None else VideoKeyboard.Shortcuts)
     }
     private val keyboardButton = iconButton(R.id.video_keyboard_button, R.drawable.ic_lucide_keyboard, "显示全键盘") {
         showKeyboard(if (keyboard == VideoKeyboard.Full) VideoKeyboard.None else VideoKeyboard.Full)
     }
-    // 图标固定在屏幕右上角，右对齐；铃铛在恢复默认比例的左边。
+    // 图标固定在屏幕右上角，右对齐：铃铛、更多、快捷键盘、全键盘。
     private val toolbar = android.widget.LinearLayout(context).apply {
         orientation = android.widget.LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         val icon = (TOOLBAR_ICON_DP * density).roundToInt(); val gap = (TOOLBAR_GAP_DP * density).roundToInt()
-        for ((i, b) in listOf(notificationsButton, resetButton, shortcutsButton, keyboardButton).withIndex())
+        for ((i, b) in listOf(notificationsButton, moreButton, shortcutsButton, keyboardButton).withIndex())
             addView(b, android.widget.LinearLayout.LayoutParams(icon, icon).apply { if (i > 0) leftMargin = gap })
     }
 
@@ -225,6 +297,8 @@ class VideoModeView(
         val margin = (12 * density).roundToInt()
         addView(statusButton, LayoutParams((STATUS_WIDTH_DP * density).roundToInt(), LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.START).apply { leftMargin = margin; topMargin = margin })
         addView(toolbar, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END).apply { rightMargin = margin; topMargin = margin })
+        addView(menu, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
+        if (gyroscope == null) motionButton.alpha = 0.4f
         addView(mic, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         mic.onMoved = { placeShortcuts() }
         render()
@@ -237,9 +311,8 @@ class VideoModeView(
         onKeyboardChange(mode)
         keyboardHost.visibility = if (mode == VideoKeyboard.Full) VISIBLE else GONE
         shortcutHost.visibility = if (mode == VideoKeyboard.Shortcuts) VISIBLE else GONE
-        val active = 0xCC175CD3.toInt(); val idle = 0x99000000.toInt()
-        shortcutsButton.background = pill(if (mode == VideoKeyboard.Shortcuts) active else idle)
-        keyboardButton.background = pill(if (mode == VideoKeyboard.Full) active else idle)
+        shortcutsButton.background = pill(if (mode == VideoKeyboard.Shortcuts) ACTIVE_PILL else IDLE_PILL)
+        keyboardButton.background = pill(if (mode == VideoKeyboard.Full) ACTIVE_PILL else IDLE_PILL)
         shortcutsButton.contentDescription = if (mode == VideoKeyboard.Shortcuts) "收起快捷键盘" else "显示快捷键盘"
         keyboardButton.contentDescription = if (mode == VideoKeyboard.Full) "收起全键盘" else "显示全键盘"
         requestLayout()
@@ -321,6 +394,11 @@ class VideoModeView(
         super.onLayout(changed, left, top, right, bottom)
         placeSurface()
         placeShortcuts()
+        // 菜单在“更多”按钮正下方，与工具栏图标左对齐。
+        if (menu.visibility == VISIBLE) {
+            val x = toolbar.left + moreButton.left; val y = toolbar.bottom + (TOOLBAR_GAP_DP * density).roundToInt()
+            menu.layout(x, y, x + menu.measuredWidth, y + menu.measuredHeight)
+        }
         if (Build.VERSION.SDK_INT >= 29) {
             // 尽量减少单指从屏幕边缘滑动时误触系统返回手势（系统限制每侧最多 200dp）。
             val h = bottom - top; val w = right - left
@@ -348,6 +426,7 @@ class VideoModeView(
     }
 
     private fun touch(e: MotionEvent): Boolean {
+        if (e.actionMasked == MotionEvent.ACTION_DOWN) showMenu(false)
         if (!connected) return true
         parent?.requestDisallowInterceptTouchEvent(true)
         val phase = when (e.actionMasked) {
@@ -373,14 +452,16 @@ class VideoModeView(
 
     fun cancel() { handler.removeCallbacks(deadline); gestures.cancel(); mic.cancel() }
 
-    override fun onAttachedToWindow() { super.onAttachedToWindow(); handler.post(statusTicker) }
-    override fun onDetachedFromWindow() { cancel(); handler.removeCallbacks(statusTicker); super.onDetachedFromWindow() }
+    override fun onAttachedToWindow() { super.onAttachedToWindow(); handler.post(statusTicker); updateGyro() }
+    override fun onDetachedFromWindow() { cancel(); handler.removeCallbacks(statusTicker); super.onDetachedFromWindow(); updateGyro() }
 }
 
 private const val STATUS_WIDTH_DP = 176
 private const val TOOLBAR_ICONS = 4
 private const val TOOLBAR_ICON_DP = 36
 private const val TOOLBAR_GAP_DP = 8
+private const val ACTIVE_PILL = 0xCC175CD3.toInt()
+private const val IDLE_PILL = 0x99000000.toInt()
 private const val SHORTCUT_CELL_W_DP = 62
 private const val SHORTCUT_CELL_H_DP = 40
 private const val SHORTCUT_GAP_DP = 4

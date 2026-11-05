@@ -2,7 +2,28 @@
 
 测试日期：2026-10-06 至 2026-11-04。使用页描述当前行为；历史结果按当时版本理解。截图中的示例连接和录音状态不作为实机识别证明。
 
-当前：接收端 **0.5.3**、Android **0.5.3 / code 28**· [安装](installation.md) · [版本规则](versioning.md)
+当前：接收端 **0.5.4**、Android **0.5.4 / code 29**· [安装](installation.md) · [版本规则](versioning.md)
+
+## 0.5.4 视频模式“更多”菜单与体感控制
+
+2026-11-05 完成，未公开发布。视频模式工具栏第二个图标由“恢复默认比例”改为“更多”（Lucide `ellipsis`），点击后在下方弹出恢复默认比例与体感控制（Lucide `rotate-3d`）。开启体感控制后，转动手机由陀螺仪平移画面，效果等同单指拖动。功能说明见[视频模式](video-mode.md#体感控制)。
+
+| 验证项 | 结果 |
+|---|---|
+| 体感换算 | `MotionPanTest` 4 项通过：竖屏向右转画面左移、顶部朝自己倾斜画面上移、ROTATION_90／180／270 按屏幕轴换算、低于死区的抖动忽略、长间隔按 0.1 秒封顶 |
+| 官方构建 | `scripts/build-windows.ps1 -OutputDirectory dist/0.5.4` 通过（含 Android release 单元测试、Go 测试与 vet）；`--apk-info` 为 Android 0.5.4 / code 29、release、不可调试、证书不变 |
+| 实机 | 待测：构建完成时手机未连接 adb。需确认菜单位置与收起、恢复默认比例、体感方向与灵敏度、切后台停止监听 |
+
+官方交付目录 `dist/0.5.4`：
+
+| 产物 | 字节数 | SHA-256 |
+|---|---:|---|
+| `TapDeck-0.5.4.apk` | 8,617,225 | `3c5d39076e1d15e938c975725436bf1a6d28c88c0eb48266616f5cc96eaba2de` |
+| `TapDeck-0.5.4.exe` | 28,266,496 | `a30a15a958d902ca46027976d850c7a1b04a37a038db62c93e5e59ab6f63b531` |
+| `TapDeck-debug-0.5.4.exe` | 33,865,728 | `bee5b52004fa6f21ff13761b0001159d473150822a2797bc1c511b4ccf9ead80` |
+| `TapDeck-hidprobe-0.5.4.exe` | 8,048,128 | `d0ed52783525e9a6d8ca4217a48ad0b6b825686adf7f287db094623ee9bde654` |
+
+日志：`.tools/windows-release-0.5.4-build.log`。
 
 ## 0.5.3 “连接”按钮移到网址下方
 
