@@ -185,10 +185,21 @@ class VideoModeView(
         notificationBadge.text = if (count > 99) "99+" else count.toString()
         notificationBadge.visibility = if (count > 0) VISIBLE else GONE
         findViewById<View>(R.id.video_notifications_button).contentDescription = if (count > 0) "电脑通知，$count 条未读" else "电脑通知"
+        updateMoreButton()
     }
-    // “更多”是两段式开关：点一下在下方展开恢复默认比例与体感控制，再点一下收起；点菜单项或画面都不会收起。
+    // “更多”是两段式开关：点一下在下方竖向展开提醒、快捷键盘、全键盘、1:1、体感，再点一下收起；点菜单项或画面都不会收起。
     private var menuOpen = false
     private val moreButton = iconButton(R.id.video_more_button, R.drawable.ic_lucide_ellipsis, "展开更多画面操作") { showMenu(!menuOpen) }
+    // 菜单收起时有未读通知，“更多”右上角显示红点，提醒展开查看。
+    private val moreDot = View(context).apply {
+        background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0xFFE5484D.toInt()) }
+        visibility = GONE
+    }
+    private val moreHost = FrameLayout(context).apply {
+        addView(moreButton, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        val dot = (9 * density).roundToInt()
+        addView(moreDot, LayoutParams(dot, dot, Gravity.TOP or Gravity.END).apply { topMargin = (2 * density).roundToInt(); rightMargin = (2 * density).roundToInt() })
+    }
     private val resetButton = iconButton(R.id.video_reset_button, R.drawable.ic_ratio_1_1, "恢复默认画面比例") {
         viewport.reset(aroundCursor = false); requestLayout()
     }
@@ -196,12 +207,10 @@ class VideoModeView(
         if (gyroscope == null) android.widget.Toast.makeText(context, "这台手机没有陀螺仪，无法使用体感控制", android.widget.Toast.LENGTH_SHORT).show()
         else setMotion(!motion)
     }
+    // 子项在 init 中加入：快捷键盘、全键盘按钮声明在后面。
     private val menu = android.widget.LinearLayout(context).apply {
         orientation = android.widget.LinearLayout.VERTICAL
         visibility = GONE
-        val icon = (TOOLBAR_ICON_DP * density).roundToInt(); val gap = (TOOLBAR_GAP_DP * density).roundToInt()
-        for ((i, b) in listOf(resetButton, motionButton).withIndex())
-            addView(b, android.widget.LinearLayout.LayoutParams(icon, icon).apply { if (i > 0) topMargin = gap })
     }
 
     // 体感控制：转动手机由陀螺仪平移画面（见 MotionPan）；只在视频模式可见且开关打开时监听传感器。
@@ -241,8 +250,11 @@ class VideoModeView(
         requestLayout()
     }
 
-    /** 菜单展开或体感控制开启时“更多”显示为蓝色。 */
-    private fun updateMoreButton() { moreButton.background = pill(if (menuOpen || motion) ACTIVE_PILL else IDLE_PILL) }
+    /** 菜单展开、或收起后仍有功能在生效（快捷键盘、全键盘、体感）时“更多”显示为蓝色；收起时有未读通知显示红点。 */
+    private fun updateMoreButton() {
+        moreButton.background = pill(if (menuOpen || motion || keyboard != VideoKeyboard.None) ACTIVE_PILL else IDLE_PILL)
+        moreDot.visibility = if (!menuOpen && unread > 0) VISIBLE else GONE
+    }
 
     private fun updateGyro() {
         val want = motion && visibleNow && isAttachedToWindow
@@ -264,13 +276,12 @@ class VideoModeView(
     private val keyboardButton = iconButton(R.id.video_keyboard_button, R.drawable.ic_lucide_keyboard, "显示全键盘") {
         showKeyboard(if (keyboard == VideoKeyboard.Full) VideoKeyboard.None else VideoKeyboard.Full)
     }
-    // 图标固定在屏幕右上角，右对齐：铃铛、快捷键盘、全键盘、更多（最右）。
+    // 右上角只保留“更多”，其余图标收进它展开的竖向菜单。
     private val toolbar = android.widget.LinearLayout(context).apply {
         orientation = android.widget.LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
-        val icon = (TOOLBAR_ICON_DP * density).roundToInt(); val gap = (TOOLBAR_GAP_DP * density).roundToInt()
-        for ((i, b) in listOf(notificationsButton, shortcutsButton, keyboardButton, moreButton).withIndex())
-            addView(b, android.widget.LinearLayout.LayoutParams(icon, icon).apply { if (i > 0) leftMargin = gap })
+        val icon = (TOOLBAR_ICON_DP * density).roundToInt()
+        addView(moreHost, android.widget.LinearLayout.LayoutParams(icon, icon))
     }
 
     /** 跟随悬浮球的快捷键面板容器；网格由屏幕方向决定（竖屏 2 列、横屏 2 行）。 */
@@ -298,8 +309,14 @@ class VideoModeView(
         addView(shortcutHost, LayoutParams(0, 0))
         addView(message, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.CENTER))
         val margin = (12 * density).roundToInt()
-        addView(statusButton, LayoutParams((STATUS_WIDTH_DP * density).roundToInt(), LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.START).apply { leftMargin = margin; topMargin = margin })
-        addView(toolbar, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END).apply { rightMargin = margin; topMargin = margin })
+        // 顶部按钮整体下移约 60px（18dp），离开屏幕顶边，便于单手点按、也避开系统下拉手势区。
+        val top = margin + (TOP_SHIFT_DP * density).roundToInt()
+        addView(statusButton, LayoutParams((STATUS_WIDTH_DP * density).roundToInt(), LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.START).apply { leftMargin = margin; topMargin = top })
+        addView(toolbar, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END).apply { rightMargin = margin; topMargin = top })
+        // 展开顺序（从上到下）：提醒、快捷键盘、全键盘、1:1、体感。
+        val icon = (TOOLBAR_ICON_DP * density).roundToInt(); val gap = (TOOLBAR_GAP_DP * density).roundToInt()
+        for ((i, b) in listOf(notificationsButton, shortcutsButton, keyboardButton, resetButton, motionButton).withIndex())
+            menu.addView(b, android.widget.LinearLayout.LayoutParams(icon, icon).apply { if (i > 0) topMargin = gap })
         addView(menu, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
         if (gyroscope == null) motionButton.alpha = 0.4f
         addView(mic, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
@@ -318,6 +335,7 @@ class VideoModeView(
         keyboardButton.background = pill(if (mode == VideoKeyboard.Full) ACTIVE_PILL else IDLE_PILL)
         shortcutsButton.contentDescription = if (mode == VideoKeyboard.Shortcuts) "收起快捷键盘" else "显示快捷键盘"
         keyboardButton.contentDescription = if (mode == VideoKeyboard.Full) "收起全键盘" else "显示全键盘"
+        updateMoreButton()
         requestLayout()
     }
 
@@ -405,7 +423,7 @@ class VideoModeView(
         placeShortcuts()
         // 菜单在“更多”按钮正下方，与其左对齐。
         if (menu.visibility == VISIBLE) {
-            val x = toolbar.left + moreButton.left; val y = toolbar.bottom + (TOOLBAR_GAP_DP * density).roundToInt()
+            val x = toolbar.left + moreHost.left; val y = toolbar.bottom + (TOOLBAR_GAP_DP * density).roundToInt()
             menu.layout(x, y, x + menu.measuredWidth, y + menu.measuredHeight)
         }
         if (Build.VERSION.SDK_INT >= 29) {
@@ -465,7 +483,8 @@ class VideoModeView(
 }
 
 private const val STATUS_WIDTH_DP = 176
-private const val TOOLBAR_ICONS = 4
+private const val TOOLBAR_ICONS = 1
+private const val TOP_SHIFT_DP = 18
 private const val TOOLBAR_ICON_DP = 36
 private const val TOOLBAR_GAP_DP = 8
 private const val ACTIVE_PILL = 0xCC175CD3.toInt()
