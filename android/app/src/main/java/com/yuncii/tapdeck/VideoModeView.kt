@@ -67,19 +67,19 @@ class VideoModeView(
             return true
         }
         override fun pan(dx: Double, dy: Double) {
+            // 滚动模式：只滚页面，不再平移画面，两种移动不叠加。
+            if (edgeScroll.scrolling) { scrollPage(dy); return }
             val y0 = viewport.offsetY
             viewport.pan(dx * density, dy * density)
             placeSurface()
             // 上下方向被边缘挡住、没平移出去的部分转成 PC 滚轮：瀑布流页面单指即可滚动阅读。
             val scroll = edgeScroll.overflow(dy - (viewport.offsetY - y0) / density)
-            if (scroll == 0.0) return
-            // 开始滚动时先把鼠标移到手指下方，滚的是手指下面的内容。
-            if (!edgeHovered) { edgeHovered = true; hoverAt(touchX, touchY) }
-            // 内容始终跟着手指走，与 PC 的“自然滚动”设置无关。
-            client.scroll(0.0, if (client.naturalScroll) scroll else -scroll)
+            if (scroll != 0.0) scrollPage(scroll)
         }
         override fun fling(vx: Double, vy: Double) {
-            if (inertia.start(vx, vy)) glide.start()
+            // 滚动模式抬手：纵向速度交给惯性继续滚页面；否则惯性平移画面。
+            glideScroll = edgeScroll.scrolling
+            if (if (glideScroll) inertia.start(0.0, vy) else inertia.start(vx, vy)) glide.start()
         }
         override fun pointerAt(action: String, x: Double, y: Double) {
             val (cx, cy) = viewport.toContentClamped(x * density, y * density) ?: return
@@ -101,6 +101,16 @@ class VideoModeView(
     private var edgeHovered = false
     private var touchX = 0.0
     private var touchY = 0.0
+    /** 按手指位移（dp）滚动 PC 页面，大致 1:1 跟手；每次拖动第一次滚动前把鼠标移到手指下方。 */
+    private fun scrollPage(dy: Double) {
+        if (!edgeHovered) {
+            edgeHovered = true
+            viewport.toContent(touchX * density, touchY * density)?.let { (cx, cy) -> onPointer("move", cx.toInt(), cy.toInt()) }
+        }
+        val amount = dy * EdgeScroll.followGain(density.toDouble(), viewport.scale)
+        // 内容始终跟着手指走，与 PC 的“自然滚动”设置无关。
+        client.scroll(0.0, if (client.naturalScroll) amount else -amount)
+    }
     private val configuration = ViewConfiguration.get(context)
     // 直接操作：单指拖动平移画面、轻点左击、长按右击；双指滚动／缩放画面、双指轻点右击与三指手势不变。
     private val gestures = TouchpadGestures(sink, configuration.scaledTouchSlop / density.toDouble(), configuration.scaledDoubleTapSlop / density.toDouble(), direct = true)
@@ -221,8 +231,11 @@ class VideoModeView(
     }
     private val motionButton = iconButton(R.id.video_motion_button, R.drawable.ic_lucide_rotate_3d, "开启体感控制") {
         if (gyroscope == null) android.widget.Toast.makeText(context, "这台手机没有陀螺仪，无法使用体感控制", android.widget.Toast.LENGTH_SHORT).show()
-        else setMotion(!motion)
+        else { setMotion(!motion); onMotionToggle(motion) }
     }
+    /** 用户点按体感开关、快捷键盘／全键盘按钮后回调，用于记住状态（退出视频模式时的自动收起不回调）。 */
+    var onMotionToggle: (Boolean) -> Unit = {}
+    var onKeyboardToggle: (VideoKeyboard) -> Unit = {}
     // 电脑声音开关：接收端 0.5.15 起支持；旧版电脑时半透明，点击提示升级。
     var onAudio: (Boolean) -> Unit = {}
     private var audioOn = true
@@ -303,10 +316,10 @@ class VideoModeView(
     }
 
     private val shortcutsButton = iconButton(R.id.video_shortcuts_button, R.drawable.ic_lucide_layout_grid, "显示快捷键盘") {
-        showKeyboard(if (keyboard == VideoKeyboard.Shortcuts) VideoKeyboard.None else VideoKeyboard.Shortcuts)
+        showKeyboard(if (keyboard == VideoKeyboard.Shortcuts) VideoKeyboard.None else VideoKeyboard.Shortcuts); onKeyboardToggle(keyboard)
     }
     private val keyboardButton = iconButton(R.id.video_keyboard_button, R.drawable.ic_lucide_keyboard, "显示全键盘") {
-        showKeyboard(if (keyboard == VideoKeyboard.Full) VideoKeyboard.None else VideoKeyboard.Full)
+        showKeyboard(if (keyboard == VideoKeyboard.Full) VideoKeyboard.None else VideoKeyboard.Full); onKeyboardToggle(keyboard)
     }
     // 右上角只保留“更多”，其余图标收进它展开的竖向菜单。
     private val toolbar = android.widget.LinearLayout(context).apply {
@@ -423,6 +436,8 @@ class VideoModeView(
     }
     // 单指拖动抬手后的惯性滑动：逐帧推进，撞到画面边缘的方向停止；手指再次按下立即停住。
     private val inertia = PanInertia()
+    /** 当前惯性是在滚页面（true）还是平移画面。 */
+    private var glideScroll = false
     private val glide = object : Choreographer.FrameCallback {
         private var running = false
         private var lastFrame = 0L
@@ -442,6 +457,12 @@ class VideoModeView(
             val dt = if (lastFrame == 0L) 1 / 60.0 else ((frameTimeNanos - lastFrame) / 1e9).coerceIn(0.0, 0.05)
             lastFrame = frameTimeNanos
             val (dx, dy) = inertia.step(dt)
+            if (glideScroll) {
+                // 滚动惯性：继续滚页面，不平移画面。
+                scrollPage(dy)
+                if (inertia.active) { running = true; Choreographer.getInstance().postFrameCallback(this) }
+                return
+            }
             val x = viewport.offsetX; val y = viewport.offsetY
             viewport.pan(dx * density, dy * density)
             inertia.halt(x = dx != 0.0 && viewport.offsetX == x, y = dy != 0.0 && viewport.offsetY == y)
@@ -528,10 +549,12 @@ class VideoModeView(
         val points = (0 until e.pointerCount).map { TouchPoint(e.getPointerId(it), e.getX(it) / density.toDouble(), e.getY(it) / density.toDouble()) }
         // 惯性滑动中按下：立即停住，这一下不当作点击或长按发给电脑，按住拖动仍可继续平移。
         val stopping = phase == TouchPhase.Down && inertia.active
+        // 滚动惯性未停时按下，这次拖动直接是滚动；滚动抬手后 1 秒内按下也是（见 EdgeScroll）。
+        if (phase == TouchPhase.Down) { edgeScroll.down(e.eventTime, force = stopping && glideScroll); edgeHovered = false }
         if (phase == TouchPhase.Down || phase == TouchPhase.Add) glide.stop()
-        if (phase == TouchPhase.Down) { edgeScroll.reset(); edgeHovered = false }
-        points.firstOrNull { it.id == e.getPointerId(0) }?.let { touchX = it.x; touchY = it.y }
+        points.firstOrNull()?.let { touchX = it.x; touchY = it.y }
         gestures.accept(TouchFrame(e.eventTime, phase, points, e.getPointerId(e.actionIndex)))
+        if (phase == TouchPhase.Up) edgeScroll.up(e.eventTime)
         if (stopping) gestures.suppressTap()
         scheduleDeadline()
         if (phase == TouchPhase.Up) touchLayer.performClick()

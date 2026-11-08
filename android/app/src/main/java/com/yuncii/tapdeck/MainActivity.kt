@@ -90,6 +90,7 @@ class TapViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { idleScreensaver.value = store.loadIdleScreensaver() }
         viewModelScope.launch { val (quality, ball) = store.loadVideoPreferences(); videoQuality.value = quality; videoBall.value = ball }
         viewModelScope.launch { videoAudio.value = store.loadVideoAudio() }
+        viewModelScope.launch { val (motion, keyboard) = store.loadVideoToggles(); videoMotion = motion; videoKeyboard = keyboard }
         viewModelScope.launch { ballPosition.value = store.loadBallPosition() }
         viewModelScope.launch {
             val (_, keyboard) = store.loadUiMode()
@@ -138,6 +139,19 @@ class TapViewModel(app: Application) : AndroidViewModel(app) {
         videoAudio.value = on
         client.setVideoAudio(on)
         viewModelScope.launch { store.saveVideoAudio(on) }
+    }
+    /** 视频模式上次的体感开关与叠加键盘；用户点按时保存，进入视频模式时恢复。 */
+    var videoMotion = false
+        private set
+    var videoKeyboard = VideoKeyboard.None
+        private set
+    fun setVideoMotion(on: Boolean) {
+        videoMotion = on
+        viewModelScope.launch { store.saveVideoMotion(on) }
+    }
+    fun setVideoKeyboard(mode: VideoKeyboard) {
+        videoKeyboard = mode
+        viewModelScope.launch { store.saveVideoKeyboard(mode) }
     }
     fun saveVideoBall(x: Float, y: Float) {
         videoBall.value = x to y
@@ -386,6 +400,8 @@ class MainActivity : ComponentActivity() {
             view.visibility = View.GONE
             view.onExit = ::exitVideo
             view.onAudio = { on -> vm.setVideoAudio(on) }
+            view.onMotionToggle = vm::setVideoMotion
+            view.onKeyboardToggle = vm::setVideoKeyboard
             view.onNotifications = { notificationsOpen = true }
             view.onRetry = { vm.client.stopVideo() } // 回到 Idle 后由状态收集自动重新请求
             view.mic.onFeedback = { view.keyFeedback(it, feedbackController) }
@@ -672,7 +688,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         // Activity 重建（例如系统字体变化）时 ViewModel 仍处于视频模式，重新套用界面。
-        if (vm.videoOn.value) applyVideoMode()
+        if (vm.videoOn.value) { applyVideoMode(); videoView?.apply { setMotion(vm.videoMotion); showKeyboard(vm.videoKeyboard) } }
         // A restored task can carry the original system Intent after process death.
         if (savedInstanceState == null) { consumeNotificationIntent(intent); consumePairingIntent(intent) } else intent?.data = null
     }
@@ -755,7 +771,11 @@ class MainActivity : ComponentActivity() {
         when {
             !state.connected -> android.widget.Toast.makeText(this, "请先连接电脑", android.widget.Toast.LENGTH_SHORT).show()
             !state.videoSupported -> android.widget.Toast.makeText(this, "请将电脑端升级到 TapDeck 0.4.0 或更新版本以使用视频模式", android.widget.Toast.LENGTH_LONG).show()
-            else -> { cancelInputs(); vm.videoOn.value = true; applyVideoMode() }
+            else -> {
+                cancelInputs(); vm.videoOn.value = true; applyVideoMode()
+                // 恢复上次在视频模式里打开的体感控制与叠加键盘。
+                videoView?.apply { setMotion(vm.videoMotion); showKeyboard(vm.videoKeyboard) }
+            }
         }
     }
 

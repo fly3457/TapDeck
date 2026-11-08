@@ -28,6 +28,8 @@ class PairStore(private val context: Context) {
     private val hapticsKey = booleanPreferencesKey("key_haptics")
     private val videoQualityKey = stringPreferencesKey("video_quality")
     private val videoAudioKey = booleanPreferencesKey("video_audio")
+    private val videoMotionKey = booleanPreferencesKey("video_motion")
+    private val videoKeyboardKey = stringPreferencesKey("video_keyboard")
     private val videoBallX = floatPreferencesKey("video_ball_x")
     private val videoBallY = floatPreferencesKey("video_ball_y")
     private val inboxKey = stringPreferencesKey("protected_pc_notifications_v1")
@@ -124,6 +126,15 @@ class PairStore(private val context: Context) {
     /** 视频模式是否转发电脑声音，默认开启，仅保存在本机。 */
     suspend fun loadVideoAudio(): Boolean = context.dataStore.data.first()[videoAudioKey] ?: true
     suspend fun saveVideoAudio(on: Boolean) { context.dataStore.edit { it[videoAudioKey] = on } }
+
+    /** 视频模式上次的体感控制开关与叠加键盘（无／快捷键盘／全键盘），下次进入视频模式时恢复，仅保存在本机。 */
+    suspend fun loadVideoToggles(): Pair<Boolean, VideoKeyboard> {
+        val p = context.dataStore.data.first()
+        val keyboard = VideoKeyboard.values().firstOrNull { it.name == p[videoKeyboardKey] } ?: VideoKeyboard.None
+        return (p[videoMotionKey] ?: false) to keyboard
+    }
+    suspend fun saveVideoMotion(on: Boolean) { context.dataStore.edit { it[videoMotionKey] = on } }
+    suspend fun saveVideoKeyboard(mode: VideoKeyboard) { context.dataStore.edit { it[videoKeyboardKey] = mode.name } }
 
     suspend fun saveVideoBall(x: Float, y: Float) {
         context.dataStore.edit { it[videoBallX] = x.coerceIn(0f, 1f); it[videoBallY] = y.coerceIn(0f, 1f) }
