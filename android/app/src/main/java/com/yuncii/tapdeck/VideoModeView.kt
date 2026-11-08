@@ -67,13 +67,15 @@ class VideoModeView(
             return true
         }
         override fun pan(dx: Double, dy: Double) {
+            // 开始拖动时按方向判定：横拖只平移画面，竖拖才可能转成滚动；滚动窗口内方向未定时先暂存。
+            val (mx, my) = edgeScroll.move(dx, dy) ?: return
             // 滚动模式：只滚页面，不再平移画面，两种移动不叠加。
-            if (edgeScroll.scrolling) { scrollPage(dy); return }
+            if (edgeScroll.scrolling) { scrollPage(my); return }
             val y0 = viewport.offsetY
-            viewport.pan(dx * density, dy * density)
+            viewport.pan(mx * density, my * density)
             placeSurface()
-            // 上下方向被边缘挡住、没平移出去的部分转成 PC 滚轮：瀑布流页面单指即可滚动阅读。
-            val scroll = edgeScroll.overflow(dy - (viewport.offsetY - y0) / density)
+            // 竖拖时上下方向被边缘挡住、没平移出去的部分转成 PC 滚轮：瀑布流页面单指即可滚动阅读。
+            val scroll = edgeScroll.overflow(my - (viewport.offsetY - y0) / density)
             if (scroll != 0.0) scrollPage(scroll)
         }
         override fun fling(vx: Double, vy: Double) {
@@ -549,7 +551,7 @@ class VideoModeView(
         val points = (0 until e.pointerCount).map { TouchPoint(e.getPointerId(it), e.getX(it) / density.toDouble(), e.getY(it) / density.toDouble()) }
         // 惯性滑动中按下：立即停住，这一下不当作点击或长按发给电脑，按住拖动仍可继续平移。
         val stopping = phase == TouchPhase.Down && inertia.active
-        // 滚动惯性未停时按下，这次拖动直接是滚动；滚动抬手后 1 秒内按下也是（见 EdgeScroll）。
+        // 滚动惯性未停时按下、或滚动抬手后 1 秒内按下，这次竖向拖动直接是滚动，横向拖动仍平移（见 EdgeScroll）。
         if (phase == TouchPhase.Down) { edgeScroll.down(e.eventTime, force = stopping && glideScroll); edgeHovered = false }
         if (phase == TouchPhase.Down || phase == TouchPhase.Add) glide.stop()
         points.firstOrNull()?.let { touchX = it.x; touchY = it.y }
