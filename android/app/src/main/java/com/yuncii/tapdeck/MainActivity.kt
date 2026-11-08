@@ -85,7 +85,9 @@ class TapViewModel(app: Application) : AndroidViewModel(app) {
     val videoQuality = MutableStateFlow(VideoQuality.Smooth)
     val videoAudio = MutableStateFlow(true)
     val videoBall = MutableStateFlow<Pair<Float, Float>?>(null)
+    val idleScreensaver = MutableStateFlow(IdleScreensaverSettings())
     init {
+        viewModelScope.launch { idleScreensaver.value = store.loadIdleScreensaver() }
         viewModelScope.launch { val (quality, ball) = store.loadVideoPreferences(); videoQuality.value = quality; videoBall.value = ball }
         viewModelScope.launch { videoAudio.value = store.loadVideoAudio() }
         viewModelScope.launch { ballPosition.value = store.loadBallPosition() }
@@ -141,6 +143,11 @@ class TapViewModel(app: Application) : AndroidViewModel(app) {
         videoBall.value = x to y
         viewModelScope.launch { store.saveVideoBall(x, y) }
     }
+    fun setIdleScreensaver(settings: IdleScreensaverSettings) {
+        if (idleScreensaver.value == settings) return
+        idleScreensaver.value = settings
+        viewModelScope.launch { store.saveIdleScreensaver(settings) }
+    }
     fun setKeyboardOn(on: Boolean) {
         if (keyboardOn.value == on) return
         keyboardOn.value = on
@@ -159,6 +166,16 @@ class MainActivity : ComponentActivity() {
     private val videoBack = object : androidx.activity.OnBackPressedCallback(false) {
         override fun handleOnBackPressed() { exitVideo() }
     }
+    /** 空闲黑屏屏保：覆盖在整个界面之上，定时器跑在主线程。 */
+    private var screensaver: ScreensaverView? = null
+    private val idleHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val idleTimeout = Runnable { idle.onTimeout() }
+    private val idle: IdleScreensaverController = IdleScreensaverController(
+        schedule = { ms -> idleHandler.postDelayed(idleTimeout, ms) },
+        cancel = { idleHandler.removeCallbacks(idleTimeout) },
+        show = { showScreensaver() },
+        hide = { hideScreensaver() },
+    )
     private var deferredLink: String? = null
     private var deferredPeerId: String? = null
     private var settings by mutableStateOf(false)
@@ -444,6 +461,7 @@ class MainActivity : ComponentActivity() {
             val peers by vm.client.peers.collectAsStateWithLifecycle()
             val inputSettings by vm.client.inputSettings.collectAsStateWithLifecycle()
             val videoQuality by vm.videoQuality.collectAsStateWithLifecycle()
+            val idleScreensaver by vm.idleScreensaver.collectAsStateWithLifecycle()
             val inbox by vm.notifications.inbox.collectAsStateWithLifecycle()
             val backgroundReceive by vm.notifications.backgroundEnabled.collectAsStateWithLifecycle()
             if (notificationsOpen) {
@@ -516,6 +534,8 @@ class MainActivity : ComponentActivity() {
                     }
                     // Together with the column's 8dp spacing, leave 16dp on each side.
                     HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                    IdleScreensaverSection(idleScreensaver, vm::setIdleScreensaver) { settings = false; idle.preview() }
+                    HorizontalDivider(Modifier.padding(vertical = 8.dp))
                     Text("视频模式画质", style = MaterialTheme.typography.bodyMedium)
                     VideoQuality.entries.forEach { quality ->
                         Row(Modifier.fillMaxWidth().clickable(role = Role.RadioButton) { vm.setVideoQuality(quality) }, verticalAlignment = Alignment.CenterVertically) {
@@ -554,13 +574,14 @@ class MainActivity : ComponentActivity() {
                 val safe = WindowInsetsCompat.toWindowInsetsCompat(insets, view)
                 val bars = safe.getInsets(WindowInsetsCompat.Type.systemBars())
                 val cutout = safe.getInsets(WindowInsetsCompat.Type.displayCutout())
-                // 视频模式整屏都是显示器：画面延伸到刘海与系统栏下方。
-                if (vm.videoOn.value) view.setPadding(0, 0, 0, 0)
+                // 视频模式整屏都是显示器：画面延伸到刘海与系统栏下方；屏保同样铺满整屏。
+                if (vm.videoOn.value || idle.showing) view.setPadding(0, 0, 0, 0)
                 else view.setPadding(maxOf(bars.left, cutout.left), maxOf(bars.top, cutout.top), maxOf(bars.right, cutout.right), maxOf(bars.bottom, cutout.bottom))
                 insets
             }
             addView(regions, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
             addView(video, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            addView(ScreensaverView(context).also { screensaver = it }, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
             // Dialogs own their windows; this composition needs no screen area.
             addView(dialogs, FrameLayout.LayoutParams(0, 0))
         }
@@ -577,6 +598,16 @@ class MainActivity : ComponentActivity() {
                 }
                 launch {
                     vm.notifications.inbox.collect { videoView?.setUnread(it.unread) }
+                }
+                launch { vm.idleScreensaver.collect { idle.configure(it.timeoutMs) } }
+                launch {
+                    // 视频模式、语音输入、任何弹窗（设置、通知列表、配对等）以及离开前台时都不黑屏。
+                    val active = snapshotFlow {
+                        pageResumed && !(settings || notificationsOpen || pickerOpen || managingPeers || sensitivitySettings || batteryPrompt)
+                    }
+                    combine(active, vm.videoOn, vm.client.state) { active, video, state ->
+                        !active || video || state.mic != "idle" || state.pairing.isNotEmpty()
+                    }.collect { idle.setPaused(it) }
                 }
                 launch {
                     // 首次连上支持通知转发的电脑时请求一次通知权限。
@@ -652,7 +683,8 @@ class MainActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (Build.VERSION.SDK_INT >= 28) window.attributes = window.attributes.apply { layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES }
         WindowInsetsControllerCompat(window, window.decorView).apply {
-            if (vm.videoOn.value) {
+            // 屏保时也隐藏状态栏和导航栏：它们是固定不动的图案，同样会烧屏。
+            if (vm.videoOn.value || idle.showing) {
                 systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
                 hide(WindowInsetsCompat.Type.systemBars())
             } else {
@@ -806,6 +838,31 @@ class MainActivity : ComponentActivity() {
             runCatching { startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
         }
     }
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        // 屏保显示时，第一下触碰只解除屏保，不传给下面的按键和触控板。
+        if (idle.onTouch(ev.actionMasked)) return true
+        return super.dispatchTouchEvent(ev)
+    }
+    /** 用来唤醒屏保的按键：按下与抬起都吃掉，避免返回键在唤醒的同时退出页面。 */
+    private val wakeKeys = mutableSetOf<Int>()
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        when (event.action) {
+            android.view.KeyEvent.ACTION_DOWN -> if (event.keyCode in wakeKeys || idle.onKey()) { wakeKeys += event.keyCode; return true }
+            android.view.KeyEvent.ACTION_UP -> if (wakeKeys.remove(event.keyCode)) return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+    private fun showScreensaver() {
+        cancelInputs()
+        screensaver?.start()
+        fullscreen()
+        window.decorView.requestApplyInsets()
+    }
+    private fun hideScreensaver() {
+        screensaver?.stop()
+        fullscreen()
+        window.decorView.requestApplyInsets()
+    }
     override fun onResume() {
         super.onResume(); pageResumed = true; fullscreen(); modeViews?.invoke()
         if (settings) { feedbackAvailability = feedbackController.availability(); feedbackTestMessage = "" }
@@ -828,6 +885,7 @@ class MainActivity : ComponentActivity() {
         vm.client.setForeground(false); super.onStop()
     }
     override fun onDestroy() {
+        idleHandler.removeCallbacks(idleTimeout)
         vm.client.beforeConnectionChange = null
         vm.client.videoSink = null
         videoDecoder.release()
@@ -836,6 +894,25 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/** 设置页“空闲黑屏屏保”：开关（默认关）、空闲时长与预览。 */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable private fun IdleScreensaverSection(value: IdleScreensaverSettings, change: (IdleScreensaverSettings) -> Unit, preview: () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text("空闲黑屏屏保", Modifier.weight(1f))
+        Switch(checked = value.enabled, onCheckedChange = { change(value.copy(enabled = it)) },
+            modifier = Modifier.semantics { contentDescription = "空闲黑屏屏保" })
+    }
+    Text("一段时间不碰屏幕后变成黑屏，并显示一个缓慢移动、碰边回弹的时钟，防止 OLED 屏幕烧屏。屏幕不会锁定，碰一下就恢复，这一下不会触发按键。视频模式、语音输入和打开弹窗时不会黑屏。", style = MaterialTheme.typography.bodySmall)
+    if (value.enabled) {
+        Text("空闲多久后黑屏", style = MaterialTheme.typography.bodyMedium)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            IdleScreensaverSettings.OPTIONS.forEach { minutes ->
+                FilterChip(selected = value.minutes == minutes, onClick = { change(value.copy(minutes = minutes)) }, label = { Text("$minutes 分钟") })
+            }
+        }
+    }
+    TextButton(onClick = preview, contentPadding = PaddingValues(horizontal = 0.dp)) { Text("预览屏保") }
+}
 @Composable private fun SensitivitySettings(settings: DeviceInputSettings, change: (Double) -> Unit, close: () -> Unit) {
     AlertDialog(onDismissRequest = close, title = { Text("触控板灵敏度") }, text = {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

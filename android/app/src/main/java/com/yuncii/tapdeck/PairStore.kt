@@ -34,6 +34,8 @@ class PairStore(private val context: Context) {
     private val notifyBackgroundKey = booleanPreferencesKey("notify_background")
     private val notifyPermissionAskedKey = booleanPreferencesKey("notify_permission_asked")
     private val notifyBatteryAskedKey = booleanPreferencesKey("notify_battery_asked")
+    private val idleScreensaverKey = booleanPreferencesKey("idle_screensaver")
+    private val idleMinutesKey = intPreferencesKey("idle_screensaver_minutes")
     private fun key(): SecretKey {
         val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         (ks.getKey("tapdeck-pair", null) as? SecretKey)?.let { return it }
@@ -162,4 +164,17 @@ class PairStore(private val context: Context) {
     suspend fun loadBatteryAsked(): Boolean = context.dataStore.data.first()[notifyBatteryAskedKey] ?: false
 
     suspend fun markBatteryAsked() { context.dataStore.edit { it[notifyBatteryAskedKey] = true } }
+
+    /** 空闲黑屏屏保：开关默认关闭，时长默认 5 分钟，仅保存在本机。 */
+    suspend fun loadIdleScreensaver(): IdleScreensaverSettings {
+        val p = context.dataStore.data.first()
+        return IdleScreensaverSettings(p[idleScreensaverKey] ?: false, IdleScreensaverSettings.normalizeMinutes(p[idleMinutesKey]))
+    }
+
+    suspend fun saveIdleScreensaver(settings: IdleScreensaverSettings) {
+        context.dataStore.edit {
+            it[idleScreensaverKey] = settings.enabled
+            it[idleMinutesKey] = IdleScreensaverSettings.normalizeMinutes(settings.minutes)
+        }
+    }
 }
