@@ -3,22 +3,25 @@ package com.yuncii.tapdeck
 /**
  * 两端时钟对齐：心跳回应带 PC 墙钟（pc_us），按 NTP 思路取往返最短的一次样本，
  * 假设去回对称，误差不超过该次往返的一半（局域网通常几毫秒）。
+ *
+ * 线程安全：心跳在网络线程写入样本，解码线程每帧读取；0.5.11–0.5.16 未加锁，两边同时访问会抛
+ * ConcurrentModificationException 导致 App 崩溃。
  */
 internal class ClockSync(private val keep: Int = 40) {
     private val samples = ArrayDeque<Pair<Long, Long>>() // (往返 µs, PC 时钟 − 手机时钟 µs)
 
     /** sentUs、recvUs 为手机单调时钟（elapsedRealtime，微秒），pcUs 为 PC 回应时的墙钟。 */
-    fun sample(sentUs: Long, recvUs: Long, pcUs: Long) {
+    @Synchronized fun sample(sentUs: Long, recvUs: Long, pcUs: Long) {
         val rtt = recvUs - sentUs
         if (rtt < 0 || pcUs <= 0) return
         samples.addLast(rtt to pcUs - (sentUs + rtt / 2))
         while (samples.size > keep) samples.removeFirst()
     }
 
-    fun reset() = samples.clear()
+    @Synchronized fun reset() = samples.clear()
 
     /** PC 墙钟换算为手机单调时钟；还没有样本时为 null。 */
-    fun toLocal(pcUs: Long): Long? = samples.minByOrNull { it.first }?.let { pcUs - it.second }
+    @Synchronized fun toLocal(pcUs: Long): Long? = samples.minByOrNull { it.first }?.let { pcUs - it.second }
 }
 
 /**

@@ -17,8 +17,8 @@ internal object PcAudioBuffer {
     const val BYTES_PER_FRAME = CHANNELS * 2
     /** 约 30 ms：开始播放前的预缓冲。 */
     const val START_FRAMES = RATE * 30 / 1000
-    /** 约 150 ms：积压上限，超过即丢包。 */
-    const val MAX_FRAMES = RATE * 150 / 1000
+    /** 约 60 ms：积压上限，超过即丢包（0.5.16 起，原为 150 ms：时钟偏差和网络突发会让积压只增不减，实测稳定在约 120 ms）。 */
+    const val MAX_FRAMES = RATE * 60 / 1000
 
     fun shouldDrop(bufferedFrames: Long): Boolean = bufferedFrames > MAX_FRAMES
     fun shouldStart(bufferedFrames: Long): Boolean = bufferedFrames >= START_FRAMES

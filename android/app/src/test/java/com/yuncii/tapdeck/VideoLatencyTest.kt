@@ -18,6 +18,16 @@ class VideoLatencyTest {
         assertNull(c.toLocal(1_000))
     }
 
+    @Test fun clockSyncIsSafeAcrossThreads() {
+        // 0.5.11–0.5.16 的崩溃：网络线程写样本、解码线程读样本同时进行，抛 ConcurrentModificationException。
+        val c = ClockSync(keep = 8)
+        val stop = java.util.concurrent.atomic.AtomicBoolean(false)
+        val writer = Thread { var i = 0L; while (!stop.get()) { c.sample(i, i + 1_000 + i % 7, 5_000_000 + i); i++ } }
+        writer.start()
+        try { repeat(200_000) { c.toLocal(1_000_000) } } finally { stop.set(true); writer.join() }
+        assertNotNull(c.toLocal(1_000_000))
+    }
+
     @Test fun latencyAddsAllSegments() {
         val l = VideoLatency()
         val toLocal: (Long) -> Long? = { it - 5_000_000 } // PC 时钟比手机快 5 秒

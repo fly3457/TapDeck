@@ -7,10 +7,10 @@ class PcAudioTest {
     @Test fun bufferPolicyStartsAfterPrimeAndDropsBacklog() {
         assertFalse("预缓冲不足 30ms 不开始播放", PcAudioBuffer.shouldStart(PcAudioBuffer.START_FRAMES - 1L))
         assertTrue(PcAudioBuffer.shouldStart(PcAudioBuffer.START_FRAMES.toLong()))
-        assertFalse("150ms 以内照常写入", PcAudioBuffer.shouldDrop(PcAudioBuffer.MAX_FRAMES.toLong()))
-        assertTrue("积压超过 150ms 丢弃新包", PcAudioBuffer.shouldDrop(PcAudioBuffer.MAX_FRAMES + 1L))
+        assertFalse("60ms 以内照常写入", PcAudioBuffer.shouldDrop(PcAudioBuffer.MAX_FRAMES.toLong()))
+        assertTrue("积压超过 60ms 丢弃新包", PcAudioBuffer.shouldDrop(PcAudioBuffer.MAX_FRAMES + 1L))
         assertEquals(1440, PcAudioBuffer.START_FRAMES)
-        assertEquals(7200, PcAudioBuffer.MAX_FRAMES)
+        assertEquals(2880, PcAudioBuffer.MAX_FRAMES)
     }
 
     @Test fun parsesAudioMessage() {
