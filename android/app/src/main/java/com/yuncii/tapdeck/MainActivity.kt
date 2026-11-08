@@ -83,9 +83,11 @@ class TapViewModel(app: Application) : AndroidViewModel(app) {
     /** 视频模式不持久化：重新打开 App 回到普通模式。 */
     val videoOn = MutableStateFlow(false)
     val videoQuality = MutableStateFlow(VideoQuality.Smooth)
+    val videoAudio = MutableStateFlow(true)
     val videoBall = MutableStateFlow<Pair<Float, Float>?>(null)
     init {
         viewModelScope.launch { val (quality, ball) = store.loadVideoPreferences(); videoQuality.value = quality; videoBall.value = ball }
+        viewModelScope.launch { videoAudio.value = store.loadVideoAudio() }
         viewModelScope.launch { ballPosition.value = store.loadBallPosition() }
         viewModelScope.launch {
             val (_, keyboard) = store.loadUiMode()
@@ -129,6 +131,12 @@ class TapViewModel(app: Application) : AndroidViewModel(app) {
         videoQuality.value = quality
         viewModelScope.launch { store.saveVideoQuality(quality) }
     }
+    fun setVideoAudio(on: Boolean) {
+        if (videoAudio.value == on) return
+        videoAudio.value = on
+        client.setVideoAudio(on)
+        viewModelScope.launch { store.saveVideoAudio(on) }
+    }
     fun saveVideoBall(x: Float, y: Float) {
         videoBall.value = x to y
         viewModelScope.launch { store.saveVideoBall(x, y) }
@@ -146,6 +154,7 @@ class MainActivity : ComponentActivity() {
     private var videoView: VideoModeView? = null
     private var regionsView: View? = null
     private val videoDecoder = VideoDecoder()
+    private val pcAudio = PcAudioPlayer()
     /** 视频模式下拦截返回键/返回手势：退出视频模式而不是关闭 App。 */
     private val videoBack = object : androidx.activity.OnBackPressedCallback(false) {
         override fun handleOnBackPressed() { exitVideo() }
@@ -359,6 +368,7 @@ class MainActivity : ComponentActivity() {
             videoView = view
             view.visibility = View.GONE
             view.onExit = ::exitVideo
+            view.onAudio = { on -> vm.setVideoAudio(on) }
             view.onNotifications = { notificationsOpen = true }
             view.onRetry = { vm.client.stopVideo() } // 回到 Idle 后由状态收集自动重新请求
             view.mic.onFeedback = { view.keyFeedback(it, feedbackController) }
@@ -423,6 +433,7 @@ class MainActivity : ComponentActivity() {
         vm.client.videoSink = { msg ->
             when (msg) {
                 is VideoTiming -> videoDecoder.timing(msg)
+                is VideoAudio -> pcAudio.submit(msg)
                 is VideoFrame -> videoDecoder.submit(msg)
                 is VideoCursor -> video.post { video.cursor(msg) }
             }
@@ -578,8 +589,11 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 launch {
-                    combine(vm.client.state, vm.videoOn, vm.videoBall) { state, on, ball -> Triple(state, on, ball) }.collect { (state, on, ball) ->
+                    combine(vm.client.state, vm.videoOn, vm.videoBall, vm.videoAudio) { state, on, ball, audio -> VideoUi(state, on, ball, audio) }.collect { (state, on, ball, audio) ->
                         val view = videoView ?: return@collect
+                        // 电脑声音：开关、电脑端能力、是否在视频模式；语音输入期间静音，避免手机喇叭被麦克风录回电脑。
+                        view.setAudio(audio, VIDEO_AUDIO_FEATURE in state.touchpad.features)
+                        pcAudio.muted = !on || !audio || state.mic == "preparing" || state.mic == "transmitting"
                         view.connected = state.connected
                         view.shortcutCount = state.config.visibleShortcuts().size
                         view.update(state.video, state.rttMs)
@@ -596,7 +610,7 @@ class MainActivity : ComponentActivity() {
                         if (state.connected && state.videoSupported && state.video.phase == VideoPhase.Idle) {
                             videoDecoder.reset()
                             val (maxW, maxH) = decoderLimit()
-                            vm.client.startVideo(vm.videoQuality.value, maxW, maxH)
+                            vm.client.startVideo(vm.videoQuality.value, maxW, maxH, audio)
                         } else if (state.connected && !state.videoSupported) {
                             android.widget.Toast.makeText(this@MainActivity, "请将电脑端升级到 TapDeck 0.4.0 或更新版本以使用视频模式", android.widget.Toast.LENGTH_LONG).show()
                             exitVideo()
@@ -810,12 +824,14 @@ class MainActivity : ComponentActivity() {
         vm.client.stopMic(true)
         // 后台不传画面；回到前台后由状态收集自动重新请求。
         vm.client.stopVideo()
+        pcAudio.stop()
         vm.client.setForeground(false); super.onStop()
     }
     override fun onDestroy() {
         vm.client.beforeConnectionChange = null
         vm.client.videoSink = null
         videoDecoder.release()
+        pcAudio.release()
         super.onDestroy()
     }
 }
@@ -1111,3 +1127,6 @@ private fun Modifier.shortcutPress(
         }
     }
 }
+
+/** 视频模式界面状态收集的输入：连接状态、是否在视频模式、悬浮球位置、电脑声音开关。 */
+private data class VideoUi(val state: ClientState, val on: Boolean, val ball: Pair<Float, Float>?, val audio: Boolean)

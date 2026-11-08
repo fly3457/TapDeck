@@ -826,17 +826,22 @@ class TapClient(private val app: Application, private val scope: CoroutineScope,
      * 请求查看电脑画面。maxWidth/maxHeight 为手机解码器上限；PC 回复 video_ready 后
      * 用同一证书固定的客户端另开 /video 连接，画面帧不经过控制连接。
      */
-    fun startVideo(quality: VideoQuality, maxWidth: Int, maxHeight: Int): Boolean = synchronized(lock) {
+    fun startVideo(quality: VideoQuality, maxWidth: Int, maxHeight: Int, audio: Boolean = false): Boolean = synchronized(lock) {
         val current = mutable.value
         if (!connected || !foreground || !current.videoSupported) return@synchronized false
         closeVideoLocked()
         videoRequest++
         mutable.update { it.copy(video = VideoState(VideoPhase.Starting)) }
-        if (!send(message("video_start", "quality" to quality.wire.j(), "max_width" to maxWidth.j(), "max_height" to maxHeight.j(), "fps" to 60.j()))) {
+        if (!send(message("video_start", "quality" to quality.wire.j(), "max_width" to maxWidth.j(), "max_height" to maxHeight.j(), "fps" to 60.j(), "audio" to (audio && VIDEO_AUDIO_FEATURE in current.touchpad.features).j()))) {
             mutable.update { it.copy(video = VideoState(VideoPhase.Error, error = "控制连接不可用")) }
             return@synchronized false
         }
         true
+    }
+
+    /** 视频播放中打开或关闭电脑声音（接收端 0.5.15 起）。 */
+    fun setVideoAudio(on: Boolean) = synchronized(lock) {
+        if (connected && VIDEO_AUDIO_FEATURE in mutable.value.touchpad.features && mutable.value.video.phase != VideoPhase.Idle) send(message("video_audio", "audio" to on.j()))
     }
 
     fun stopVideo() = synchronized(lock) {

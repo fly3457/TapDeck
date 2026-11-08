@@ -42,6 +42,8 @@ const (
 	MessageCursor byte = 2
 	// MessageTiming 紧接在对应画面帧之前发送，供手机统计端到端延迟；旧版手机忽略未知类型。
 	MessageTiming byte = 3
+	// MessageAudio 是电脑声音：类型 4 后接 48 kHz、立体声、16 位小端 PCM，每包 10 ms。
+	MessageAudio byte = 4
 
 	FlagKey    byte = 1
 	FlagConfig byte = 2
@@ -50,6 +52,8 @@ const (
 	queueFrames = 6
 	attachTTL   = 30 * time.Second
 	cursorEvery = 8 * time.Millisecond
+	// audioPackets 是电脑声音的发送积压上限（每包 10ms）。
+	audioPackets = 10
 )
 
 // Stream 是一次已授权的视频请求，Owner 为控制会话 ID。
@@ -66,6 +70,19 @@ type Stream struct {
 	Dropped atomic.Uint64
 	// Timing 为真时每个画面帧前附带帧时间消息（Manager.Start 创建的流都开启）。
 	Timing bool
+	// audio 为真时转发电脑声音；audioWake 在开关变化时通知采集循环。
+	audio     atomic.Bool
+	audioWake chan struct{}
+}
+
+// SetAudio 打开或关闭本流的电脑声音转发。
+func (st *Stream) SetAudio(on bool) {
+	if st.audio.Swap(on) != on {
+		select {
+		case st.audioWake <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func (st *Stream) Done() <-chan struct{} { return st.ctx.Done() }
@@ -75,6 +92,24 @@ type Manager struct {
 	launcher Launcher
 	active   *Stream
 	now      func() time.Time
+	// Loopback 采集电脑声音（Windows 为 audio.Loopback）；为 nil 时不提供声音转发。
+	Loopback func(ctx context.Context, emit func(pcm []byte)) error
+}
+
+// AudioAvailable 表示能否把电脑声音随画面转发。
+func (m *Manager) AudioAvailable() bool { return m != nil && m.Loopback != nil }
+
+// SetAudio 打开或关闭 owner 当前视频流的电脑声音。
+func (m *Manager) SetAudio(owner uint64, on bool) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	st := m.active
+	m.mu.Unlock()
+	if st != nil && st.Owner == owner {
+		st.SetAudio(on)
+	}
 }
 
 func NewManager(l Launcher) *Manager { return &Manager{launcher: l, now: time.Now} }
@@ -105,7 +140,8 @@ func (m *Manager) Start(owner uint64, r Request) (*Stream, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	st := &Stream{ID: randomHex(8), Token: randomBytes(32), Owner: owner, Plan: plan, created: m.now(), ctx: ctx, cancel: cancel, Timing: true}
+	st := &Stream{ID: randomHex(8), Token: randomBytes(32), Owner: owner, Plan: plan, created: m.now(), ctx: ctx, cancel: cancel, Timing: true, audioWake: make(chan struct{}, 1)}
+	st.audio.Store(r.Audio)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.busyLocked(owner) {
@@ -221,6 +257,11 @@ func (m *Manager) Run(ctx context.Context, st *Stream, w Writer) error {
 	queue := make(chan []byte, queueFrames*2)
 	readErr := make(chan error, 1)
 	go func() { readErr <- pump(src, queue, st) }()
+	// 电脑声音单独排队，最多积压约 100ms（10 包），满了丢最旧的，声音不会越拖越晚。
+	audioQ := make(chan []byte, audioPackets)
+	if m.Loopback != nil && st.audioWake != nil {
+		go m.audioLoop(ctx, st, audioQ)
+	}
 
 	cursor := time.NewTicker(cursorEvery)
 	defer cursor.Stop()
@@ -243,6 +284,10 @@ func (m *Manager) Run(ctx context.Context, st *Stream, w Writer) error {
 			}
 			if b[0] == MessageFrame {
 				st.Sent.Add(1)
+			}
+		case b := <-audioQ:
+			if err := w(ctx, b); err != nil {
+				return err
 			}
 		case <-cursor.C:
 			x, y, visible := m.launcher.Cursor(st.Plan.Display)
@@ -394,3 +439,71 @@ func randomBytes(n int) []byte {
 }
 
 func randomHex(n int) string { return hex.EncodeToString(randomBytes(n)) }
+
+// audioLoop 在开关打开时采集电脑声音放入 out，关闭时停止采集；随 ctx 结束。
+// 采集失败（例如默认播放设备是虚拟声卡）时记录一次日志，等开关再次变化或 10 秒后重试。
+func (m *Manager) audioLoop(ctx context.Context, st *Stream, out chan []byte) {
+	emit := func(pcm []byte) {
+		msg := AudioMessage(pcm)
+		for {
+			select {
+			case out <- msg:
+				return
+			default:
+			}
+			select {
+			case <-out: // 网络跟不上：丢最旧的一包
+			default:
+			}
+		}
+	}
+	var lastErr string
+	for ctx.Err() == nil {
+		if !st.audio.Load() {
+			select {
+			case <-ctx.Done():
+				return
+			case <-st.audioWake:
+			}
+			continue
+		}
+		run, stop := context.WithCancel(ctx)
+		go func() {
+			// 开关变成关闭时结束本轮采集；打开状态下的重复通知忽略。
+			for {
+				select {
+				case <-run.Done():
+					return
+				case <-st.audioWake:
+					if !st.audio.Load() {
+						stop()
+						return
+					}
+				}
+			}
+		}()
+		err := m.Loopback(run, emit)
+		stop()
+		if err != nil && ctx.Err() == nil {
+			if err.Error() != lastErr {
+				log.Printf("video: 电脑声音转发：%v", err)
+				lastErr = err.Error()
+			}
+			select {
+			case <-ctx.Done():
+			case <-st.audioWake:
+			case <-time.After(10 * time.Second):
+			}
+		}
+	}
+}
+
+// AudioMessage：类型 4 后接 PCM（48 kHz、立体声、16 位小端）。
+func AudioMessage(pcm []byte) []byte {
+	b := make([]byte, 1, 1+len(pcm))
+	b[0] = MessageAudio
+	return append(b, pcm...)
+}
+
+// AudioOn 表示本流当前是否转发电脑声音。
+func (st *Stream) AudioOn() bool { return st.audio.Load() }

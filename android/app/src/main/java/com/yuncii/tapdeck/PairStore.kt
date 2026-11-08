@@ -27,6 +27,7 @@ class PairStore(private val context: Context) {
     private val sensitivityKey = doublePreferencesKey("touchpad_sensitivity_multiplier")
     private val hapticsKey = booleanPreferencesKey("key_haptics")
     private val videoQualityKey = stringPreferencesKey("video_quality")
+    private val videoAudioKey = booleanPreferencesKey("video_audio")
     private val videoBallX = floatPreferencesKey("video_ball_x")
     private val videoBallY = floatPreferencesKey("video_ball_y")
     private val inboxKey = stringPreferencesKey("protected_pc_notifications_v1")
@@ -117,6 +118,10 @@ class PairStore(private val context: Context) {
     }
 
     suspend fun saveVideoQuality(quality: VideoQuality) { context.dataStore.edit { it[videoQualityKey] = quality.wire } }
+
+    /** 视频模式是否转发电脑声音，默认开启，仅保存在本机。 */
+    suspend fun loadVideoAudio(): Boolean = context.dataStore.data.first()[videoAudioKey] ?: true
+    suspend fun saveVideoAudio(on: Boolean) { context.dataStore.edit { it[videoAudioKey] = on } }
 
     suspend fun saveVideoBall(x: Float, y: Float) {
         context.dataStore.edit { it[videoBallX] = x.coerceIn(0f, 1f); it[videoBallY] = y.coerceIn(0f, 1f) }

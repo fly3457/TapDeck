@@ -17,10 +17,16 @@ import (
 // VideoFeature 在 ready.features 中声明接收端可以提供屏幕画面。
 const VideoFeature = "video"
 
+// VideoAudioFeature 声明视频流可以同时转发电脑声音（接收端 0.5.15 起）。
+const VideoAudioFeature = "video_audio"
+
 func (ss *session) features() []string {
 	f := append(ss.touchpadFeatures(), "voice_profiles")
 	if ss.s.Video.Available() {
 		f = append(f, VideoFeature)
+		if ss.s.Video.AudioAvailable() {
+			f = append(f, VideoAudioFeature)
+		}
 	}
 	if ss.s.notificationRing() != nil {
 		f = append(f, NotifyFeature)
@@ -53,7 +59,7 @@ func (ss *session) startVideo(m Message) {
 		fail("no_encoder", video.ErrNoEncoder.Error())
 		return
 	}
-	st, err := ss.s.Video.Start(ss.id, video.Request{Quality: m.Quality, MaxWidth: m.MaxWidth, MaxHeight: m.MaxHeight, FPS: m.FPS})
+	st, err := ss.s.Video.Start(ss.id, video.Request{Quality: m.Quality, MaxWidth: m.MaxWidth, MaxHeight: m.MaxHeight, FPS: m.FPS, Audio: m.Audio && ss.s.Video.AudioAvailable()})
 	if err != nil {
 		log.Printf("video: %v", err)
 		fail(videoErrorCode(err), err.Error())
@@ -69,7 +75,7 @@ func (ss *session) startVideo(m Message) {
 	p := st.Plan
 	_ = ss.send(map[string]any{"type": "video_ready", "stream": st.ID, "token": base64.RawURLEncoding.EncodeToString(st.Token),
 		"width": p.Width, "height": p.Height, "screen_width": p.Display.Width, "screen_height": p.Display.Height,
-		"fps": p.FPS, "encoder": p.Encoder})
+		"fps": p.FPS, "encoder": p.Encoder, "audio": st.AudioOn()})
 }
 
 // videoConnect 处理 GET /video：首条 video_hello 携带会话、流 ID 与令牌，
@@ -118,7 +124,7 @@ func (s *Server) videoConnect(w http.ResponseWriter, r *http.Request) {
 	ctx := ws.CloseRead(ss.ctx)
 	p := st.Plan
 	if err = write(ctx, ws, map[string]any{"type": "video_format", "width": p.Width, "height": p.Height,
-		"screen_width": p.Display.Width, "screen_height": p.Display.Height, "fps": p.FPS, "encoder": p.Encoder}); err != nil {
+		"screen_width": p.Display.Width, "screen_height": p.Display.Height, "fps": p.FPS, "encoder": p.Encoder, "audio": st.AudioOn()}); err != nil {
 		s.Video.Stop(sid)
 		return
 	}

@@ -2,7 +2,30 @@
 
 测试日期：2026-10-06 至 2026-11-04。使用页描述当前行为；历史结果按当时版本理解。截图中的示例连接和录音状态不作为实机识别证明。
 
-当前：接收端 **0.5.14**、Android **0.5.14 / code 39**· [安装](installation.md) · [版本规则](versioning.md)
+当前：接收端 **0.5.15**、Android **0.5.15 / code 40**· [安装](installation.md) · [版本规则](versioning.md)
+
+## 0.5.15 视频模式转发电脑声音
+
+2026-11-08 完成，未公开发布。视频模式把电脑正在播放的声音转发到手机：电脑用 WASAPI 回环采集默认播放设备（48 kHz 立体声 16 位 PCM，每 10 ms 一包，类型 4，约 1.5 Mbit/s），手机用低延迟 AudioTrack 播放（预缓冲 30 ms、积压超过 150 ms 丢包）；“更多”菜单最下方新增扬声器开关（Lucide `volume-2` / `volume-x`），默认开启并保存在本机；手机语音输入时自动静音。默认播放设备是 VB-CABLE `CABLE Input` 时不转发，避免回声。功能说明见[视频模式](video-mode.md#电脑声音)，协议见[控制协议](../protocol/README.md#video)。
+
+| 验证项 | 结果 |
+|---|---|
+| 回环采集（本机实测） | `TAPDECK_LIVE_LOOPBACK=1` 运行实机测试，同时播放 Windows 提示音：3 秒采到 295 包（每秒约 100 包，与 10 ms 一包相符），其中 101 包有明显声音 |
+| 单元测试 | Go：开关打开时转发类型 4、关闭后停止采集、重新打开恢复（共两轮采集），未请求声音的流不启动采集。Android `PcAudioTest` 2 项：预缓冲与积压上限、类型 4 解析（非整帧与空消息忽略） |
+| 官方构建 | `scripts/build-windows.ps1 -OutputDirectory dist/0.5.15` 通过；`--apk-info` 为 Android 0.5.15 / code 40、release、不可调试、证书不变 |
+| 安装 | 努比亚 NX741J 无线调试端口已关闭，未能连接；改为覆盖安装到 USB 连接的索尼 XQ-DQ72（Android 14，原装 0.3.18），安装成功。接收端已换为 0.5.15，但新 EXE 在防火墙中为“阻止”，需用户放行 |
+| 实机听音 | 待测 |
+
+官方交付目录 `dist/0.5.15`：
+
+| 产物 | 字节数 | SHA-256 |
+|---|---:|---|
+| `TapDeck-0.5.15.apk` | 8,635,081 | `9aac16ddb7f9b4e1cd485d9fe715a6839f1d80cb98807004a56ec33d70fee24d` |
+| `TapDeck-0.5.15.exe` | 28,303,872 | `b45e903c65b2d9f2b7eb9b1af1057258739cea0e1b55f0b6453a98adc1e64be9` |
+| `TapDeck-debug-0.5.15.exe` | 33,910,784 | `ec385e9258f8be59b316f4faaee145616d08e1c7c9508b35746bbe2055ee060c` |
+| `TapDeck-hidprobe-0.5.15.exe` | 8,048,128 | `38fdf5245e194fdd7fdf614285cf757bc0b0033a921239841264245182061a15` |
+
+日志：`.tools/windows-release-0.5.15-build.log`。
 
 ## 0.5.14 视频模式顶部按钮下移、图标收进“更多”
 

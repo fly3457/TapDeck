@@ -187,7 +187,7 @@ class VideoModeView(
         findViewById<View>(R.id.video_notifications_button).contentDescription = if (count > 0) "电脑通知，$count 条未读" else "电脑通知"
         updateMoreButton()
     }
-    // “更多”是两段式开关：点一下在下方竖向展开提醒、快捷键盘、全键盘、1:1、体感，再点一下收起；点菜单项或画面都不会收起。
+    // “更多”是两段式开关：点一下在下方竖向展开提醒、快捷键盘、全键盘、1:1、体感、电脑声音，再点一下收起；点菜单项或画面都不会收起。
     private var menuOpen = false
     private val moreButton = iconButton(R.id.video_more_button, R.drawable.ic_lucide_ellipsis, "展开更多画面操作") { showMenu(!menuOpen) }
     // 菜单收起时有未读通知，“更多”右上角显示红点，提醒展开查看。
@@ -206,6 +206,22 @@ class VideoModeView(
     private val motionButton = iconButton(R.id.video_motion_button, R.drawable.ic_lucide_rotate_3d, "开启体感控制") {
         if (gyroscope == null) android.widget.Toast.makeText(context, "这台手机没有陀螺仪，无法使用体感控制", android.widget.Toast.LENGTH_SHORT).show()
         else setMotion(!motion)
+    }
+    // 电脑声音开关：接收端 0.5.15 起支持；旧版电脑时半透明，点击提示升级。
+    var onAudio: (Boolean) -> Unit = {}
+    private var audioOn = true
+    private var audioSupported = false
+    private val audioButton = iconButton(R.id.video_audio_button, R.drawable.ic_lucide_volume_2, "关闭电脑声音") {
+        if (!audioSupported) android.widget.Toast.makeText(context, "请将电脑端升级到 TapDeck 0.5.15 或更新版本以转发电脑声音", android.widget.Toast.LENGTH_SHORT).show()
+        else onAudio(!audioOn)
+    }
+
+    /** 更新电脑声音按钮：on 为用户开关，supported 为电脑端是否支持。 */
+    fun setAudio(on: Boolean, supported: Boolean) {
+        audioOn = on; audioSupported = supported
+        audioButton.setImageResource(if (on && supported) R.drawable.ic_lucide_volume_2 else R.drawable.ic_lucide_volume_x)
+        audioButton.contentDescription = if (on) "关闭电脑声音" else "打开电脑声音"
+        audioButton.alpha = if (supported) 1f else 0.4f
     }
     // 子项在 init 中加入：快捷键盘、全键盘按钮声明在后面。
     private val menu = android.widget.LinearLayout(context).apply {
@@ -313,9 +329,9 @@ class VideoModeView(
         val top = margin + (TOP_SHIFT_DP * density).roundToInt()
         addView(statusButton, LayoutParams((STATUS_WIDTH_DP * density).roundToInt(), LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.START).apply { leftMargin = margin; topMargin = top })
         addView(toolbar, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END).apply { rightMargin = margin; topMargin = top })
-        // 展开顺序（从上到下）：提醒、快捷键盘、全键盘、1:1、体感。
+        // 展开顺序（从上到下）：提醒、快捷键盘、全键盘、1:1、体感、电脑声音。
         val icon = (TOOLBAR_ICON_DP * density).roundToInt(); val gap = (TOOLBAR_GAP_DP * density).roundToInt()
-        for ((i, b) in listOf(notificationsButton, shortcutsButton, keyboardButton, resetButton, motionButton).withIndex())
+        for ((i, b) in listOf(notificationsButton, shortcutsButton, keyboardButton, resetButton, motionButton, audioButton).withIndex())
             menu.addView(b, android.widget.LinearLayout.LayoutParams(icon, icon).apply { if (i > 0) topMargin = gap })
         addView(menu, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
         if (gyroscope == null) motionButton.alpha = 0.4f

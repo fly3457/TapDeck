@@ -70,6 +70,8 @@ type Message struct {
 	FPS       int    `json:"fps,omitempty"`
 	Session   string `json:"session,omitempty"`
 	Stream    string `json:"stream,omitempty"`
+	// Audio：video_start 时是否同时转发电脑声音；video_audio 用它打开或关闭。
+	Audio bool `json:"audio,omitempty"`
 	// pointer：视频画面上的点击位置，单位为所捕获显示器的物理像素。
 	PX int32 `json:"px,omitempty"`
 	PY int32 `json:"py,omitempty"`
@@ -277,6 +279,7 @@ func New(dir string) (*Server, error) {
 	}
 	name, _ := os.Hostname()
 	s := &Server{cfg: c, dir: dir, name: name, pin: pin, cert: cert, pairEpoch: map[string]uint64{}, pending: map[string]*Pending{}, pairTimeout: 120 * time.Second, sessions: map[uint64]*session{}, Input: input.New(), Audio: audio.New(), Video: video.NewManager(video.NewLauncher())}
+	s.Video.Loopback = audio.Loopback
 	if s.paired, err = loadPaired(dir); err != nil {
 		return nil, err
 	}
@@ -1118,6 +1121,9 @@ func (ss *session) handle(m Message) error {
 		return nil
 	case "video_stop":
 		ss.s.Video.Stop(ss.id)
+		return nil
+	case "video_audio":
+		ss.s.Video.SetAudio(ss.id, m.Audio)
 		return nil
 	case "pair_confirm":
 		// 老版本 App 配对时仍会发这条消息（现在改由 PC 端确认）：收到就忽略。

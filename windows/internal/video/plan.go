@@ -23,6 +23,8 @@ type Request struct {
 	Quality             string
 	MaxWidth, MaxHeight int
 	FPS                 int
+	// Audio 为真时同时转发电脑声音（手机 0.5.15 起）。
+	Audio bool
 }
 
 // Display 描述被捕获的显示器：DXGI 适配器与输出序号及桌面坐标（物理像素）。

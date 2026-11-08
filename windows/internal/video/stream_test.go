@@ -229,3 +229,94 @@ func TestCaptureClockUsesFastestFrameAsOrigin(t *testing.T) {
 		t.Fatalf("slower frame %v", d)
 	}
 }
+
+// 电脑声音：开关打开时转发类型 4，关闭后停止采集，再打开重新开始。
+func TestRunForwardsAudioOnlyWhileEnabled(t *testing.T) {
+	src := newFakeSource()
+	m := NewManager(&fakeLauncher{available: true, source: src})
+	var runs sync.WaitGroup
+	var mu sync.Mutex
+	captures := 0
+	m.Loopback = func(ctx context.Context, emit func([]byte)) error {
+		mu.Lock()
+		captures++
+		mu.Unlock()
+		runs.Add(1)
+		defer runs.Done()
+		tick := time.NewTicker(10 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-tick.C:
+				emit([]byte{1, 2, 3, 4})
+			}
+		}
+	}
+	st, err := m.Start(7, Request{Audio: true})
+	if err != nil || !st.AudioOn() {
+		t.Fatalf("start %v audio=%v", err, st.AudioOn())
+	}
+	var audio int
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- m.Run(ctx, st, func(_ context.Context, b []byte) error {
+			if b[0] == MessageAudio {
+				mu.Lock()
+				audio++
+				mu.Unlock()
+				if len(b) != 5 || b[1] != 1 || b[4] != 4 {
+					t.Errorf("audio message %x", b)
+				}
+			}
+			return nil
+		})
+	}()
+	count := func() int { mu.Lock(); defer mu.Unlock(); return audio }
+	waitFor := func(cond func() bool, what string) {
+		deadline := time.Now().Add(2 * time.Second)
+		for !cond() {
+			if time.Now().After(deadline) {
+				t.Fatal(what)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	waitFor(func() bool { return count() >= 3 }, "开关打开时应转发声音")
+	m.SetAudio(7, false)
+	time.Sleep(50 * time.Millisecond)
+	stopped := count()
+	time.Sleep(80 * time.Millisecond)
+	if n := count(); n > stopped+1 {
+		t.Fatalf("关闭后仍在转发：%d → %d", stopped, n)
+	}
+	m.SetAudio(7, true)
+	waitFor(func() bool { return count() >= stopped+3 }, "重新打开后应恢复转发")
+	mu.Lock()
+	if captures != 2 {
+		t.Errorf("应启动两轮采集，实际 %d", captures)
+	}
+	mu.Unlock()
+	cancel()
+	<-done
+	runs.Wait()
+}
+
+// 不请求声音的流不启动采集（旧版手机）。
+func TestRunWithoutAudioRequestDoesNotCapture(t *testing.T) {
+	src := newFakeSource()
+	m := NewManager(&fakeLauncher{available: true, source: src})
+	called := make(chan struct{}, 1)
+	m.Loopback = func(ctx context.Context, emit func([]byte)) error { called <- struct{}{}; <-ctx.Done(); return nil }
+	st, _ := m.Start(7, Request{})
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_ = m.Run(ctx, st, func(context.Context, []byte) error { return nil })
+	select {
+	case <-called:
+		t.Fatal("没有请求声音却启动了采集")
+	default:
+	}
+}
