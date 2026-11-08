@@ -498,7 +498,8 @@ class VideoModeView(
     override fun onDetachedFromWindow() { cancel(); handler.removeCallbacks(statusTicker); super.onDetachedFromWindow(); updateGyro() }
 }
 
-private const val STATUS_WIDTH_DP = 176
+// 0.5.15 起右上角只剩“更多”，连接信息放宽到 220dp，竖屏也能完整显示“‹ 退出 · 60fps · 延迟35ms”。
+private const val STATUS_WIDTH_DP = 220
 private const val TOOLBAR_ICONS = 1
 private const val TOP_SHIFT_DP = 18
 private const val TOOLBAR_ICON_DP = 36

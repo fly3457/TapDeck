@@ -13,17 +13,18 @@
 | 回环采集（本机实测） | `TAPDECK_LIVE_LOOPBACK=1` 运行实机测试，同时播放 Windows 提示音：3 秒采到 295 包（每秒约 100 包，与 10 ms 一包相符），其中 101 包有明显声音 |
 | 单元测试 | Go：开关打开时转发类型 4、关闭后停止采集、重新打开恢复（共两轮采集），未请求声音的流不启动采集。Android `PcAudioTest` 2 项：预缓冲与积压上限、类型 4 解析（非整帧与空消息忽略） |
 | 官方构建 | `scripts/build-windows.ps1 -OutputDirectory dist/0.5.15` 通过；`--apk-info` 为 Android 0.5.15 / code 40、release、不可调试、证书不变 |
-| 安装 | 努比亚 NX741J 无线调试端口已关闭，未能连接；改为覆盖安装到 USB 连接的索尼 XQ-DQ72（Android 14，原装 0.3.18），安装成功。接收端已换为 0.5.15，但新 EXE 在防火墙中为“阻止”，需用户放行 |
-| 实机听音 | 待测 |
+| 安装 | 覆盖安装到 USB 连接的索尼 XQ-DQ72（Android 14，原装 0.3.18）；努比亚 NX741J 的地址变为 192.168.1.16，经 mDNS 发现后用 `android-wireless-debug` 无线连接（tcpip 5555）安装。接收端换为 0.5.15，用户放行防火墙 |
+| 实机听音（努比亚） | 12:37 进入视频模式，电脑播放提示音：AudioFlinger 中 TapDeck 的 AudioTrack 为 48 kHz 立体声、活跃、走低延迟快速通道（F1）。“更多”菜单关闭声音：12:38:39 轨道移除、图标变为静音，关闭期间电脑再播放也不新建轨道；12:38:47 重新打开并播放，新建轨道。实际听感待用户确认 |
+| 竖屏状态文字 | 0.5.14 收起右侧图标后连接信息不再缩短，176dp 放不下“延迟XXms”而被截断；放宽到 220dp，重建后截图确认完整显示“‹ 退出 · 48fps · 延迟71ms”（同一迭代，未升版） |
 
 官方交付目录 `dist/0.5.15`：
 
 | 产物 | 字节数 | SHA-256 |
 |---|---:|---|
-| `TapDeck-0.5.15.apk` | 8,635,081 | `9aac16ddb7f9b4e1cd485d9fe715a6839f1d80cb98807004a56ec33d70fee24d` |
-| `TapDeck-0.5.15.exe` | 28,303,872 | `b45e903c65b2d9f2b7eb9b1af1057258739cea0e1b55f0b6453a98adc1e64be9` |
-| `TapDeck-debug-0.5.15.exe` | 33,910,784 | `ec385e9258f8be59b316f4faaee145616d08e1c7c9508b35746bbe2055ee060c` |
-| `TapDeck-hidprobe-0.5.15.exe` | 8,048,128 | `38fdf5245e194fdd7fdf614285cf757bc0b0033a921239841264245182061a15` |
+| `TapDeck-0.5.15.apk` | 8,635,081 | `d6d984896711cd29735802656c5f1dabc5ab7081fad283be22e4db924b7c17e1` |
+| `TapDeck-0.5.15.exe` | 28,303,872 | `cb4807e0e952a6ff06ffb6cbb78688aaf35adc065edc8ed31ac9dcda6d000637` |
+| `TapDeck-debug-0.5.15.exe` | 33,910,784 | `6f97ee7f9fa080e80a9b6b74335d2983349a378cf47a7f13611496933ddd1264` |
+| `TapDeck-hidprobe-0.5.15.exe` | 8,048,128 | `c132a63d84e260f8f43026cf02492b17940579cb626f0365c1201f0ddf3e6351` |
 
 日志：`.tools/windows-release-0.5.15-build.log`。
 
