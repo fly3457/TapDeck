@@ -21,6 +21,8 @@ interface TouchSink {
     fun gesture(direction: String) {}
     /** 视频模式直接操作：单指拖动平移手机上的画面（dp），不移动鼠标。 */
     fun pan(dx: Double, dy: Double) {}
+    /** 视频模式直接操作：单指拖动后抬手，vx／vy 为抬手瞬间的速度（dp/s），用于惯性滑动。 */
+    fun fling(vx: Double, vy: Double) {}
     /** 视频模式直接操作：在触点位置单击，轻点为 left、长按为 right（dp）。 */
     fun clickAt(x: Double, y: Double, button: String) {}
     /** 视频模式直接操作：双指滚动开始前把鼠标移到双指中心（dp），滚轮才作用于手指下方的区域。 */
@@ -67,7 +69,14 @@ internal class TouchpadGestures(
     private var anchor = TouchPoint(-1, 0.0, 0.0)
     private val origins = mutableMapOf<Int, TouchPoint>()
     private var ids = emptyList<Int>()
-    private val longPressDeadline: Long? get() = if (direct && mode == Mode.Single && !moved) started + LONG_PRESS else null
+    // 拖动画面时最近的触点轨迹（时间、坐标），抬手时估算惯性速度。
+    private val panTrail = ArrayDeque<Pair<Long, TouchPoint>>()
+    // 本次按下只用于停住惯性滑动：不触发轻点左击和长按右击，拖动仍正常平移。
+    private var stopOnly = false
+    private val longPressDeadline: Long? get() = if (direct && mode == Mode.Single && !moved && !stopOnly) started + LONG_PRESS else null
+
+    /** 视频模式：刚按下的这一指用于停住惯性，不当作点击或长按。须在 Down 帧之后调用。 */
+    fun suppressTap() { if (mode == Mode.Single) stopOnly = true }
     val nextDeadline: Long? get() = listOfNotNull(longPressDeadline, pendingTap?.let { it.time + TAP_WINDOW }).minOrNull()
 
     fun advance(now: Long) {
@@ -114,6 +123,7 @@ internal class TouchpadGestures(
             mode = Mode.Single
         }
         started = frame.time
+        stopOnly = false; panTrail.clear()
         origin = point; last = if (direct && mode == Mode.Second) anchor else point; moved = false
         origins.clear(); origins[point.id] = point
         ids = listOf(point.id)
@@ -161,9 +171,11 @@ internal class TouchpadGestures(
                 val point = points.singleOrNull() ?: return
                 // 超过触摸阈值即为拖动画面；从按下点开始累计，阈值内的位移不会丢失。
                 if (moved) {
+                    if (mode != Mode.Pan) { panTrail.clear(); panTrail.addLast(started to last) }
                     mode = Mode.Pan
                     sink.pan(point.x - last.x, point.y - last.y)
                     last = point
+                    recordPan(frame.time, point)
                 }
             } else {
                 val point = points.singleOrNull() ?: return
@@ -233,9 +245,19 @@ internal class TouchpadGestures(
         track(frame.points)
         val elapsed = frame.time - started
         when (mode) {
+            Mode.Pan -> if (direct) {
+                // 抬手点通常与最后一次移动同位置；仍计入轨迹，停顿后再抬手时速度为 0。
+                frame.points.singleOrNull()?.let { point ->
+                    if (point.x != last.x || point.y != last.y) { sink.pan(point.x - last.x, point.y - last.y); last = point }
+                    recordPan(frame.time, point)
+                }
+                val (vx, vy) = panVelocity(frame.time)
+                sink.fling(vx, vy)
+            }
             Mode.Single -> if (direct) {
                 // 快速轻点等待可能的第二次按下；稍慢的轻点（未到长按）立即单击。
-                if (!moved && elapsed in 0 until TAP_WINDOW) pendingTap = Tap(frame.time, origin)
+                if (stopOnly) Unit
+                else if (!moved && elapsed in 0 until TAP_WINDOW) pendingTap = Tap(frame.time, origin)
                 else if (!moved && elapsed in 0 until LONG_PRESS) sink.clickAt(origin.x, origin.y, "left")
             } else if (!moved && elapsed in 0 until TAP_WINDOW) pendingTap = Tap(frame.time, origin)
             Mode.Second, Mode.Drag -> if (direct) {
@@ -262,6 +284,25 @@ internal class TouchpadGestures(
         mode = Mode.Idle; origins.clear(); ids = emptyList()
     }
 
+    private fun recordPan(time: Long, point: TouchPoint) {
+        panTrail.addLast(time to point)
+        while (panTrail.size > 2 && time - panTrail.first().first > VELOCITY_WINDOW) panTrail.removeFirst()
+    }
+
+    /**
+     * 抬手速度（dp/s）：取抬手前 [VELOCITY_WINDOW] 内最早的轨迹点到抬手点的平均速度。
+     * 手指停住超过该窗口后再抬起（窗口内没有更早的点）时速度为 0，不会滑动。
+     */
+    private fun panVelocity(now: Long): Pair<Double, Double> {
+        val end = panTrail.lastOrNull() ?: return 0.0 to 0.0
+        val start = panTrail.firstOrNull { now - it.first <= VELOCITY_WINDOW } ?: return 0.0 to 0.0
+        val dt = (end.first - start.first) / 1000.0
+        // 窗口内的轨迹末端到抬手之间停住过：按停顿时长摊薄速度。
+        val span = (now - start.first) / 1000.0
+        if (dt < MIN_VELOCITY_SPAN / 1000.0 || span <= 0) return 0.0 to 0.0
+        return (end.second.x - start.second.x) / span to (end.second.y - start.second.y) / span
+    }
+
     private fun flushTap() {
         val tap = pendingTap ?: return
         pendingTap = null
@@ -282,6 +323,10 @@ internal class TouchpadGestures(
         const val TAP_WINDOW = 300L
         /** 视频模式长按右击的判定时间。 */
         const val LONG_PRESS = 500L
+        /** 估算抬手速度所用的轨迹时长（ms）。 */
+        const val VELOCITY_WINDOW = 100L
+        /** 轨迹短于该时长（ms）时不估算速度，避免单个抖动样本产生巨大速度。 */
+        const val MIN_VELOCITY_SPAN = 10L
     }
 }
 

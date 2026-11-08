@@ -70,6 +70,9 @@ class VideoModeView(
             viewport.pan(dx * density, dy * density)
             placeSurface()
         }
+        override fun fling(vx: Double, vy: Double) {
+            if (inertia.start(vx, vy)) glide.start()
+        }
         override fun pointerAt(action: String, x: Double, y: Double) {
             val (cx, cy) = viewport.toContentClamped(x * density, y * density) ?: return
             onPointer(action, cx.toInt(), cy.toInt())
@@ -201,7 +204,7 @@ class VideoModeView(
         addView(moreDot, LayoutParams(dot, dot, Gravity.TOP or Gravity.END).apply { topMargin = (2 * density).roundToInt(); rightMargin = (2 * density).roundToInt() })
     }
     private val resetButton = iconButton(R.id.video_reset_button, R.drawable.ic_ratio_1_1, "恢复默认画面比例") {
-        viewport.reset(aroundCursor = false); requestLayout()
+        glide.stop(); viewport.reset(aroundCursor = false); requestLayout()
     }
     private val motionButton = iconButton(R.id.video_motion_button, R.drawable.ic_lucide_rotate_3d, "开启体感控制") {
         if (gyroscope == null) android.widget.Toast.makeText(context, "这台手机没有陀螺仪，无法使用体感控制", android.widget.Toast.LENGTH_SHORT).show()
@@ -405,6 +408,35 @@ class VideoModeView(
             if (now - lastStatus >= 500) { lastStatus = now; render() }
         }
     }
+    // 单指拖动抬手后的惯性滑动：逐帧推进，撞到画面边缘的方向停止；手指再次按下立即停住。
+    private val inertia = PanInertia()
+    private val glide = object : Choreographer.FrameCallback {
+        private var running = false
+        private var lastFrame = 0L
+        fun start() {
+            if (running || !isAttachedToWindow) return
+            running = true; lastFrame = 0L
+            Choreographer.getInstance().postFrameCallback(this)
+        }
+        fun stop() {
+            inertia.stop()
+            if (running) { running = false; Choreographer.getInstance().removeFrameCallback(this) }
+        }
+        override fun doFrame(frameTimeNanos: Long) {
+            running = false
+            if (!inertia.active || !viewport.ready) { inertia.stop(); return }
+            // 第一帧没有上一帧时间，按一帧（约 16ms）推进；长时间卡顿时最多推进 50ms，避免跳一大段。
+            val dt = if (lastFrame == 0L) 1 / 60.0 else ((frameTimeNanos - lastFrame) / 1e9).coerceIn(0.0, 0.05)
+            lastFrame = frameTimeNanos
+            val (dx, dy) = inertia.step(dt)
+            val x = viewport.offsetX; val y = viewport.offsetY
+            viewport.pan(dx * density, dy * density)
+            inertia.halt(x = dx != 0.0 && viewport.offsetX == x, y = dy != 0.0 && viewport.offsetY == y)
+            placeSurface()
+            if (inertia.active) { running = true; Choreographer.getInstance().postFrameCallback(this) }
+        }
+    }
+
     private val statusTicker = object : Runnable {
         override fun run() { render(); if (isAttachedToWindow) handler.postDelayed(this, 1000) }
     }
@@ -481,7 +513,11 @@ class VideoModeView(
             else -> return true
         }
         val points = (0 until e.pointerCount).map { TouchPoint(e.getPointerId(it), e.getX(it) / density.toDouble(), e.getY(it) / density.toDouble()) }
+        // 惯性滑动中按下：立即停住，这一下不当作点击或长按发给电脑，按住拖动仍可继续平移。
+        val stopping = phase == TouchPhase.Down && inertia.active
+        if (phase == TouchPhase.Down || phase == TouchPhase.Add) glide.stop()
         gestures.accept(TouchFrame(e.eventTime, phase, points, e.getPointerId(e.actionIndex)))
+        if (stopping) gestures.suppressTap()
         scheduleDeadline()
         if (phase == TouchPhase.Up) touchLayer.performClick()
         return true
@@ -492,7 +528,7 @@ class VideoModeView(
         if (connected) gestures.nextDeadline?.let { handler.postDelayed(deadline, (it - SystemClock.uptimeMillis()).coerceAtLeast(0)) }
     }
 
-    fun cancel() { handler.removeCallbacks(deadline); gestures.cancel(); mic.cancel() }
+    fun cancel() { handler.removeCallbacks(deadline); glide.stop(); gestures.cancel(); mic.cancel() }
 
     override fun onAttachedToWindow() { super.onAttachedToWindow(); handler.post(statusTicker); updateGyro() }
     override fun onDetachedFromWindow() { cancel(); handler.removeCallbacks(statusTicker); super.onDetachedFromWindow(); updateGyro() }
