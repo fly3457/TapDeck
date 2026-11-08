@@ -67,8 +67,16 @@ class VideoModeView(
             return true
         }
         override fun pan(dx: Double, dy: Double) {
+            val y0 = viewport.offsetY
             viewport.pan(dx * density, dy * density)
             placeSurface()
+            // 上下方向被边缘挡住、没平移出去的部分转成 PC 滚轮：瀑布流页面单指即可滚动阅读。
+            val scroll = edgeScroll.overflow(dy - (viewport.offsetY - y0) / density)
+            if (scroll == 0.0) return
+            // 开始滚动时先把鼠标移到手指下方，滚的是手指下面的内容。
+            if (!edgeHovered) { edgeHovered = true; hoverAt(touchX, touchY) }
+            // 内容始终跟着手指走，与 PC 的“自然滚动”设置无关。
+            client.scroll(0.0, if (client.naturalScroll) scroll else -scroll)
         }
         override fun fling(vx: Double, vy: Double) {
             if (inertia.start(vx, vy)) glide.start()
@@ -88,6 +96,11 @@ class VideoModeView(
             onPointer(if (button == "right") "right_click" else "click", cx.toInt(), cy.toInt())
         }
     }
+    // 单指拖动到上下边缘后的滚轮转换；touchX/Y 为当前手指位置（dp）。
+    private val edgeScroll = EdgeScroll()
+    private var edgeHovered = false
+    private var touchX = 0.0
+    private var touchY = 0.0
     private val configuration = ViewConfiguration.get(context)
     // 直接操作：单指拖动平移画面、轻点左击、长按右击；双指滚动／缩放画面、双指轻点右击与三指手势不变。
     private val gestures = TouchpadGestures(sink, configuration.scaledTouchSlop / density.toDouble(), configuration.scaledDoubleTapSlop / density.toDouble(), direct = true)
@@ -516,6 +529,8 @@ class VideoModeView(
         // 惯性滑动中按下：立即停住，这一下不当作点击或长按发给电脑，按住拖动仍可继续平移。
         val stopping = phase == TouchPhase.Down && inertia.active
         if (phase == TouchPhase.Down || phase == TouchPhase.Add) glide.stop()
+        if (phase == TouchPhase.Down) { edgeScroll.reset(); edgeHovered = false }
+        points.firstOrNull { it.id == e.getPointerId(0) }?.let { touchX = it.x; touchY = it.y }
         gestures.accept(TouchFrame(e.eventTime, phase, points, e.getPointerId(e.actionIndex)))
         if (stopping) gestures.suppressTap()
         scheduleDeadline()

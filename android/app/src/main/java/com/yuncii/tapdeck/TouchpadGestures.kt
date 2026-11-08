@@ -8,6 +8,8 @@ import kotlin.math.min
 
 interface TouchSink {
     val doubleClickMs: Int get() = 500
+    /** PC 设置的“自然滚动”；为真时手指上移内容随之上移（向下滚动）。 */
+    val naturalScroll: Boolean get() = true
     fun move(dx: Double, dy: Double)
     fun scroll(dx: Double, dy: Double)
     fun button(name: String, down: Boolean)

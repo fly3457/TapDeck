@@ -60,6 +60,7 @@ class TapClient(private val app: Application, private val scope: CoroutineScope,
     fun setSensitivity(value: Double) { inputPreferences.update { it.copy(sensitivity = value) } }
     fun setHaptics(on: Boolean) { inputPreferences.update { it.copy(haptics = on) } }
     override val doubleClickMs: Int get() = state.value.touchpad.doubleClickMs
+    override val naturalScroll: Boolean get() = mutable.value.config.natural_scroll
     private var lastTouchpadNotice = -3000L
     private val lock = Any()
     private var socket: WebSocket? = null
