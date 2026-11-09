@@ -1,5 +1,7 @@
 # TapDeck
 
+简体中文 | [English](README.en.md)
+
 通过 Wi-Fi 局域网，把 Android 手机变成 Windows 电脑的麦克风、触控板、键盘和随身屏幕，并把电脑通知同步到手机，方便 Vibe Coding 和日常操作。
 
 **[Windows EXE](https://github.com/fly3457/TapDeck/releases/download/v0.5.21/TapDeck-0.5.21.exe) · [Android APK](https://github.com/fly3457/TapDeck/releases/download/v0.5.21/TapDeck-0.5.21.apk) · [完整下载与校验](https://github.com/fly3457/TapDeck/releases/tag/v0.5.21)**
