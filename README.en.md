@@ -12,6 +12,12 @@ Beta **0.5.21** · Android **code 46** · Windows 11 x64 · Android 8+ · same l
 
 The Android APK is a non-debuggable release build. It installs over an existing official build and keeps your pairings and phone settings.
 
+## Demo
+
+Ask an agent by voice to build a brick-breaker game, switch the phone to a pocket screen to read the code and play the game, then keep driving the PC with the touchpad and voice (about 100 seconds, PC on the left and phone on the right, recorded in sync):
+
+https://github.com/user-attachments/assets/63286878-38a4-4d2d-9d42-9e5dcd514358
+
 ## Features
 
 **Voice input**: your phone's microphone streams audio to the PC, where an input method (such as Doubao IME) or an AI agent with voice input turns it into text. Up to three voice profiles; start and stop with press-and-hold or a single tap.
